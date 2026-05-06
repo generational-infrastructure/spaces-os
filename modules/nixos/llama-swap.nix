@@ -27,14 +27,14 @@ let
 
   llama-server = lib.getExe' cfg.llama-server-package "llama-server";
 
-  qwen25-05b-gguf = pkgs.fetchurl {
+  qwen25-05b-gguf = builtins.fetchurl {
     url = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf";
-    hash = "sha256-dKTajJ/bzRW9H20B1iFBDTHG/ACYb162h4JOe5PXqds=";
+    sha256 = "sha256-dKTajJ/bzRW9H20B1iFBDTHG/ACYb162h4JOe5PXqds=";
   };
 
-  gemma4-e2b-gguf = pkgs.fetchurl {
+  gemma4-e2b-gguf = builtins.fetchurl {
     url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf";
-    hash = "sha256-rABp68zTmSXYNvJKiMDwyFjSBXjCmyGrfO3OZu5XaEU=";
+    sha256 = "sha256-rABp68zTmSXYNvJKiMDwyFjSBXjCmyGrfO3OZu5XaEU=";
   };
 in
 {
