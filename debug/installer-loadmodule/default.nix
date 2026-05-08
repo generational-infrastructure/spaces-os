@@ -31,17 +31,23 @@ let
   inherit (pkgs) lib;
 
   cwt = pkgs.callPackage ./calamares-with-tests { };
-  ext = pkgs.callPackage ../../packages/calamares-distro-extensions {
-    distroFlake = flake.lib.distroSrc;
-    flakeInputs = inputs;
-  };
+  ext = pkgs.callPackage ../../packages/calamares-distro-extensions { };
 
   # Direct inputs distro declares, read straight out of distro's
-  # flake.lock so the test mirrors the package's own derivation logic.
+  # flake.lock so the test mirrors what installer-iso.nix computes.
   # Hardcoding the list here would silently rot when distro grows or
   # drops an input.
   distroLock = builtins.fromJSON (builtins.readFile "${flake.lib.distroSrc}/flake.lock");
   distroDirectInputs = builtins.attrNames distroLock.nodes.root.inputs;
+  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) distroDirectInputs) (
+    n: builtins.toString inputs.${n}.outPath
+  );
+  installConfig = pkgs.writeText "calamares-distro-install.json" (
+    builtins.toJSON {
+      distroFlake = toString flake.lib.distroSrc;
+      inherit inputOverrides;
+    }
+  );
 
   # `main.py` ends with `pkexec nix --extra-experimental-features … build …`
   # followed by `pkexec nixos-install --system <toplevel>`. Realising the
@@ -121,11 +127,12 @@ pkgs.testers.runNixOSTest {
       (pkgs.writeShellScriptBin "pkexec" ''exec "$@"'')
     ];
 
-    # No /iso staging needed; the patched main.py references the
-    # distro flake by store path baked in at package build time.
-    # The store path itself is auto-pulled into the VM's nix store
-    # because `ext` (which substitutes it into `main.py`) keeps it
-    # alive as a runtime reference.
+    # Stage the install-config JSON main.py reads at runtime. Putting
+    # it under /etc/calamares-distro means the package itself stays
+    # independent of the distro flake source path; pulling distroSrc
+    # in via this etc entry keeps it alive in the VM's nix store
+    # without going through the calamares derivation.
+    environment.etc."calamares-distro/install.json".source = installConfig;
 
     # `pkexec` invoked by root just runs the command, so we don't
     # need a polkit rule — the test drives loadmodule as root.

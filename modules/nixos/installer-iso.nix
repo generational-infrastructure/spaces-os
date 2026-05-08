@@ -22,7 +22,22 @@
   ...
 }:
 let
+  inherit (inputs.nixpkgs) lib;
   inherit (flake.lib) distroSrc;
+
+  # Direct input names declared by distro's flake.lock. Source of truth
+  # for which inputs need an `--override-input distro/<name>` at install
+  # time. Read live so it stays in sync as distro grows or drops inputs.
+  distroLock = builtins.fromJSON (builtins.readFile "${distroSrc}/flake.lock");
+  distroDirectInputNames = builtins.attrNames distroLock.nodes.root.inputs;
+
+  # `{ name → outPath }` for every direct distro input the outer flake
+  # provides. Names absent from `inputs` are silently skipped — a missing
+  # input surfaces at install time when the lock generator can't resolve
+  # it, not at build time.
+  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) distroDirectInputNames) (
+    n: builtins.toString inputs.${n}.outPath
+  );
 
 in
 {
@@ -31,21 +46,23 @@ in
   ];
 
   # Replace upstream extensions package wherever it's referenced.
-  # The overlay also threads `flake.outPath` through as `distroFlake`,
-  # so the generated wrapper flake's `inputs.distro.url` resolves to
-  # an immutable store path rather than a mutable copy under /mnt.
   nixpkgs.overlays = [
     (final: prev: {
       calamares-nixos-extensions = final.callPackage ../../packages/calamares-distro-extensions {
         base = prev.calamares-nixos-extensions;
-        distroFlake = distroSrc;
-        # Outer flake inputs — the wrapper-lock generator reads
-        # distro's own flake.lock to discover which input names to
-        # re-point at staged store paths.
-        flakeInputs = inputs;
       };
     })
   ];
+
+  # Distro-flake path + per-input override map consumed by the patched
+  # `main.py` at install time. Lives here (not substituted into the
+  # extensions package) so the package stays independent of the distro
+  # flake source — otherwise any unrelated repo edit invalidates
+  # calamares-nixos-extensions.
+  environment.etc."calamares-distro/install.json".text = builtins.toJSON {
+    distroFlake = toString distroSrc;
+    inherit inputOverrides;
+  };
 
   # Trade ISO size for build speed: upstream defaults to
   # `zstd -Xcompression-level 19` which takes minutes to recompress
@@ -53,7 +70,7 @@ in
   # build time by ~5x at the cost of a moderately larger image —
   # acceptable since this is a per-machine install medium, not a
   # download artifact.
-  isoImage.squashfsCompression = "zstd -Xcompression-level 3";
+  isoImage.squashfsCompression = "zstd -Xcompression-level 5";
 
   # Pre-stage everything `nix-build` + `nixos-install` will touch:
   #

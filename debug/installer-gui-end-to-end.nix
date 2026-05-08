@@ -25,7 +25,22 @@
   ...
 }:
 let
+  inherit (pkgs) lib;
   inherit (flake.lib) distroSrc;
+
+  # Mirror the override-map computation done by modules/nixos/installer-iso.nix
+  # so this VM's calamares main.py sees the same install-time config.
+  distroLock = builtins.fromJSON (builtins.readFile "${distroSrc}/flake.lock");
+  distroDirectInputNames = builtins.attrNames distroLock.nodes.root.inputs;
+  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) distroDirectInputNames) (
+    n: builtins.toString inputs.${n}.outPath
+  );
+  installConfig = pkgs.writeText "calamares-distro-install.json" (
+    builtins.toJSON {
+      distroFlake = toString distroSrc;
+      inherit inputOverrides;
+    }
+  );
 
   # OVMF firmware for phase-2 QEMU (EFI boot into systemd-boot).
   ovmfFd = (pkgs.OVMF.override { secureBoot = false; }).fd;
@@ -51,11 +66,14 @@ let
           (final: prev: {
             calamares-nixos-extensions = final.callPackage ../packages/calamares-distro-extensions {
               base = prev.calamares-nixos-extensions;
-              distroFlake = distroSrc;
-              flakeInputs = inputs;
             };
           })
         ];
+
+        # Install-time config for the patched main.py (distroSrc store
+        # path + per-input overrides). Lives outside the calamares
+        # package so package builds aren't invalidated by repo edits.
+        environment.etc."calamares-distro/install.json".source = installConfig;
 
         # EFI so Calamares detects firmwareType=efi → systemd-boot.
         virtualisation.useEFIBoot = true;

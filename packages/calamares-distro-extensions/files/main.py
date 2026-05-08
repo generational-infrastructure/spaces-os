@@ -173,12 +173,11 @@ cfgtail = """  # NixOS release this install was first set up against. Don't chan
 #   nix flake lock <wrapper> --override-input distro path:<DISTRO_FLAKE>
 #                            --override-input distro/<NAME> path:<PATH> ...
 #
-# `<DISTRO_FLAKE>` is the pre-staged distro store path baked into this
-# script at package build time. The per-input overrides come from
-# `INPUT_OVERRIDES` — a `{ name → store path }` map covering every direct
-# input distro declares — so the resulting lock pins distro AND every
-# transitive input declared by distro to a `path:` reference into the
-# live ISO's nix store. The install needs no network.
+# `<DISTRO_FLAKE>` is the pre-staged distro store path. The per-input
+# overrides come from `INPUT_OVERRIDES` — a `{ name → store path }` map
+# covering every direct input distro declares — so the resulting lock
+# pins distro AND every transitive input declared by distro to a `path:`
+# reference into the live ISO's nix store. The install needs no network.
 #
 # After locking we drive `nix build` ourselves (with
 # `--no-write-lock-file` so the freshly written lock isn't rewritten
@@ -186,18 +185,28 @@ cfgtail = """  # NixOS release this install was first set up against. Don't chan
 # `nixos-install --flake` would re-lock the wrapper at install time and
 # trip the path-flake lock-rewrite cycle (nix#9339, unfixed 2026-04).
 #
-# `@DISTRO_FLAKE@` is substituted at extensions-package build time with
-# the pre-staged distro store path. `@INPUT_OVERRIDES@` is replaced
-# with a JSON object `{ name → store path }`. `@@hostname@@`,
-# `@@system@@`, `@@extra_modules@@` are filled at install time from
-# globalstorage.
-DISTRO_FLAKE_PATH = "@DISTRO_FLAKE@"
+# Both values live in a JSON config file rather than being substituted
+# into this script at package build time. Build-time substitution made
+# the calamares-distro-extensions derivation depend on the distro flake
+# source path, so any unrelated repo edit invalidated the package. The
+# config file is generated at ISO build time (see
+# modules/nixos/installer-iso.nix); tests point `CALAMARES_DISTRO_CONFIG`
+# at a fixture they control. `@@hostname@@`, `@@system@@`,
+# `@@extra_modules@@` are filled at install time from globalstorage.
+
+_DISTRO_CONFIG_PATH = os.environ.get(
+    "CALAMARES_DISTRO_CONFIG", "/etc/calamares-distro/install.json"
+)
 try:
-    INPUT_OVERRIDES = json.loads(r"""@INPUT_OVERRIDES@""")
-except json.JSONDecodeError:
-    # Placeholder still in place — package built without flakeInputs
-    # (e.g. for unit tests). Empty map is fine; main.py's render
-    # functions don't touch INPUT_OVERRIDES.
+    with open(_DISTRO_CONFIG_PATH, "r") as _fh:
+        _distro_config = json.load(_fh)
+    DISTRO_FLAKE_PATH = _distro_config["distroFlake"]
+    INPUT_OVERRIDES = _distro_config.get("inputOverrides", {})
+except FileNotFoundError:
+    # No config staged — render functions still work for unit-test
+    # introspection, but `run()` will fail when it tries to lock the
+    # wrapper flake without a distro path.
+    DISTRO_FLAKE_PATH = None
     INPUT_OVERRIDES = {}
 
 flake_template = """{

@@ -16,15 +16,22 @@
     let
       inherit (inputs.nixpkgs) lib;
       excludedTopLevel = [
-        "scripts"
-        "checks"
-        "debug"
-        "local"
         ".direnv"
         ".envrc"
+        ".git"
         ".gitignore"
         ".jj"
-        ".git"
+        ".ruff_cache"
+        "LICENSE"
+        "README.md"
+        "checks"
+        "debug"
+        "devshell.nix"
+        "formatter.nix"
+        "local"
+        "result"
+        "scripts"
+        "treefmt.nix"
       ];
     in
     builtins.path {
