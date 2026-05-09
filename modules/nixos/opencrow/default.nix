@@ -16,9 +16,32 @@
 let
   cfg = config.services.opencrow-local;
 
+  stateDir = "/var/lib/opencrow-${cfg.instanceName}";
+
   skillsDir = ../../../skills;
 
   opencrowPkg = inputs.opencrow.packages.${pkgs.stdenv.hostPlatform.system}.opencrow;
+
+  skillConfigPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config;
+  skillConfigDaemonPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
+
+  # All skills (built-ins + user-supplied via cfg.skills), merged once so we
+  # can both pass them to the upstream module and materialise them as a
+  # single linked-farm dir for skill-config to read SKILL.md from at the
+  # same path on host and inside the container.
+  allSkills = {
+    web = "${opencrowPkg}/share/opencrow/skills/web";
+    datetime = "${skillsDir}/datetime";
+    location = "${skillsDir}/location";
+    maps = "${skillsDir}/maps";
+    skill-config = "${skillsDir}/skill-config";
+    calendar = "${skillsDir}/calendar";
+  }
+  // cfg.skills;
+
+  skillsFarm = pkgs.linkFarm "opencrow-${cfg.instanceName}-skills-defs" (
+    lib.mapAttrsToList (name: path: { inherit name path; }) allSkills
+  );
 
   discoverExtension = ./llama-swap-discover.ts;
 
@@ -253,7 +276,39 @@ in
         # Location data directory, writable by user services, readable
         # by the container.
         "d ${locationDir} 0777 root root -"
+        # Skill schemas: skill-config reads SKILL.md frontmatter from here
+        # at the same path on host and inside the container.
+        "L+ ${stateDir}/skills-defs - - - - ${skillsFarm}"
+        # Per-instance config + secrets store, owned by the opencrow user.
+        "d ${stateDir}/skill-config 0750 opencrow opencrow -"
+        "f ${stateDir}/skill-config/config.toml 0644 opencrow opencrow -"
+        "f ${stateDir}/skill-config/secrets.toml 0600 opencrow opencrow -"
       ];
+
+    # skill-config on the host PATH for occasional `sudo -u opencrow
+    # skill-config …` debugging or manual edits. The agent-driven flow
+    # inside the container is the primary path; this is a fallback.
+    environment.systemPackages = [ skillConfigPkg ];
+
+    # Sidecar daemon inside the opencrow container. The upstream
+    # services.opencrow.instances.<name> module sets containers.<container>.config
+    # inline; NixOS module merging lets us add another systemd service to the
+    # same container's config from outside without modifying upstream.
+    containers."opencrow-${cfg.instanceName}".config = _: {
+      systemd.services.skill-config-daemon = {
+        description = "skill-config IPC daemon for opencrow (${cfg.instanceName})";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "local-fs.target" ];
+        environment.SKILL_CONFIG_SOCKET = "/run/opencrow-sock/skill-config.sock";
+        serviceConfig = {
+          ExecStart = lib.getExe skillConfigDaemonPkg;
+          Restart = "on-failure";
+          RestartSec = 5;
+          User = "opencrow";
+          Group = "opencrow";
+        };
+      };
+    };
 
     # Periodically update the location file via GeoClue. Runs as a
     # user service because GeoClue requires a D-Bus agent for
@@ -317,16 +372,13 @@ in
     };
     services.opencrow.instances.${cfg.instanceName} = {
       enable = true;
-      skills = {
-        web = "${opencrowPkg}/share/opencrow/skills/web";
-        datetime = "${skillsDir}/datetime";
-        location = "${skillsDir}/location";
-        maps = "${skillsDir}/maps";
-      }
-      // cfg.skills;
+      skills = allSkills;
 
       extraPackages = [
         inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli
+        inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli
+        skillConfigPkg
+        skillConfigDaemonPkg
       ]
       ++ cfg.extraPackages;
 
@@ -364,6 +416,9 @@ in
         OPENCROW_PI_IDLE_TIMEOUT = "1h";
         OPENCROW_SOUL_FILE = "${pluginDir}/SOUL.md";
         OPENCROW_LOG_LEVEL = "info";
+        # skill-config reads these to find the per-instance state dir.
+        OPENCROW_INSTANCE = cfg.instanceName;
+        OPENCROW_STATE_DIR = stateDir;
       }
       // cfg.extraEnvironment;
     };

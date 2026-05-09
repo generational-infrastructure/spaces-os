@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skill-config"
+version = "0.1.0"
+description = "Per-skill config and secrets store for opencrow"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+  "tomlkit",
+  "pyyaml",
+]
+
+[project.scripts]
+skill-config = "skill_config:main"
