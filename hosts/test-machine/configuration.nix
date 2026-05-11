@@ -34,13 +34,9 @@ in
   # Override distro default user for greetd auto-login.
   services.greetd.settings.default_session.user = "test";
 
-  # Expose two models so the chat dropdown has more than one entry.
-  # qwen2.5:0.5b is the default (selected at session start); smollm is
-  # the lightweight backup.
-  services.opencrow-local.models = [
-    "qwen2.5:0.5b"
-    "smollm"
-  ];
+  # Expose a second model so the chat dropdown has more than one entry.
+  # The full list shown by `!models` is discovered at runtime from
+  # llama-swap's /v1/models endpoint.
   services.opencrow-local.defaultModel = "qwen2.5:0.5b";
 
   services.llama-swap.settings.models.smollm = {

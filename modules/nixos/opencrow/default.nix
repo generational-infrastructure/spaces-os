@@ -16,28 +16,13 @@
 let
   cfg = config.services.opencrow-local;
 
-  stateDir = "/var/lib/opencrow-${cfg.instanceName}";
-
-  skillsDir = ../../skills;
+  skillsDir = ../../../skills;
 
   opencrowPkg = inputs.opencrow.packages.${pkgs.stdenv.hostPlatform.system}.opencrow;
 
-  modelsJson = pkgs.writeText "models-${cfg.instanceName}.json" (
-    builtins.toJSON {
-      providers.local = {
-        baseUrl = "${cfg.llmUrl}/v1";
-        api = "openai-completions";
-        apiKey = "dummy";
-        compat = {
-          supportsDeveloperRole = false;
-          supportsReasoningEffort = false;
-        };
-        models = map (id: { inherit id; }) cfg.models;
-      };
-    }
-  );
+  discoverExtension = ./llama-swap-discover.ts;
 
-  pluginDir = ../../programs/opencrow-chat-plugin;
+  pluginDir = ../../../programs/opencrow-chat-plugin;
 
   locationDir = "/run/opencrow-location";
 
@@ -152,27 +137,15 @@ in
       description = "Base URL of an OpenAI-compatible LLM server (without /v1 suffix).";
     };
 
-    models = lib.mkOption {
-      type = lib.types.nonEmptyListOf lib.types.str;
-      default = [ "gemma4:e2b" ];
-      example = [
-        "qwen2.5:0.5b"
-        "smollm"
-      ];
-      description = ''
-        Model IDs exposed to the chat dropdown. Each must be served by
-        the same OpenAI-compatible endpoint (i.e. configured in
-        services.llama-swap.settings.models).
-      '';
-    };
-
     defaultModel = lib.mkOption {
       type = lib.types.str;
-      default = builtins.head cfg.models;
-      defaultText = lib.literalExpression "builtins.head config.services.opencrow-local.models";
+      default = "gemma4:e2b";
       description = ''
-        Model pi selects at session start. Must appear in `models`.
-        Defaults to the first entry of `models`.
+        Model pi selects at session start. Must be served by the
+        OpenAI-compatible endpoint at `llmUrl` (i.e. configured in
+        `services.llama-swap.settings.models`). The full model list
+        shown by `!models` is discovered at runtime from
+        `''${llmUrl}/v1/models`.
       '';
     };
 
@@ -256,13 +229,12 @@ in
     # Enable llama-swap by default — opencrow-local's default llmUrl
     # points at llama-swap's port (8012).
     services.llama-swap.enable = lib.mkDefault true;
-    # models.json for pi provider discovery + noctalia socket symlink.
+    # Host-accessible runtime dirs for the chat socket + location data.
     systemd.tmpfiles.rules =
       let
         socketDir = "/run/opencrow-${cfg.instanceName}";
       in
       [
-        "L+ ${stateDir}/pi-agent/models.json - - - - ${modelsJson}"
         # Host-accessible directory for the chat socket. The state dir
         # itself is 0750 (owned by the container's dynamic user), so we
         # put the socket in a separate world-accessible run dir and
@@ -352,11 +324,14 @@ in
 
       inherit (cfg)
         piPackage
-        extensions
         environmentFiles
         credentialFiles
         piSettings
         ;
+
+      extensions = cfg.extensions // {
+        llama-swap-discover = discoverExtension;
+      };
 
       # Bind-mount the host socket dir into the container so opencrow
       # can create the socket and the host user can connect to it.
@@ -375,6 +350,7 @@ in
         OPENCROW_SOCKET_PATH = "/run/opencrow-sock/chat.sock";
         OPENCROW_SOCKET_NAME = cfg.socketName;
         OPENCROW_PI_PROVIDER = "local";
+        LLAMA_SWAP_BASE_URL = cfg.llmUrl;
         OPENCROW_PI_MODEL = cfg.defaultModel;
         OPENCROW_PI_IDLE_TIMEOUT = "1h";
         OPENCROW_SOUL_FILE = "${pluginDir}/SOUL.md";
