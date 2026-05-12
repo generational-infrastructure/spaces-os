@@ -252,9 +252,20 @@ Item {
       // BottomToTop keeps contentY stable on append, so the only
       // bookkeeping left is the unread pill. Our own sends always
       // snap — not seeing your message appear is worse than losing
-      // scrollback.
+      // scrollback. The first non-empty population after open is
+      // also a snap: history replay arrives after Component.onCompleted,
+      // and landing mid-scroll on a fresh open is jarring.
       property int _lastCount: 0
+      property bool _initialized: false
       onModelChanged: {
+        if (count === 0) return;
+        if (!_initialized) {
+          _initialized = true;
+          _lastCount = count;
+          contentY = 0;
+          positionViewAtBeginning();
+          return;
+        }
         if (count <= _lastCount) { _lastCount = count; return; }
         _lastCount = count;
         if (model[0]?.from === "me") contentY = 0;
