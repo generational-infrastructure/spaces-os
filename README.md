@@ -58,14 +58,14 @@ by default.
 This gives you:
 - **Mod+T** — terminal (alacritty)
 - **Mod+D** — app launcher (fuzzel)
-- **Mod+N** — toggle the chat panel
-- **Mod+Space** — toggle voice-to-text recording
+- **Super+A** — toggle the chat panel
+- **Super+S** — toggle voice-to-text recording
 - Noctalia bar with system tray, workspaces, and chat widget
 
 #### Voice-to-text
 
 The full desktop module includes voice-to-text out of the box. Press
-**Mod+Space** to start recording and **Mod+Space** again to stop. Speech is
+**Super+S** to start recording and **Super+S** again to stop. Speech is
 transcribed locally and typed into the focused window.
 
 ### 2. Noctalia bar (any compositor)
@@ -96,6 +96,15 @@ default.
 
 After enabling the NixOS module, open noctalia's **Settings → Plugins** and
 enable the **AI Chat** plugin.
+
+The chat panel and voice-to-text rely on compositor-level keybinds.
+`nixosModules.distro` wires `Super+A` and `Super+S` into niri for you;
+with any other compositor you set them up yourself. Bind whatever keys
+you like to these commands:
+
+- chat panel: `noctalia-shell ipc call plugin:opencrow-chat toggle`
+- voice-to-text: `voxtype record toggle` (only if you imported the
+  `voxtype` module — see below)
 
 #### Voice-to-text
 
@@ -151,6 +160,11 @@ by default.
 After enabling the NixOS module, open noctalia's **Settings → Plugins** and
 enable the **AI Chat** plugin. Alternatively, add
 `{ id = "plugin:opencrow-chat"; }` to your `settings.json` widget layout.
+
+As with integration 2, `Super+A` / `Super+S` are only bound automatically
+under `nixosModules.distro`. On any other compositor, bind your own keys
+to `noctalia-shell ipc call plugin:opencrow-chat toggle` (and
+`voxtype record toggle` if you also imported `nixosModules.voxtype`).
 
 ## License
 
