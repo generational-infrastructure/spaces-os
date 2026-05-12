@@ -6,7 +6,12 @@ the full noctalia plugin → opencrow (socket) → pi → reply round trip.
 Turn 1: greet, expect any non-empty reply.
 Turn 2: ask "What color is the sky?", expect a reply containing "blue".
 
-Usage: test-opencrow-chat.py <socket_path>
+Usage: test-opencrow-chat.py <socket_path> [mode]
+
+`mode` is "local" (default) or "openrouter". In openrouter mode the
+llama-swap-specific model assertions are skipped — the active model is
+the one configured via `services.opencrow-local.defaultModel`, and the
+visible model list is whatever OpenRouter reports.
 """
 
 import json
@@ -15,6 +20,7 @@ import sys
 import time
 
 sock_path = sys.argv[1]
+mode = sys.argv[2] if len(sys.argv) > 2 else "local"
 
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 for _ in range(50):
@@ -104,14 +110,22 @@ models = request_models()
 print(f"MODELS: {models}", file=sys.stderr)
 assert isinstance(models, list), f"models must be a list, got {type(models)}"
 ids = [m["id"] for m in models]
-assert "qwen2.5:0.5b" in ids, f"qwen2.5:0.5b not in {ids}"
-assert "smollm" in ids, f"smollm not in {ids}"
-active = [m for m in models if m.get("active")]
-assert len(active) == 1, f"exactly one model must be active, got {active}"
-assert active[0]["id"] == "qwen2.5:0.5b", (
-    f"default model expected to be active, got {active[0]}"
-)
-print(f"MODEL LIST OK: {len(models)} model(s), active={active[0]['id']}")
+if mode == "openrouter":
+    assert ids, "model list is empty in openrouter mode"
+    active = [m for m in models if m.get("active")]
+    assert len(active) == 1, f"exactly one model must be active, got {active}"
+    print(
+        f"MODEL LIST OK (openrouter): {len(models)} model(s), active={active[0]['id']}"
+    )
+else:
+    assert "qwen2.5:0.5b" in ids, f"qwen2.5:0.5b not in {ids}"
+    assert "smollm" in ids, f"smollm not in {ids}"
+    active = [m for m in models if m.get("active")]
+    assert len(active) == 1, f"exactly one model must be active, got {active}"
+    assert active[0]["id"] == "qwen2.5:0.5b", (
+        f"default model expected to be active, got {active[0]}"
+    )
+    print(f"MODEL LIST OK: {len(models)} model(s), active={active[0]['id']}")
 
 s.close()
 print("SUCCESS")
