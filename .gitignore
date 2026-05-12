@@ -8,3 +8,6 @@ result-*
 
 # qemu disk images
 *.qcow2
+
+# repo-local secrets — see .env.example
+.env

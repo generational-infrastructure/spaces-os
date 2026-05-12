@@ -212,6 +212,41 @@ additional backend — pi's built-in `openrouter` provider exposes
 llama-swap stays enabled alongside; pick the provider per session
 from the chat panel's model selector.
 
+### Running the test-machine VM test
+
+`checks.x86_64-linux.test-machine` is dual-mode. With
+`OPENROUTER_API_KEY` unset it exercises the local llama-swap backend.
+With the env var set it switches the in-VM opencrow to the openrouter
+provider and runs a real round-trip against `api.openrouter.ai`.
+
+Repo-local secrets live in `.env` (gitignored). [direnv] loads it on
+directory entry via `.envrc`:
+
+```bash
+cp .env.example .env
+$EDITOR .env          # fill in OPENROUTER_API_KEY
+direnv allow
+```
+
+Then:
+
+```bash
+# Local-backend mode (default; works under `nix flake check` too):
+nix build .#checks.x86_64-linux.test-machine
+
+# OpenRouter mode (requires --impure so eval sees the env var; the
+# derivation is marked __impure so the VM gets real internet):
+nix build --impure .#checks.x86_64-linux.test-machine
+
+# Interactive VM for poking around:
+nix run --impure .#checks.x86_64-linux.test-machine.driverInteractive
+```
+
+In OpenRouter mode the key value is baked into the local `/nix/store`
+— do not push the resulting store paths to a shared cache.
+
+[direnv]: https://direnv.net
+
 ## License
 
 See [LICENSE](LICENSE).
