@@ -28,5 +28,8 @@ jj git fetch
 jj rebase -o "trunk()"
 nix fmt
 nix flake check
-jj bookmark set main
+# `jj new` may have left @ as an empty working-copy commit; setting
+# the bookmark there would publish a no-op. Walk back to the latest
+# non-empty ancestor so the published tip is the actual work.
+jj bookmark set main -r 'heads(::@ ~ empty())'
 jj git push
