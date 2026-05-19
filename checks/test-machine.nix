@@ -39,7 +39,7 @@ let
 
   # Small, cheap, fast. Swap to taste; the chat round-trip only asserts
   # a non-empty reply, not specific content.
-  openrouterModel = "google/gemma4-26b-a4b-it:free";
+  openrouterModel = "google/gemma-4-26b-a4b-it";
 
   apiKeyFile = if useOpenrouter then pkgs.writeText "openrouter-api-key" openrouterKey else null;
 

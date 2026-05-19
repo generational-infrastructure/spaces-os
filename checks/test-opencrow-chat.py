@@ -71,6 +71,36 @@ def send_and_wait(text, predicate, timeout=120):
     sys.exit(f"timed out waiting for reply to {text!r}")
 
 
+def send_and_collect(text, timeout=120):
+    """Send `text` and return every inbound event received until the
+    final assistant `kind:"msg"` arrives. Used by the streaming subtest
+    to inspect delta events that `send_and_wait` would otherwise drop.
+    """
+    s.sendall(json.dumps({"cmd": "send", "text": text}).encode() + b"\n")
+    buf = bytearray()
+    deadline = time.time() + timeout
+    events = []
+    while time.time() < deadline:
+        try:
+            chunk = s.recv(4096)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        buf.extend(chunk)
+        while b"\n" in buf:
+            nl = buf.index(b"\n")
+            line = bytes(buf[:nl])
+            del buf[: nl + 1]
+            ev = json.loads(line)
+            events.append((time.time(), ev))
+            print(f"EVENT: {ev}", file=sys.stderr)
+            msg = ev.get("msg") or {}
+            if ev.get("kind") == "msg" and msg.get("dir") == "in":
+                return events
+    sys.exit(f"timed out waiting for assistant reply to {text!r}")
+
+
 reply1 = send_and_wait("Hello bot", lambda c: bool(c.strip()))
 print(f"TURN 1 OK: {reply1}")
 
@@ -79,6 +109,35 @@ reply2 = send_and_wait(
     lambda c: "blue" in c.lower(),
 )
 print(f"TURN 2 OK: {reply2}")
+
+# Streaming subtest. Provoke a long-enough reply that the model
+# necessarily produces multiple tokens. Capture every event received
+# during the turn and assert that opencrow forwarded text_delta events
+# from pi as `kind:"delta"` chat events before the final `kind:"msg"`.
+# A buffered/non-streaming pipeline would deliver only the terminal
+# msg and no deltas — which matches the live regression symptom (bubble
+# appears all at once instead of token-by-token).
+stream_events = send_and_collect(
+    "List three primary colors, comma-separated.",
+    timeout=240,
+)
+deltas = [(t, ev) for t, ev in stream_events if ev.get("kind") == "delta"]
+assert deltas, (
+    "no kind:'delta' events received during streaming turn — opencrow "
+    "did not forward pi's text_delta events. Events seen: "
+    f"{[ev.get('kind') for _, ev in stream_events]}"
+)
+targets = {ev.get("target") for _, ev in deltas}
+assert len(targets) == 1 and "" not in targets and None not in targets, (
+    f"deltas did not share a single non-empty target: {targets}"
+)
+final_msg = stream_events[-1][1]
+assert final_msg.get("kind") == "msg" and final_msg["msg"].get("dir") == "in", (
+    f"last event was not the assistant msg: {final_msg}"
+)
+reply3 = final_msg["msg"].get("content", "")
+assert reply3.strip(), "streaming turn produced empty reply"
+print(f"TURN 3 OK (streaming): {len(deltas)} delta(s), reply={reply3!r}")
 
 
 def request_models(timeout=30):
