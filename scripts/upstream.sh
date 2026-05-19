@@ -11,7 +11,11 @@ set -euo pipefail
 local_inputs=$(jq -r '
   .nodes
   | to_entries[]
-  | select(.value.locked.type == "path")
+  | select(
+      .value.locked.type == "path"
+      or (.value.original.url // "" | startswith("file:"))
+      or (.value.locked.url // "" | startswith("file:"))
+    )
   | .key
 ' flake.lock)
 if [ -n "$local_inputs" ]; then

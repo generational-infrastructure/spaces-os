@@ -10,7 +10,7 @@
     # Tracks pinpox/opencrow#67 (model listing + switching). Repin to a
     # tagged release once the PR lands; the chat plugin's model dropdown
     # depends on the list-models / set-model wire protocol it adds.
-    opencrow.url = "github:pinpox/opencrow/pull/67/head";
+    opencrow.url = "github:generational-infrastructure/opencrow";
     opencrow.inputs.nixpkgs.follows = "nixpkgs";
     opencrow.inputs.treefmt-nix.follows = "treefmt-nix";
     noctalia-shell.url = "github:noctalia-dev/noctalia-shell/v4.7.6";
