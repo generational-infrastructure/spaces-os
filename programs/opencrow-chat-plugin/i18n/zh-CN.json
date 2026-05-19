@@ -12,7 +12,9 @@
     "attach-image-title": "附加图片",
     "time-now": "刚刚",
     "context-hint": "先前的对话可能仍在代理上下文中 — 继续输入以接续。",
-    "reset-tooltip": "重启对话（清除上下文）"
+    "reset-tooltip": "重启对话（清除上下文）",
+    "voice-tooltip": "语音输入",
+    "voice-stop-tooltip": "停止录音（转写）"
   },
   "bubble": {
     "reply-tooltip": "回复",

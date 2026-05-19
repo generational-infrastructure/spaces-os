@@ -12,7 +12,9 @@
     "attach-image-title": "画像を添付",
     "time-now": "今",
     "context-hint": "以前の会話はエージェントのコンテキストに残っている可能性があります — 入力して続行してください。",
-    "reset-tooltip": "会話を再開（コンテキストを消去）"
+    "reset-tooltip": "会話を再開（コンテキストを消去）",
+    "voice-tooltip": "音声入力",
+    "voice-stop-tooltip": "録音を停止（文字起こし）"
   },
   "bubble": {
     "reply-tooltip": "返信",

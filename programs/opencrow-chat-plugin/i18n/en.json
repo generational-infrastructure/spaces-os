@@ -13,7 +13,9 @@
     "time-now": "now",
     "models-tooltip": "Switch the model used for new replies",
     "context-hint": "Earlier conversation may still be in the agent's context — type to continue.",
-    "reset-tooltip": "Restart conversation (clear context)"
+    "reset-tooltip": "Restart conversation (clear context)",
+    "voice-tooltip": "Voice to text",
+    "voice-stop-tooltip": "Stop recording (transcribe)"
   },
   "bubble": {
     "reply-tooltip": "Reply",

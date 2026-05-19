@@ -46,6 +46,12 @@ Item {
   // `_now` ticks every 30s so `ago()` bindings re-evaluate — otherwise
   // "now" freezes at send time and never becomes "1m".
   property real _now: Date.now()
+  // Voice input via voxtype. Toggle-style: click starts recording,
+  // click again stops + transcribes into the focused input. We track
+  // state locally — same command the Mod+Space keybind invokes — so
+  // the button color reflects what we asked for. Out-of-band toggles
+  // from the keyboard will drift, but that's a rare edge case.
+  property bool voiceRecording: false
   Timer { interval: 30000; running: root.visible; repeat: true; onTriggered: root._now = Date.now() }
 
   function ago(ts) {
@@ -461,6 +467,27 @@ Item {
           }
         }
       }
+      // Voice-to-text. Mirrors the Mod+Space shortcut. Refocus the
+      // input area before spawning so voxtype's typed output lands in
+      // the compose box rather than whatever stole focus on click.
+      NIconButton {
+        id: voiceButton
+        icon: root.voiceRecording ? "microphone-mute" : "microphone"
+        tooltipText: root.voiceRecording
+          ? root.tr("panel.voice-stop-tooltip")
+          : root.tr("panel.voice-tooltip")
+        baseSize: Style.baseWidgetSize * 1.1 * Style.uiScaleRatio
+        Layout.alignment: Qt.AlignBottom
+        colorBg: root.voiceRecording ? Color.mError : Color.smartAlpha(Color.mSurfaceVariant)
+        colorFg: root.voiceRecording ? Color.mOnError : Color.mPrimary
+        colorBgHover: root.voiceRecording ? Color.mError : Color.mHover
+        colorFgHover: root.voiceRecording ? Color.mOnError : Color.mOnHover
+        onClicked: {
+          inputArea.forceActiveFocus();
+          voxtypeProcess.running = true;
+          root.voiceRecording = !root.voiceRecording;
+        }
+      }
       NIconButton {
         icon: "paperclip"
         tooltipText: root.tr("panel.attach-image-tooltip")
@@ -477,6 +504,11 @@ Item {
         enabled: input.text.trim().length > 0
         onClicked: input.accepted()
       }
+    }
+
+    Process {
+      id: voxtypeProcess
+      command: ["voxtype", "record", "toggle"]
     }
 
     // Noctalia's in-panel Popup file picker — QtQuick.Dialogs.FileDialog

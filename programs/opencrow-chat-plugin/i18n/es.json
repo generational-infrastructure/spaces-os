@@ -12,7 +12,9 @@
     "attach-image-title": "Adjuntar imagen",
     "time-now": "ahora",
     "context-hint": "Es posible que la conversación anterior siga en el contexto del agente — escribe para continuar.",
-    "reset-tooltip": "Reiniciar conversación (borrar contexto)"
+    "reset-tooltip": "Reiniciar conversación (borrar contexto)",
+    "voice-tooltip": "Entrada de voz",
+    "voice-stop-tooltip": "Detener grabación (transcribir)"
   },
   "bubble": {
     "reply-tooltip": "Responder",

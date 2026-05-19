@@ -12,7 +12,9 @@
     "attach-image-title": "Załącz obraz",
     "time-now": "teraz",
     "context-hint": "Wcześniejsza rozmowa może wciąż być w kontekście agenta — pisz, aby kontynuować.",
-    "reset-tooltip": "Uruchom rozmowę od nowa (wyczyść kontekst)"
+    "reset-tooltip": "Uruchom rozmowę od nowa (wyczyść kontekst)",
+    "voice-tooltip": "Wpis głosowy",
+    "voice-stop-tooltip": "Zatrzymaj nagrywanie (transkrybuj)"
   },
   "bubble": {
     "reply-tooltip": "Odpowiedz",
