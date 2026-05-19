@@ -10,7 +10,8 @@
     "compose-waiting": "デーモンを待機中…",
     "attach-image-tooltip": "画像を添付",
     "attach-image-title": "画像を添付",
-    "time-now": "今"
+    "time-now": "今",
+    "context-hint": "以前の会話はエージェントのコンテキストに残っている可能性があります — 入力して続行してください。"
   },
   "bubble": {
     "reply-tooltip": "返信",

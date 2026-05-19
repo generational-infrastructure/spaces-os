@@ -10,7 +10,8 @@
     "compose-waiting": "Warte auf Daemon…",
     "attach-image-tooltip": "Bild anhängen",
     "attach-image-title": "Bild anhängen",
-    "time-now": "jetzt"
+    "time-now": "jetzt",
+    "context-hint": "Frühere Unterhaltung kann noch im Agentenkontext liegen — tippen, um fortzufahren."
   },
   "bubble": {
     "reply-tooltip": "Antworten",

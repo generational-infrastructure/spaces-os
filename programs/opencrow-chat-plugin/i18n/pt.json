@@ -10,7 +10,8 @@
     "compose-waiting": "Aguardando daemon…",
     "attach-image-tooltip": "Anexar imagem",
     "attach-image-title": "Anexar imagem",
-    "time-now": "agora"
+    "time-now": "agora",
+    "context-hint": "A conversa anterior pode ainda estar no contexto do agente — digite para continuar."
   },
   "bubble": {
     "reply-tooltip": "Responder",

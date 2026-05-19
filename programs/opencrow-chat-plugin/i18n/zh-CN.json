@@ -10,7 +10,8 @@
     "compose-waiting": "等待守护进程…",
     "attach-image-tooltip": "附加图片",
     "attach-image-title": "附加图片",
-    "time-now": "刚刚"
+    "time-now": "刚刚",
+    "context-hint": "先前的对话可能仍在代理上下文中 — 继续输入以接续。"
   },
   "bubble": {
     "reply-tooltip": "回复",

@@ -10,7 +10,8 @@
     "compose-waiting": "En attente du démon…",
     "attach-image-tooltip": "Joindre une image",
     "attach-image-title": "Joindre une image",
-    "time-now": "à l'instant"
+    "time-now": "à l'instant",
+    "context-hint": "La conversation précédente peut être encore dans le contexte de l'agent — tape pour continuer."
   },
   "bubble": {
     "reply-tooltip": "Répondre",

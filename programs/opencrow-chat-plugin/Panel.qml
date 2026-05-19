@@ -195,6 +195,24 @@ Item {
 
     NDivider { Layout.fillWidth: true }
 
+    // Asymmetry hint: when the panel comes up empty but the daemon is
+    // already running, the underlying pi process likely has prior turns
+    // in its context window — typing here continues that conversation
+    // rather than starting a new one. Plugin can't reliably distinguish
+    // a truly fresh daemon from a long-running one without a daemon-side
+    // signal, so this also surfaces on first-ever startup; the cost of
+    // that false positive (one extra line until the user sends anything)
+    // is lower than the cost of silently appending to a hidden history.
+    NText {
+      visible: chat?.streaming && (chat?.messages?.length ?? 0) === 0
+      Layout.fillWidth: true
+      text: root.tr("panel.context-hint")
+      color: Color.mOnSurfaceVariant
+      pointSize: Style.fontSizeXS
+      wrapMode: Text.Wrap
+      font.italic: true
+    }
+
     // ── History ───────────────────────────────────────────────────────
     // Wrapped so the "new messages" pill can float over the list
     // without joining the ColumnLayout flow.

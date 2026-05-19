@@ -11,7 +11,8 @@
     "attach-image-tooltip": "Attach image",
     "attach-image-title": "Attach image",
     "time-now": "now",
-    "models-tooltip": "Switch the model used for new replies"
+    "models-tooltip": "Switch the model used for new replies",
+    "context-hint": "Earlier conversation may still be in the agent's context — type to continue."
   },
   "bubble": {
     "reply-tooltip": "Reply",
