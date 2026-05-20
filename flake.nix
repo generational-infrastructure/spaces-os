@@ -13,7 +13,7 @@
     opencrow.url = "github:generational-infrastructure/opencrow";
     opencrow.inputs.nixpkgs.follows = "nixpkgs";
     opencrow.inputs.treefmt-nix.follows = "treefmt-nix";
-    noctalia-shell.url = "github:noctalia-dev/noctalia-shell/v4.7.6";
+    noctalia-shell.url = "github:noctalia-dev/noctalia-shell/v4.7.7";
     noctalia-shell.inputs.nixpkgs.follows = "nixpkgs";
     llm-agents.url = "github:numtide/llm-agents.nix";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
