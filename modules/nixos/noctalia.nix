@@ -29,5 +29,20 @@ in
       "d %h/.config/noctalia 0755 - - -"
       "d %h/.config/noctalia/plugins-autoload 0755 - - -"
     ];
+
+    systemd.user.services.noctalia-shell = {
+      description = "Noctalia Wayland desktop shell";
+      partOf = [ "graphical-session.target" ];
+      after = [ "graphical-session.target" ];
+      wantedBy = [ "graphical-session.target" ];
+      restartTriggers = [ pkgs'.noctalia-shell ];
+      serviceConfig = {
+        ExecStart = "${pkgs'.noctalia-shell}/bin/noctalia-shell";
+        Restart = "on-failure";
+        Slice = "session.slice";
+        # Noctalia spawns helpers by bare name (`sh`, `wl-paste`, `voxtype`, ...)
+        Environment = "PATH=/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
+      };
+    };
   };
 }

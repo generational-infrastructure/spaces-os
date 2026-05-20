@@ -6,7 +6,7 @@
 #
 # Also writes a deterministic /etc/niri/config.kdl derived from the
 # upstream default with two opinionated edits:
-#   1. spawn-at-startup "waybar" → "noctalia-shell" (we ship noctalia)
+#   1. drop spawn-at-startup "waybar" (noctalia starts via systemd)
 #   2. inject `mod-key "Alt"` so VMs don't fight host Super grabs
 #
 # NIRI_CONFIG is set on the user-service unit to bypass niri's user/system
@@ -21,9 +21,8 @@ let
   niriConfig = pkgs.runCommand "niri-config.kdl" { } ''
     cp ${pkgs.niri.src}/resources/default-config.kdl $out
     chmod +w $out
-    substituteInPlace $out \
-      --replace-fail 'spawn-at-startup "waybar"' \
-                     'spawn-at-startup "noctalia-shell"'
+    grep -q 'spawn-at-startup "waybar"' $out  # fail loudly if upstream renamed it
+    sed -i '/spawn-at-startup "waybar"/d' $out
     sed -i '/^input {$/a\    mod-key "Alt"' $out
     # Super+A toggles the opencrow-chat panel in noctalia.
     sed -i '/^binds {$/a\    Super+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:opencrow-chat" "toggle"; }' $out

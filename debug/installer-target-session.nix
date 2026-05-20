@@ -65,15 +65,13 @@ pkgs.testers.runNixOSTest {
       with subtest("niri exposes its Wayland socket"):
           target.wait_for_file("/run/user/${uid}/wayland-1", timeout=30)
 
-      with subtest("niri spawned noctalia-shell"):
-          # `app-niri-noctalia*.scope` is what systemd names the cgroup
-          # niri creates for child processes started via spawn-at-startup.
-          # Its presence is the canonical "noctalia is running"
-          # signal — same check `test-machine` uses.
+      with subtest("noctalia-shell is running"):
           target.wait_until_succeeds(
-              "ls /sys/fs/cgroup/user.slice/user-${uid}.slice/"
-              "user@${uid}.service/app.slice/ "
-              "| grep -q 'app-niri-noctalia.*\\.scope'",
+              "systemctl --user --machine=installed@.host is-active noctalia-shell.service",
+              timeout=30,
+          )
+          target.wait_until_succeeds(
+              "test -d /run/user/${uid}/quickshell",
               timeout=30,
           )
 

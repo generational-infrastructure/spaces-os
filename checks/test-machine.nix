@@ -20,7 +20,7 @@
 #   - greetd starts and opens a PAM session for the test user
 #   - the user manager (user@1000.service) comes up
 #   - niri.service activates and exposes a Wayland socket
-#   - noctalia-shell is spawned by niri
+#   - noctalia-shell.service starts under graphical-session.target
 #   - opencrow-chat plugin is symlinked into the test user's noctalia dir
 #   - opencrow container comes up with socket backend
 #   - the chat socket is accessible on the host
@@ -137,15 +137,13 @@ let
         with subtest("niri exposes its Wayland socket"):
             machine.wait_for_file("/run/user/${uid}/wayland-1", timeout=30)
 
-        with subtest("niri spawned noctalia-shell"):
+        with subtest("noctalia-shell is running"):
             machine.wait_until_succeeds(
-                "test -d /run/user/${uid}/quickshell",
+                "systemctl --user --machine=test@.host is-active noctalia-shell.service",
                 timeout=30,
             )
             machine.wait_until_succeeds(
-                "ls /sys/fs/cgroup/user.slice/user-${uid}.slice/"
-                "user@${uid}.service/app.slice/ "
-                "| grep -q 'app-niri-noctalia.*\\.scope'",
+                "test -d /run/user/${uid}/quickshell",
                 timeout=30,
             )
 
