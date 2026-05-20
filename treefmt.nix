@@ -25,5 +25,9 @@ _: {
     "*.jsx"
   ];
   # QML's JavaScript dialect (.pragma library) is not valid ES.
-  programs.prettier.excludes = [ "programs/pi-chat-plugin/MsgText.js" ];
+  programs.prettier.excludes = [
+    "programs/pi-chat-plugin/MsgText.js"
+    "programs/pi-chat-plugin/MsgFilter.js"
+    "programs/pi-chat-plugin/PluginSettings.js"
+  ];
 }

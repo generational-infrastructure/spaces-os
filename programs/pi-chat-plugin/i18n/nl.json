@@ -14,7 +14,9 @@
     "context-hint": "Eerder gesprek kan nog in de context van de agent staan — typ om verder te gaan.",
     "reset-tooltip": "Gesprek herstarten (context wissen)",
     "voice-tooltip": "Spraakinvoer",
-    "voice-stop-tooltip": "Opname stoppen (transcriberen)"
+    "voice-stop-tooltip": "Opname stoppen (transcriberen)",
+    "thinking-hide-tooltip": "Denken verbergen in chat",
+    "thinking-show-tooltip": "Denken tonen in chat"
   },
   "bubble": {
     "reply-tooltip": "Beantwoorden",

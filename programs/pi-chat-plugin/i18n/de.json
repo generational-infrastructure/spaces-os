@@ -14,7 +14,9 @@
     "context-hint": "Frühere Unterhaltung kann noch im Agentenkontext liegen — tippen, um fortzufahren.",
     "reset-tooltip": "Unterhaltung neu starten (Kontext löschen)",
     "voice-tooltip": "Spracheingabe",
-    "voice-stop-tooltip": "Aufnahme stoppen (transkribieren)"
+    "voice-stop-tooltip": "Aufnahme stoppen (transkribieren)",
+    "thinking-hide-tooltip": "Denkschritte im Chat ausblenden",
+    "thinking-show-tooltip": "Denkschritte im Chat anzeigen"
   },
   "bubble": {
     "reply-tooltip": "Antworten",

@@ -16,7 +16,9 @@
     "reset-tooltip": "Restart conversation (clear context)",
     "voice-tooltip": "Voice to text",
     "voice-stop-tooltip": "Stop recording (transcribe)",
-    "new-session-tooltip": "Start a new chat session"
+    "new-session-tooltip": "Start a new chat session",
+    "thinking-hide-tooltip": "Hide thinking in chat",
+    "thinking-show-tooltip": "Show thinking in chat"
   },
   "bubble": {
     "reply-tooltip": "Reply",

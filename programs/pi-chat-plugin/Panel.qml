@@ -8,6 +8,8 @@ import qs.Commons
 import qs.Services.UI
 import qs.Widgets
 import "MsgText.js" as Txt
+import "MsgFilter.js" as MsgFilter
+import "PluginSettings.js" as PluginSettings
 
 Item {
   id: root
@@ -19,6 +21,16 @@ Item {
   // Daemon pushes this in the status event — single source of truth is
   // the hm-module's displayName option, not a separate plugin setting.
   readonly property string peerName: chat?.peerName || tr("panel.default-peer-name")
+
+  // UI-only "hide thinking bubbles" toggle. Persisted via pluginSettings
+  // because the panel Item is reinstantiated per open — a panel-local
+  // property would reset every time the user reopens the chat. The
+  // toggle never mutates session.messages; flipping it back restores
+  // every previously hidden bubble in place.
+  readonly property bool showThinking:
+    pluginApi?.pluginSettings?.showThinking
+      ?? pluginApi?.manifest?.metadata?.defaultSettings?.showThinking
+      ?? true
 
   function tr(key, args) {
     return pluginApi?.tr(key, args) ?? key;
@@ -185,6 +197,17 @@ Item {
         onClicked: { searchBar.visible = !searchBar.visible; if (searchBar.visible) searchField.forceActiveFocus(); }
       }
       NIconButton {
+        icon: root.showThinking ? "eye" : "eye-off"
+        tooltipText: root.showThinking
+          ? root.tr("panel.thinking-hide-tooltip")
+          : root.tr("panel.thinking-show-tooltip")
+        baseSize: Style.baseWidgetSize * 0.9
+        // Flip the pluginSetting via the shared helper; root.showThinking
+        // re-binds against pluginApi.pluginSettings and the ListView's
+        // MsgFilter binding recomputes immediately.
+        onClicked: PluginSettings.toggleBool(pluginApi, "showThinking")
+      }
+      NIconButton {
         icon: "rotate"
         tooltipText: root.tr("panel.reset-tooltip")
         baseSize: Style.baseWidgetSize * 0.9
@@ -309,7 +332,7 @@ Item {
       // without any positionViewAtEnd() gymnastics. Scrolling up
       // increases contentY into history as usual.
       verticalLayoutDirection: ListView.BottomToTop
-      model: (chat?.messages ?? []).slice().reverse()
+      model: MsgFilter.visible(chat?.messages ?? [], root.showThinking).slice().reverse()
       clip: true
       // "Near bottom" = within two bubble-heights of contentY 0.
       readonly property bool atBottom: contentY < Style.baseWidgetSize * 2

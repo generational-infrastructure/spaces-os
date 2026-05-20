@@ -22,7 +22,8 @@
       "maxHistory": 200,
       "defaultWorkspaceRoot": "",
       "idleTimeoutMinutes": 10,
-      "memoryHigh": "4G"
+      "memoryHigh": "4G",
+      "showThinking": true
     }
   }
 }

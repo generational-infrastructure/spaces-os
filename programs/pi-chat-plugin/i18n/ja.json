@@ -14,7 +14,9 @@
     "context-hint": "以前の会話はエージェントのコンテキストに残っている可能性があります — 入力して続行してください。",
     "reset-tooltip": "会話を再開（コンテキストを消去）",
     "voice-tooltip": "音声入力",
-    "voice-stop-tooltip": "録音を停止（文字起こし）"
+    "voice-stop-tooltip": "録音を停止（文字起こし）",
+    "thinking-hide-tooltip": "チャットで思考を非表示",
+    "thinking-show-tooltip": "チャットで思考を表示"
   },
   "bubble": {
     "reply-tooltip": "返信",

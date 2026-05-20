@@ -14,7 +14,9 @@
     "context-hint": "A conversa anterior pode ainda estar no contexto do agente — digite para continuar.",
     "reset-tooltip": "Reiniciar conversa (limpar contexto)",
     "voice-tooltip": "Entrada de voz",
-    "voice-stop-tooltip": "Parar gravação (transcrever)"
+    "voice-stop-tooltip": "Parar gravação (transcrever)",
+    "thinking-hide-tooltip": "Ocultar raciocínio no chat",
+    "thinking-show-tooltip": "Mostrar raciocínio no chat"
   },
   "bubble": {
     "reply-tooltip": "Responder",
