@@ -168,6 +168,11 @@ QtObject {
   function listModels() {
     if (!_shouldRun) spawn();
     _send({ type: "get_available_models" });
+    // get_state is the authoritative source for the currently-active
+    // model — pi reports what it actually loaded from settings.json
+    // or the resumed session.jsonl, which beats any guess we could
+    // make from modelPref alone.
+    _send({ type: "get_state" });
   }
 
   function setModel(provider, modelId) {
@@ -504,6 +509,18 @@ QtObject {
       }));
     } else if (ev.command === "get_messages") {
       _importHistoricalMessages(ev.data && ev.data.messages);
+    } else if (ev.command === "get_state") {
+      // Authoritative model state from pi. Overrides whatever
+      // get_available_models picked from modelPref alone — covers the
+      // first-open case where pi's settings.json/session.jsonl default
+      // disagrees with list[0] alphabetically.
+      const m = ev.data && ev.data.model;
+      if (m && m.provider && m.id) {
+        activeModel = m.provider + "/" + m.id;
+        models = models.map(x => Object.assign({}, x, {
+          active: x.provider === m.provider && x.id === m.id,
+        }));
+      }
     }
   }
 

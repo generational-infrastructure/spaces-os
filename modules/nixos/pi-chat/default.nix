@@ -397,12 +397,43 @@ in
     ++ lib.optionals cfg.noctaliaPlugin [
       "d %h/.config/noctalia 0755 - - -"
       "d %h/.config/noctalia/plugins 0755 - - -"
-      "L+ %h/.config/noctalia/plugins/${pluginId} - - - - ${pluginDir}"
       "d %h/.config/noctalia/plugins-autoload 0755 - - -"
-      "L+ %h/.config/noctalia/plugins-autoload/${pluginId} - - - - ${pluginDir}"
     ];
 
     # ── User services ────────────────────────────────────────────────
+
+    # Materialize the chat plugin into ~/.config/noctalia/plugins with
+    # CURRENT mtimes. Symlinking the plugin dir from /nix/store would
+    # be simpler, but Qt's qmlcache keys compiled bytecode by
+    # (absolute path, source mtime). Every file under /nix/store has
+    # mtime = 1970-01-01, so on each rebuild Qt thinks its cached
+    # bytecode is still fresh and silently keeps the OLD plugin
+    # (missing newly-added IpcHandler functions, etc.). Copying with
+    # fresh mtimes invalidates the cache on every rebuild.
+    systemd.user.services.distro-pi-chat-plugin-sync = lib.mkIf cfg.noctaliaPlugin {
+      description = "Materialize pi-chat plugin with fresh mtimes (Qt qmlcache invalidation)";
+      wantedBy = [ "default.target" ];
+      # Run before any UI starts so noctalia spawn picks up the
+      # refreshed plugin on its first load.
+      before = [ "graphical-session-pre.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        set -eu
+        src=${pluginDir}
+        dst="$HOME/.config/noctalia/plugins/${pluginId}"
+        mkdir -p "$(dirname "$dst")" "$HOME/.config/noctalia/plugins-autoload"
+        rm -rf "$dst"
+        # cp without -p leaves mtimes at the current time.
+        cp -rT "$src" "$dst"
+        chmod -R u+w "$dst"
+        # Make plugins-autoload point at the same materialized copy
+        # so noctalia's autoload-driven enable-state stays in sync.
+        ln -sfn "$dst" "$HOME/.config/noctalia/plugins-autoload/${pluginId}"
+      '';
+    };
 
     # Skill-config IPC daemon. Lives as a regular user systemd unit;
     # each pi-chat scope bind-mounts its socket at /run/distro/skill-config.sock.

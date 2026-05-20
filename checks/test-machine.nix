@@ -166,14 +166,28 @@ let
             )
 
         with subtest("chat plugin is autoloaded"):
+            # New layout: the pi-chat module materializes the plugin
+            # as a writable COPY (fresh mtimes) — not a /nix/store
+            # symlink — so Qt's qmlcache invalidates properly. Assert
+            # the copy exists and has a current mtime so a regression
+            # to L+ symlinks trips this subtest, not the IPC audit.
             machine.wait_until_succeeds(
-                "test -L /home/test/.config/noctalia/plugins/pi-chat",
+                "test -d /home/test/.config/noctalia/plugins/pi-chat "
+                "&& test ! -L /home/test/.config/noctalia/plugins/pi-chat",
                 timeout=30,
             )
             machine.wait_until_succeeds(
                 "test -L /home/test/.config/noctalia/plugins-autoload/pi-chat",
                 timeout=30,
             )
+            mtime = int(machine.succeed(
+                "stat -c %Y /home/test/.config/noctalia/plugins/pi-chat/Main.qml"
+            ).strip())
+            if mtime < 1_577_836_800:  # 2020-01-01
+                raise Exception(
+                    f"plugin Main.qml has nix-store epoch mtime ({mtime}); "
+                    "Qt qmlcache will pin stale bytecode across rebuilds"
+                )
 
         with subtest("pi-chat user services come up"):
             machine.wait_until_succeeds(
