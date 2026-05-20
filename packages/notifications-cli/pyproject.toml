@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notifications-cli"
+version = "0.1.0"
+description = "Read-only CLI over noctalia's notification history (for pi-chat skills)"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+notifications = "notifications_cli:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["notifications_cli.py"]

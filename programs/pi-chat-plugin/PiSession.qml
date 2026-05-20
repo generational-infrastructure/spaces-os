@@ -250,6 +250,14 @@ QtObject {
     const skillSockHost = xdgRuntime + "/distro-skill-config.sock";
     const skillsDefs = stateDir + "/skills-defs";
     const skillConfigStore = stateDir + "/skill-config";
+    // Dedicated dir for noctalia's notification history file. noctalia
+    // is configured (via systemd-user service Environment) to write its
+    // history JSON to <notificationsDir>/history.json so we can bind
+    // this single dir read-only without exposing the rest of
+    // ~/.cache/noctalia. The `notifications` skill reads the file via
+    // DISTRO_NOTIFICATIONS_FILE.
+    const notificationsDir = stateDir + "/notifications";
+    const notificationsFile = notificationsDir + "/history.json";
 
     // systemd-run --user as a transient service (not --scope): user
     // scopes silently reject namespace-creating properties like
@@ -267,6 +275,7 @@ QtObject {
       "--setenv=LLAMA_SWAP_BASE_URL=" + llmUrl,
       "--setenv=SKILL_CONFIG_SOCKET=" + skillSockHost,
       "--setenv=DISTRO_PI_CHAT_STATE_DIR=" + stateDir,
+      "--setenv=DISTRO_NOTIFICATIONS_FILE=" + notificationsFile,
       "--setenv=PI_TELEMETRY=0",
       "--setenv=PI_OFFLINE=0",
       "--property=BindPaths=" + sessionState + ":" + sessionState,
@@ -276,6 +285,7 @@ QtObject {
       // symlinks) and the user's config/secrets store (read-write).
       "--property=BindReadOnlyPaths=" + skillsDefs + ":" + skillsDefs,
       "--property=BindPaths=" + skillConfigStore + ":" + skillConfigStore,
+      "--property=BindReadOnlyPaths=" + notificationsDir + ":" + notificationsDir,
       "--property=PrivateTmp=true",
       "--property=PrivateDevices=true",
       "--property=ProtectKernelTunables=true",

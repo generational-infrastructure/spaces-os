@@ -36,7 +36,7 @@ let
 
   skillConfigPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config;
   skillConfigDaemonPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
-
+  notificationsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.notifications-cli;
   piPkg = cfg.piPackage;
 
   pluginDir = ../../../programs/pi-chat-plugin;
@@ -52,6 +52,11 @@ let
   sessionsIndexRel = "${stateRel}/sessions.json";
   skillsDefsRel = "${stateRel}/skills-defs";
   skillConfigStoreRel = "${stateRel}/skill-config";
+  # noctalia's notification history file, redirected here so the pi sandbox
+  # can bind-mount the dedicated directory without exposing the rest of
+  # noctalia's cache. See systemd.user.services.noctalia-shell below.
+  notificationsRel = "${stateRel}/notifications";
+  notificationsFileRel = "${notificationsRel}/history.json";
 
   # All skills (built-ins + user-supplied via cfg.skills), merged into
   # one linked-farm so the plugin can pass a single dir or pi can read
@@ -60,6 +65,7 @@ let
     datetime = "${skillsDir}/datetime";
     location = "${skillsDir}/location";
     maps = "${skillsDir}/maps";
+    notifications = "${skillsDir}/notifications";
     skill-config = "${skillsDir}/skill-config";
     calendar = "${skillsDir}/calendar";
   };
@@ -288,7 +294,10 @@ in
     bashConfirm = {
       allowPatterns = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [ "^skill-config(\\s|$)" ];
+        default = [
+          "^skill-config(\\s|$)"
+          "^notifications(\\s|$)"
+        ];
         description = ''
           ECMAScript regex patterns whose `bash` invocations skip the
           bash-confirm prompt. The user/LLM still issues the command
@@ -393,6 +402,34 @@ in
         assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
         message = "services.pi-chat.openrouter.apiKeyFile must be set when openrouter.enable = true.";
       }
+      {
+        # The notifications skill relies on the env-var redirect below to
+        # land noctalia's history file at a path the pi sandbox can bind-
+        # mount. That redirect only reaches noctalia when the systemd user
+        # manager launches it — niri spawn-at-startup, lassulus/wrappers
+        # without env propagation, or any other out-of-band launcher
+        # bypasses Environment= entirely and the skill stays empty.
+        assertion =
+          let
+            svc = config.systemd.user.services.noctalia-shell or { };
+            execStart = svc.serviceConfig.ExecStart or null;
+          in
+          execStart != null && execStart != "";
+        message = ''
+          services.pi-chat.enable = true redirects noctalia's notification
+          history via systemd.user.services.noctalia-shell.environment, but
+          no ExecStart is defined for that unit on this host. Noctalia must
+          therefore be launched by something other than the systemd user
+          manager (e.g. niri's spawn-at-startup), and the redirect never
+          reaches the running process — pi-chat's notifications skill will
+          always report an empty history.
+
+          Fix: import inputs.distro.nixosModules.noctalia (or the bundle
+          nixosModules.distro / nixosModules.noctalia-bar that pulls it in)
+          so systemd owns the launch, and remove any spawn-at-startup /
+          autostart hook that races it.
+        '';
+      }
     ];
 
     # llama-swap supplies the default LLM endpoint; enable by default
@@ -401,7 +438,10 @@ in
 
     # Skill-config CLI on PATH so pi (running as the interactive user)
     # can `bash` it without going through nix-shell.
-    environment.systemPackages = [ skillConfigPkg ];
+    environment.systemPackages = [
+      skillConfigPkg
+      notificationsCliPkg
+    ];
 
     # Materialize pi's config dir into user state. Symlinking from a
     # /nix/store JSON keeps the file world-readable and tied to the
@@ -425,6 +465,11 @@ in
       # Symlink each skill so request-input can validate fields before
       # contacting the daemon.
       "d %h/${skillsDefsRel} 0755 - - -"
+      # noctalia is redirected to write its history file under this dir
+      # (see systemd.user.services.noctalia-shell.environment below) so the
+      # pi sandbox can bind-mount just this dir read-only without exposing
+      # the rest of ~/.cache/noctalia.
+      "d %h/${notificationsRel} 0755 - - -"
     ]
     ++ lib.mapAttrsToList (name: path: "L+ %h/${skillsDefsRel}/${name} - - - - ${path}") allSkills
     ++ [
@@ -491,6 +536,16 @@ in
         RestartSec = 5;
       };
     };
+
+    # Redirect noctalia's notification history file from its default
+    # location under ~/.cache/noctalia/ to a dedicated directory under
+    # the pi state tree. The pi-chat sandbox bind-mounts that directory
+    # read-only (see programs/pi-chat-plugin/PiSession.qml) so the
+    # notifications skill can read what noctalia just wrote without
+    # exposing the rest of noctalia's cache (image thumbnails, color
+    # schemes, plugin metadata, …).
+    systemd.user.services.noctalia-shell.environment.NOCTALIA_NOTIF_HISTORY_FILE =
+      "%h/${notificationsFileRel}";
 
     systemd.user.services.distro-notify-forward = lib.mkIf cfg.notificationForwarding.enable {
       description = "Forward desktop notifications to the pi-chat panel";

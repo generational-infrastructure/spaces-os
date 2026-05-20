@@ -11,3 +11,6 @@ result-*
 
 # repo-local secrets — see .env.example
 .env
+
+# python
+__pycache__/

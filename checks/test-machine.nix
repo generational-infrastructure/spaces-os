@@ -388,6 +388,33 @@ let
                 f"systemctl --user --machine=test@.host show pi-chat-{picked}.service "
                 "--property=ProtectHome | grep -q '^ProtectHome=tmpfs'"
             )
+
+        with subtest("noctalia persists notifications under the pi state tree"):
+            # Fires the same DBus path the chat plugin's notifications skill
+            # relies on. notify-send → org.freedesktop.Notifications →
+            # noctalia's NotificationService → history.json. If the env
+            # redirect to ~/.local/state/distro/pi/notifications/ is not
+            # actually honored by noctalia, this file never appears.
+            sentinel = "vm-seeded-notification"
+            machine.succeed(
+                sudo_env + f"notify-send --urgency=normal pi-test {sentinel!r}"
+            )
+            notif_path = (
+                "/home/test/.local/state/distro/pi/notifications/history.json"
+            )
+            machine.wait_until_succeeds(f"test -s {notif_path}", timeout=30)
+            machine.wait_until_succeeds(
+                f"grep -q {sentinel!r} {notif_path}", timeout=15
+            )
+            # And the CLI must surface it back. Mirrors what pi runs in
+            # its sandboxed scope (DISTRO_NOTIFICATIONS_FILE = redirect).
+            out = machine.succeed(
+                sudo_env
+                + f"DISTRO_NOTIFICATIONS_FILE={notif_path} notifications list"
+            )
+            assert sentinel in out, (
+                f"notifications list did not surface {sentinel!r}:\n{out}"
+            )
       '';
   };
 in
