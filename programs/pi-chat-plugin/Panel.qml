@@ -67,6 +67,66 @@ Item {
     anchors.margins: Style.marginL
     spacing: Style.marginM
 
+    // ── Session tabs ───────────────────────────────────────────────
+    // Session tabs are populated by PiChatBackend; if the list
+    // is empty the row collapses to zero height.
+    Item {
+      id: sessionTabsHost
+      Layout.fillWidth: true
+      visible: sessionTabsRow.count > 0
+      implicitHeight: visible ? Style.baseWidgetSize : 0
+
+      readonly property var sessions: pluginApi?.mainInstance?.sessionsList || []
+      readonly property string active: pluginApi?.mainInstance?.activeSessionId || ""
+
+      RowLayout {
+        anchors.fill: parent
+        spacing: Style.marginXS
+
+        NIconButton {
+          icon: "plus"
+          tooltipText: root.tr("panel.new-session-tooltip")
+          baseSize: Style.baseWidgetSize * 0.85
+          onClicked: pluginApi?.mainInstance?.newSession?.()
+        }
+
+        ListView {
+          id: sessionTabsRow
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          orientation: ListView.Horizontal
+          spacing: Style.marginXS
+          clip: true
+          interactive: contentWidth > width
+          model: sessionTabsHost.sessions
+
+          delegate: Rectangle {
+            readonly property bool isActive: modelData.id === sessionTabsHost.active
+            readonly property int unread: modelData.unread || 0
+            height: ListView.view.height
+            width: tabLabel.implicitWidth + Style.marginM * 2
+            radius: Style.radiusS
+            color: isActive ? Color.mPrimary : Color.mSurfaceVariant
+            border.width: isActive ? 0 : 1
+            border.color: Color.mOutline
+            TapHandler {
+              onTapped: pluginApi?.mainInstance?.selectSession?.(modelData.id)
+              onLongPressed: pluginApi?.mainInstance?.removeSession?.(modelData.id)
+            }
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            NText {
+              id: tabLabel
+              anchors.centerIn: parent
+              text: (modelData.name || "chat") + (unread > 0 ? "  •" : "")
+              color: parent.isActive ? Color.mOnPrimary : Color.mOnSurface
+              pointSize: Style.fontSizeS
+              font.bold: parent.isActive
+            }
+          }
+        }
+      }
+    }
+
     // ── Header ────────────────────────────────────────────────────────
     RowLayout {
       Layout.fillWidth: true
@@ -95,7 +155,7 @@ Item {
           color: Color.mOnSurfaceVariant
         }
       }
-      // Model selector. opencrow guarantees a non-empty models list.
+      // Model selector. PiChatBackend exposes the llama-swap-discovered list.
       NComboBox {
         id: modelCombo
         Layout.alignment: Qt.AlignVCenter
@@ -391,10 +451,9 @@ Item {
         Layout.fillWidth: true
         // Grow with content up to ~5 lines, then scroll. Min matches
         // the icon buttons so the row stays aligned when empty.
-        // contentHeight, not implicitHeight: avoids a binding loop
-        // with the dynamic top/bottom padding below.
+        // TextArea.implicitHeight already includes its own padding.
         Layout.preferredHeight: Math.min(
-          Math.max(inputArea.contentHeight + Style.marginS * 2,
+          Math.max(inputArea.implicitHeight,
                    Style.baseWidgetSize * 1.1 * Style.uiScaleRatio),
           Style.baseWidgetSize * 4 * Style.uiScaleRatio)
 
@@ -430,9 +489,8 @@ Item {
             wrapMode: TextEdit.Wrap
             selectByMouse: true
             background: null
-            readonly property real _slack: Math.max(0, input.height - contentHeight - Style.marginS * 2)
-            topPadding: Style.marginS + _slack / 2
-            bottomPadding: Style.marginS + _slack / 2
+            topPadding: Style.marginS
+            bottomPadding: Style.marginS
             leftPadding: Style.marginM
             rightPadding: Style.marginM
             font.family: Settings.data.ui.fontDefault
@@ -531,7 +589,7 @@ Item {
       id: pasteImage
       property string tmp: ""
       command: ["sh", "-c",
-        `f="$XDG_RUNTIME_DIR/opencrow-chat-paste-$$"; ` +
+        `f="$XDG_RUNTIME_DIR/pi-chat-paste-$$"; ` +
         `wl-paste --type image > "$f" && printf %s "$f"`]
       stdout: StdioCollector { onStreamFinished: pasteImage.tmp = text }
       onExited: (code) => { if (code === 0 && tmp) chat?.sendFile(tmp, true); tmp = ""; }

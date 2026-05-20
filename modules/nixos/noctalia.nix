@@ -1,7 +1,7 @@
 # Noctalia Wayland desktop shell.
 #
 # Installs noctalia-shell (patched with plugins-autoload support) and
-# symlinks the opencrow-chat plugin into the autoload directory so it
+# symlinks the pi-chat plugin into the autoload directory so it
 # is enabled automatically when noctalia starts.
 #
 # The patched package is materialized by extending `pkgs` locally rather
@@ -22,7 +22,7 @@ in
       pkgs.libnotify
     ];
 
-    # Symlink opencrow-chat into the autoload directory so noctalia
+    # Symlink pi-chat into the autoload directory so noctalia
     # auto-enables it and places its bar widget in the center section.
     systemd.user.tmpfiles.rules = [
       "d %h/.config 0755 - - -"

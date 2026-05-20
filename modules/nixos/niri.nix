@@ -24,8 +24,8 @@ let
     grep -q 'spawn-at-startup "waybar"' $out  # fail loudly if upstream renamed it
     sed -i '/spawn-at-startup "waybar"/d' $out
     sed -i '/^input {$/a\    mod-key "Alt"' $out
-    # Super+A toggles the opencrow-chat panel in noctalia.
-    sed -i '/^binds {$/a\    Super+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:opencrow-chat" "toggle"; }' $out
+    # Super+A toggles the pi-chat panel in noctalia.
+    sed -i '/^binds {$/a\    Super+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:pi-chat" "toggle"; }' $out
     # Super+S toggles voice-to-text recording.
     sed -i '/^binds {$/a\    Super+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
   '';

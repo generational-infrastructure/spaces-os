@@ -1,7 +1,7 @@
 // Pi extension: discover models from llama-swap's OpenAI-compatible
 // /v1/models endpoint and register them as provider "local".
 //
-// Configured by the opencrow-local NixOS module. The endpoint base URL
+// Configured by the pi-chat NixOS module. The endpoint base URL
 // (without /v1 suffix) is passed in via the LLAMA_SWAP_BASE_URL env var.
 //
 // Pi awaits this async factory before startup completes, so the

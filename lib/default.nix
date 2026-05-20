@@ -54,7 +54,7 @@
   # supply hostName + host-specific modules; mkSystem injects:
   #   - nixosModules.distro
   #   - specialArgs.inputs = distro flake's own inputs (so distro modules
-  #     can resolve `inputs.opencrow`, `inputs.noctalia-shell`, …)
+  #     can resolve `inputs.noctalia-shell`, …)
   #   - specialArgs.flake  = the distro flake itself
   #   - nixpkgs.hostPlatform
   #   - networking.hostName

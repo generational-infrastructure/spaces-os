@@ -21,7 +21,7 @@
     "quote-missing": "↳ (mensagem anterior)"
   },
   "settings": {
-    "nixos-hint": "A configuração do peer (pubkey, relays, nome de exibição) é gerenciada pelo módulo NixOS — veja services.opencrow-chat na sua configuração.",
+    "nixos-hint": "A configuração do peer (pubkey, relays, nome de exibição) é gerenciada pelo módulo NixOS — veja services.pi-chat na sua configuração.",
     "history-limit-label": "Limite de histórico",
     "history-limit-description": "Mensagens mantidas no espelho em memória do painel (o SQLite guarda tudo)."
   },

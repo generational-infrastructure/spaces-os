@@ -85,7 +85,7 @@ in
   #     and fetchTree's each input.  fetchTree resolves locally if the
   #     source path with the matching narHash is in the store; the
   #     evaluated input outPath has that same narHash.  Without these
-  #     entries, every install hits the network for blueprint, opencrow,
+  #     entries, every install hits the network for blueprint,
   #     noctalia-shell, etc.
   isoImage.storeContents = [
     distroSrc

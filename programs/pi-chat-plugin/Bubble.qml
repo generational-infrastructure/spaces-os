@@ -339,7 +339,7 @@ Item {
           Layout.fillWidth: true
           spacing: 0
           NText {
-            text: msg.promptInstance ? ("opencrow-" + msg.promptInstance) : ""
+            text: msg.promptInstance ? ("session-" + msg.promptInstance) : ""
             pointSize: Style.fontSizeXS
             color: Color.mOnSurfaceVariant
           }

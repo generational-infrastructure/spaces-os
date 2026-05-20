@@ -100,7 +100,6 @@ let
           # Flake input outPaths for evaluation.
           "${inputs.blueprint.outPath}"
           "${inputs.treefmt-nix.outPath}"
-          "${inputs.opencrow.outPath}"
           "${inputs.noctalia-shell.outPath}"
           "${inputs.llm-agents.outPath}"
         ];

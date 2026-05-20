@@ -21,7 +21,7 @@
     "quote-missing": "↳ (wcześniejsza wiadomość)"
   },
   "settings": {
-    "nixos-hint": "Konfiguracja peera (pubkey, przekaźniki, nazwa wyświetlana) jest zarządzana przez moduł NixOS — zobacz services.opencrow-chat w swojej konfiguracji.",
+    "nixos-hint": "Konfiguracja peera (pubkey, przekaźniki, nazwa wyświetlana) jest zarządzana przez moduł NixOS — zobacz services.pi-chat w swojej konfiguracji.",
     "history-limit-label": "Limit historii",
     "history-limit-description": "Wiadomości przechowywane w odbiciu panelu w pamięci (SQLite zachowuje wszystko)."
   },

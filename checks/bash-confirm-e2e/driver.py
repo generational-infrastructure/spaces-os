@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
-"""Drives an out-of-process opencrow + stub-pi pair via the socket
-backend and asserts the confirm round-trip behaves as expected.
+"""End-to-end test for the bash-confirm pi extension talking real RPC.
 
-Two scenarios in one VM-free harness:
-  1. user allows  → stub logs ``confirmed: true``
-  2. user denies  → stub logs ``confirmed: false``
+Spawns a mock OpenAI Chat Completions server, then drives pi --mode rpc
+with the bash-confirm + llama-swap-discover extensions loaded. Sends a
+prompt, expects an `extension_ui_request{method:"confirm"}` for the
+mock's bash tool call, answers it, and asserts the agent_end follows.
 
-The third interesting case (context cancelled / no response) is already
-covered by Go-side unit tests in ../../socket/confirm_test.go.
+Runs the same scenario twice:
+  - confirmed=true   → pi executes bash, mock's follow-up text arrives
+  - confirmed=false  → pi blocks, mock's follow-up still produces text
+                       (pi feeds the block reason back as a tool result)
 
-Invoked by ``default.nix`` with three positional args:
-  argv[1]: path to the opencrow binary
-  argv[2]: path to the stub pi binary (script)
-  argv[3]: scratch dir (writable, must exist)
+Usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>
+
+`ext_dir` is the directory holding bash-confirm.ts and
+llama-swap-discover.ts (= modules/nixos/pi-chat/extensions/).
 """
 
 import json
 import os
-import socket
 import subprocess
 import sys
+import threading
 import time
+from queue import Empty, Queue
 
 
 def fail(msg):
@@ -28,135 +31,234 @@ def fail(msg):
     sys.exit(1)
 
 
-def wait_for_socket(path, timeout=20):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if os.path.exists(path):
-            return
-        time.sleep(0.1)
-    fail(f"socket {path} did not appear within {timeout}s")
-
-
-def read_event(sock_file, want_kind, timeout=20):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        line = sock_file.readline()
-        if not line:
-            fail(f"chat socket closed while waiting for {want_kind}")
-        ev = json.loads(line)
-        if ev.get("kind") == want_kind:
-            return ev
-    fail(f"timed out waiting for {want_kind}")
-
-
-def send(sock, obj):
-    sock.sendall((json.dumps(obj) + "\n").encode())
-
-
-def run_scenario(sock, sock_file, prompt, confirmed):
-    send(sock, {"cmd": "send", "text": prompt})
-    ev = read_event(sock_file, "confirm")
-    assert ev.get("confirmBody") == prompt, ev
-    assert ev.get("confirmTitle") == "Run shell command?", ev
-    assert ev.get("confirmId"), ev
-    send(
-        sock,
-        {"cmd": "confirm-response", "id": ev["confirmId"], "confirmed": confirmed},
+def start_mock_llm(mock_script, work_dir):
+    log = open(os.path.join(work_dir, "mock-llm.log"), "w")
+    proc = subprocess.Popen(
+        [sys.executable, mock_script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=log,
     )
-    # Wait for the agent's "handled" reply so we know pi has emitted
-    # agent_end (the stub log is flushed before that).
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        line = sock_file.readline()
-        if not line:
-            fail("socket closed before agent reply")
-        ev2 = json.loads(line)
-        if ev2.get("kind") == "msg" and ev2.get("msg", {}).get("dir") == "in":
-            text = ev2["msg"].get("content", "")
-            if text.startswith("handled "):
-                return
-    fail("did not receive agent reply")
+    line = proc.stdout.readline()
+    if not line:
+        fail("mock LLM exited before printing its URL")
+    return proc, line.decode().strip()
 
 
-def assert_log(log_path, expected_results):
-    with open(log_path, "r", encoding="utf-8") as fh:
-        entries = [json.loads(line) for line in fh if line.strip()]
-    responses = [e for e in entries if e.get("event") == "ui_response"]
-    if len(responses) != len(expected_results):
-        fail(
-            f"expected {len(expected_results)} ui_response entries, got {len(responses)}: {entries}"
+class PiClient:
+    """Wraps a pi --mode rpc subprocess with line-buffered stdin/stdout."""
+
+    def __init__(self, pi_bin, env, work_dir):
+        self.proc = subprocess.Popen(
+            [
+                pi_bin,
+                "--mode",
+                "rpc",
+                "--provider",
+                "local",
+                "--model",
+                "mock-bash-model",
+                "--no-session",
+                "--offline",
+                "--no-context-files",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=work_dir,
         )
-    for i, (entry, want) in enumerate(zip(responses, expected_results)):
-        got = entry["cmd"].get("confirmed", None)
-        if got is not want:
-            fail(f"scenario {i}: confirmed={got!r}, want {want!r} (entry: {entry})")
+        self.events = Queue()
+        self._stderr_log = open(os.path.join(work_dir, "pi-stderr.log"), "ab")
+        self._reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader.start()
+        self._err_reader = threading.Thread(target=self._read_stderr, daemon=True)
+        self._err_reader.start()
+
+    def _read_stdout(self):
+        for raw in self.proc.stdout:
+            try:
+                ev = json.loads(raw.decode().strip())
+            except Exception:
+                continue
+            self.events.put(ev)
+        self.events.put(None)  # EOF sentinel
+
+    def _read_stderr(self):
+        for raw in self.proc.stderr:
+            self._stderr_log.write(raw)
+            self._stderr_log.flush()
+
+    def send(self, obj):
+        self.proc.stdin.write((json.dumps(obj) + "\n").encode())
+        self.proc.stdin.flush()
+
+    def wait_for(self, predicate, timeout=60):
+        """Drain events until predicate(ev) is truthy. Returns matched event."""
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail("timed out waiting for matching event")
+            try:
+                ev = self.events.get(timeout=remaining)
+            except Empty:
+                fail("timed out waiting for matching event")
+            if ev is None:
+                fail("pi process closed stdout before predicate matched")
+            if predicate(ev):
+                return ev
+
+    def drain_until(self, predicate, timeout=60):
+        """Collect events until predicate(ev) is truthy. Returns the list."""
+        collected = []
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail("timed out draining events")
+            try:
+                ev = self.events.get(timeout=remaining)
+            except Empty:
+                fail("timed out draining events")
+            if ev is None:
+                fail("pi closed stdout early")
+            collected.append(ev)
+            if predicate(ev):
+                return collected
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+def run_scenario(pi_bin, env, work_dir, confirmed):
+    cwd = os.path.join(work_dir, f"cwd-{int(confirmed)}")
+    os.makedirs(cwd, exist_ok=True)
+    pi = PiClient(pi_bin, env, cwd)
+    try:
+        pi.send({"type": "prompt", "message": "please run a bash command"})
+
+        # Either confirm bubble arrives → respond → wait for agent_end,
+        # or agent_end arrives before confirm (would be a bug).
+        ev = pi.wait_for(
+            lambda e: (
+                e.get("type") in ("extension_ui_request", "agent_end")
+                or (
+                    e.get("type") == "response"
+                    and e.get("command") == "prompt"
+                    and not e.get("success")
+                )
+            ),
+            timeout=120,
+        )
+
+        if ev.get("type") == "response" and not ev.get("success"):
+            fail(f"pi rejected prompt: {ev.get('error')}")
+
+        if ev.get("type") != "extension_ui_request":
+            fail(
+                f"expected extension_ui_request, got {ev}. The extension hook "
+                "may not be loaded."
+            )
+
+        if ev.get("method") != "confirm":
+            fail(f"expected method=confirm, got method={ev.get('method')}")
+
+        if "bash" not in (ev.get("message") or ""):
+            fail(
+                f"confirm body should mention the bash command, got: {ev.get('message')!r}"
+            )
+
+        pi.send(
+            {
+                "type": "extension_ui_response",
+                "id": ev["id"],
+                "confirmed": confirmed,
+            }
+        )
+
+        events = pi.drain_until(lambda e: e.get("type") == "agent_end", timeout=120)
+        # Pi should produce at least one tool_execution_start (allowed
+        # case) OR a notice (denied case). Either way the conversation
+        # ends with an assistant text — the mock returns one once it
+        # sees the tool result.
+        text_seen = False
+        for e in events:
+            if e.get("type") == "message_update":
+                me = e.get("assistantMessageEvent") or {}
+                if me.get("type") in ("text_delta", "text_end"):
+                    text_seen = True
+            if e.get("type") == "agent_end":
+                msgs = e.get("messages") or []
+                for m in msgs:
+                    if not isinstance(m, dict):
+                        continue
+                    if m.get("role") == "assistant":
+                        content = m.get("content")
+                        if isinstance(content, list):
+                            for c in content:
+                                if (
+                                    isinstance(c, dict)
+                                    and c.get("type") == "text"
+                                    and (c.get("text") or "").strip()
+                                ):
+                                    text_seen = True
+        if not text_seen:
+            fail(f"no assistant text observed for confirmed={confirmed}: {events!r}")
+    finally:
+        pi.close()
 
 
 def main():
-    opencrow_bin, pi_bin, scratch = sys.argv[1:4]
-    sock_path = os.path.join(scratch, "chat.sock")
-    session_dir = os.path.join(scratch, "sessions")
-    log_path = os.path.join(scratch, "stub-pi.log")
-    os.makedirs(session_dir, exist_ok=True)
-    # Truncate any prior log so assertions count only this run.
-    open(log_path, "w").close()
+    if len(sys.argv) != 5:
+        fail("usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>")
+    pi_bin, mock_script, ext_dir, work_dir = sys.argv[1:5]
+    os.makedirs(work_dir, exist_ok=True)
+    agent_dir = os.path.join(work_dir, "agent")
+    os.makedirs(agent_dir, exist_ok=True)
 
-    env = dict(os.environ)
-    env.update(
-        {
-            "OPENCROW_BACKEND": "socket",
-            "OPENCROW_SOCKET_PATH": sock_path,
-            "OPENCROW_SOCKET_NAME": "TestBot",
-            "OPENCROW_PI_BINARY": pi_bin,
-            "OPENCROW_PI_SESSION_DIR": session_dir,
-            "OPENCROW_PI_WORKING_DIR": scratch,
-            "OPENCROW_PI_PROVIDER": "anthropic",
-            "OPENCROW_PI_MODEL": "stub-model",
-            "OPENCROW_PI_IDLE_TIMEOUT": "10m",
-            "OPENCROW_STUB_LOG": log_path,
-            "HOME": scratch,
-        },
-    )
+    # Materialize a minimal settings.json that pulls in our extensions.
+    settings = {
+        "extensions": [
+            os.path.join(ext_dir, "bash-confirm.ts"),
+            os.path.join(ext_dir, "llama-swap-discover.ts"),
+        ],
+        "defaultProvider": "local",
+        "defaultModel": "mock-bash-model",
+        "quietStartup": True,
+        # Stay strictly local — the sandbox has no network.
+        "enableInstallTelemetry": False,
+    }
+    with open(os.path.join(agent_dir, "settings.json"), "w") as fh:
+        json.dump(settings, fh)
 
-    proc = subprocess.Popen(
-        [opencrow_bin],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=scratch,
-    )
+    mock, url = start_mock_llm(mock_script, work_dir)
     try:
-        wait_for_socket(sock_path)
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(sock_path)
-        sock_file = sock.makefile("r", buffering=1, encoding="utf-8")
-        # Use a single long timeout for all reads; readline() picks it
-        # up via the underlying socket. Toggling settimeout back to None
-        # after a timeout can wedge the file object in a "timed out"
-        # state on some Python versions, so we pick one and stick with it.
-        sock.settimeout(30)
-        send(sock, {"cmd": "replay", "n": 10})
-        # Wait for replay response so the connection is registered in
-        # opencrow's conns set before we trigger any broadcasts.
-        first = sock_file.readline()
-        if not first:
-            fail("chat socket closed during initial replay")
-        run_scenario(sock, sock_file, "echo allow-me", confirmed=True)
-        run_scenario(sock, sock_file, "echo deny-me", confirmed=False)
-
-        assert_log(log_path, [True, False])
+        env = os.environ.copy()
+        env.update(
+            {
+                "PI_CODING_AGENT_DIR": agent_dir,
+                "LLAMA_SWAP_BASE_URL": url,
+                "PI_OFFLINE": "1",
+                "PI_TELEMETRY": "0",
+                "HOME": work_dir,
+            }
+        )
+        run_scenario(pi_bin, env, work_dir, confirmed=True)
+        run_scenario(pi_bin, env, work_dir, confirmed=False)
     finally:
-        proc.terminate()
+        mock.terminate()
         try:
-            proc.wait(timeout=5)
+            mock.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        if proc.stdout:
-            sys.stderr.write("--- opencrow output ---\n")
-            sys.stderr.write(proc.stdout.read().decode("utf-8", errors="replace"))
-            sys.stderr.write("--- end opencrow output ---\n")
-
+            mock.kill()
     print("OK")
 
 

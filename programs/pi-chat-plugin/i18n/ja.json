@@ -21,7 +21,7 @@
     "quote-missing": "↳（以前のメッセージ）"
   },
   "settings": {
-    "nixos-hint": "ピア設定（公開鍵、リレー、表示名）は NixOS モジュールで管理されています — 設定の services.opencrow-chat を参照してください。",
+    "nixos-hint": "ピア設定（公開鍵、リレー、表示名）は NixOS モジュールで管理されています — 設定の services.pi-chat を参照してください。",
     "history-limit-label": "履歴の上限",
     "history-limit-description": "パネルのメモリ内ミラーに保持されるメッセージ数（SQLite はすべて保持します）。"
   },

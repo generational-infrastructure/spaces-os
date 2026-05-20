@@ -21,7 +21,7 @@
     "quote-missing": "↳（更早的消息）"
   },
   "settings": {
-    "nixos-hint": "对端配置（公钥、中继、显示名称）由 NixOS 模块管理 — 请参阅配置中的 services.opencrow-chat。",
+    "nixos-hint": "对端配置（公钥、中继、显示名称）由 NixOS 模块管理 — 请参阅配置中的 services.pi-chat。",
     "history-limit-label": "历史记录上限",
     "history-limit-description": "面板内存镜像中保留的消息数（SQLite 会保留全部）。"
   },

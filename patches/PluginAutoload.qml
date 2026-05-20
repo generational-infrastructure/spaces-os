@@ -40,6 +40,7 @@ Singleton {
   // be listed.
   readonly property var legacyAutoloadIds: ({
     "opencrow-skill-config": true,
+    "opencrow-chat": true,
   })
 
   // Plugin IDs already known from plugins.json before this session started.

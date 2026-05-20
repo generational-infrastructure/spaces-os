@@ -1,25 +1,50 @@
 #!/usr/bin/env python3
-"""OpenAI-completions mock that advertises two models so the
-restart-persist test can switch between them. Same shape as the
-streaming-e2e mock — pi-mono's "openai-completions" provider is
-satisfied by /v1/models + a streamed /v1/chat/completions reply.
+"""OpenAI-compatible mock LLM for test-machine's chat round-trip.
 
-The chat reply is short and non-essential here; the test only cares
-about which model pi reports via get_state. The mock echoes the
-requested model id back in the SSE chunks so a wrong-model spawn
-would still produce a parseable reply (and a clear diff in logs).
+Pi-chat's local mode would otherwise run qwen2.5:0.5b on the QEMU CPU,
+which can't prefill pi's multi-thousand-token system prompt within a
+sane test budget. The chat round-trip test exercises the *plumbing*
+(noctalia plugin IPC → PiSession → systemd-run service → pi RPC →
+OpenAI client → server), not the model itself; this mock keeps that
+plumbing honest while making the e2e completable in seconds.
 
-Listens on 127.0.0.1 at a kernel-chosen port and prints the URL on
-stdout before serving.
+Wire format: just enough of the OpenAI Chat Completions API to satisfy
+pi's "openai-completions" provider:
+
+  - GET  /v1/models                  → fake model list
+  - POST /v1/chat/completions        → SSE stream of text chunks
+
+Reply policy: looks at the last user message and answers based on
+simple keyword matching, so the test's content assertions (e.g.
+"What color is the sky?" → "blue") still hold.
 """
 
 import json
 import sys
-import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MODELS = ["mock-model", "alt-model"]
+PORT = 8012
+MODELS = ["qwen2.5:0.5b", "smollm"]
+
+
+def pick_reply(messages):
+    last_user = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            if isinstance(content, list):
+                # pi may send structured content blocks
+                last_user = " ".join(
+                    str(b.get("text", "")) for b in content if isinstance(b, dict)
+                )
+            else:
+                last_user = str(content)
+            break
+    lower = last_user.lower()
+    if "sky" in lower:
+        return "blue"
+    return "hello back"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -33,31 +58,32 @@ class Handler(BaseHTTPRequestHandler):
                     "object": "list",
                     "data": [
                         {
-                            "id": m,
+                            "id": mid,
                             "object": "model",
                             "context_length": 32768,
                             "max_tokens": 4096,
                         }
-                        for m in MODELS
+                        for mid in MODELS
                     ],
                 }
             ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._respond_json(body)
             return
-
         self.send_response(404)
         self.end_headers()
+
+    def _respond_json(self, body):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if self.path.rstrip("/") != "/v1/chat/completions":
             self.send_response(404)
             self.end_headers()
             return
-
         length = int(self.headers.get("Content-Length", "0"))
         try:
             req = json.loads(self.rfile.read(length).decode())
@@ -66,10 +92,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        model = req.get("model") or MODELS[0]
-        reply = f"served-by:{model}"
+        reply = pick_reply(req.get("messages", []))
+        model = req.get("model", MODELS[0])
+        stream = bool(req.get("stream"))
 
-        if not bool(req.get("stream")):
+        if not stream:
             body = json.dumps(
                 {
                     "id": "chatcmpl-mock",
@@ -85,16 +112,12 @@ class Handler(BaseHTTPRequestHandler):
                     ],
                     "usage": {
                         "prompt_tokens": 1,
-                        "completion_tokens": 1,
-                        "total_tokens": 2,
+                        "completion_tokens": len(reply.split()),
+                        "total_tokens": 1 + len(reply.split()),
                     },
                 }
             ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._respond_json(body)
             return
 
         self.send_response(200)
@@ -123,17 +146,23 @@ class Handler(BaseHTTPRequestHandler):
                 ],
             }
         )
-        emit(
-            {
-                "id": "chatcmpl-mock",
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [
-                    {"index": 0, "delta": {"content": reply}, "finish_reason": None}
-                ],
-            }
-        )
+        for piece in reply.split():
+            emit(
+                {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": piece + " "},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            time.sleep(0.01)
         emit(
             {
                 "id": "chatcmpl-mock",
@@ -152,16 +181,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    host, port = server.server_address
-    sys.stdout.write(f"http://{host}:{port}\n")
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    sys.stdout.write(f"mock-llm listening on http://127.0.0.1:{PORT}\n")
     sys.stdout.flush()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        sys.stdin.read()
-    finally:
-        server.shutdown()
+    server.serve_forever()
 
 
 if __name__ == "__main__":

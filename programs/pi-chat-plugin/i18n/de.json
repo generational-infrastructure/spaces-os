@@ -21,7 +21,7 @@
     "quote-missing": "↳ (frühere Nachricht)"
   },
   "settings": {
-    "nixos-hint": "Die Peer-Konfiguration (Pubkey, Relays, Anzeigename) wird vom NixOS-Modul verwaltet — siehe services.opencrow-chat in deiner Konfiguration.",
+    "nixos-hint": "Die Peer-Konfiguration (Pubkey, Relays, Anzeigename) wird vom NixOS-Modul verwaltet — siehe services.pi-chat in deiner Konfiguration.",
     "history-limit-label": "Verlaufslimit",
     "history-limit-description": "Nachrichten, die im In-Memory-Spiegel des Panels gehalten werden (SQLite behält alles)."
   },

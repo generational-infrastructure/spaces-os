@@ -1,13 +1,14 @@
-# Unit test for the bash-confirm pi extension (modules/nixos/opencrow/bash-confirm.ts).
+# Unit test for the bash-confirm pi extension
+# (modules/nixos/pi-chat/extensions/bash-confirm.ts).
 #
 # Builds a minimal Nix derivation that runs Node's built-in test runner
-# against the extension's pure logic — no pi, no opencrow, no VM.
+# against the extension's pure logic — no pi, no shell, no VM.
 # Catches regressions in the extension's branches (wrong tool, no UI,
 # allow, deny, empty command).
 { pkgs, ... }:
 pkgs.runCommand "bash-confirm-extension-test"
   {
-    src = ../modules/nixos/opencrow;
+    src = ../modules/nixos/pi-chat/extensions;
     nativeBuildInputs = [ pkgs.nodejs_22 ];
   }
   ''

@@ -1,7 +1,7 @@
 # Distro module bundle.
 #
 # Single import that pulls in every NixOS module this distro provides.
-# Builds on noctalia-bar (which includes noctalia-plugin, opencrow,
+# Builds on noctalia-bar (which includes noctalia-plugin: pi-chat +
 # llama-swap) and adds niri compositor + VM debug support.
 #
 # Configures greetd to auto-login into niri by default.  Override

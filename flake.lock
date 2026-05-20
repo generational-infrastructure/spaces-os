@@ -207,36 +207,12 @@
         "type": "github"
       }
     },
-    "opencrow": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "treefmt-nix": [
-          "treefmt-nix"
-        ]
-      },
-      "locked": {
-        "lastModified": 1779259337,
-        "narHash": "sha256-kxbOEyJRDrHUG5lpeTdw7NS2dv3moaUsmaW2VSOCWxg=",
-        "owner": "generational-infrastructure",
-        "repo": "opencrow",
-        "rev": "3b6b98dd9e9a542d077c1fb1086aeac0bb6a8a50",
-        "type": "github"
-      },
-      "original": {
-        "owner": "generational-infrastructure",
-        "repo": "opencrow",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "blueprint": "blueprint",
         "llm-agents": "llm-agents",
         "nixpkgs": "nixpkgs",
         "noctalia-shell": "noctalia-shell",
-        "opencrow": "opencrow",
         "treefmt-nix": "treefmt-nix_2",
         "voxtype": "voxtype"
       }

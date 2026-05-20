@@ -15,7 +15,8 @@
     "context-hint": "Earlier conversation may still be in the agent's context — type to continue.",
     "reset-tooltip": "Restart conversation (clear context)",
     "voice-tooltip": "Voice to text",
-    "voice-stop-tooltip": "Stop recording (transcribe)"
+    "voice-stop-tooltip": "Stop recording (transcribe)",
+    "new-session-tooltip": "Start a new chat session"
   },
   "bubble": {
     "reply-tooltip": "Reply",
@@ -34,7 +35,7 @@
     "prompt-retracted": "⚠ retracted"
   },
   "settings": {
-    "nixos-hint": "Peer configuration (pubkey, relays, display name) is managed by the NixOS module — see services.opencrow-chat in your config.",
+    "nixos-hint": "Peer configuration (pubkey, relays, display name) is managed by the NixOS module — see services.pi-chat in your config.",
     "history-limit-label": "History limit",
     "history-limit-description": "Messages kept in the panel's in-memory mirror (sqlite keeps everything)."
   },

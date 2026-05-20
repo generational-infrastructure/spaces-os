@@ -5,7 +5,7 @@ directly from your desktop bar.
 
 The stack: [niri](https://github.com/YaLTeR/niri) (Wayland compositor) +
 [noctalia](https://github.com/noctalia-dev/noctalia-shell) (desktop shell) +
-[opencrow](https://github.com/pinpox/opencrow) (AI agent backend) +
+[pi](https://github.com/mariozechner/pi-mono) (coding agent) +
 [llama-swap](https://github.com/mostlygeek/llama-swap) (local LLM server) +
 voice-to-text.
 
@@ -29,7 +29,7 @@ All three integration levels consume this flake as a NixOS module.
 ### 1. Full desktop
 
 Import `nixosModules.distro` for the complete experience: niri compositor,
-noctalia shell bar with chat widget, opencrow AI agent, and local LLM server.
+noctalia shell bar with chat widget, pi-chat agent, and local LLM server.
 The module enables the AI agent, chat widget, and greetd auto-login into niri
 by default.
 
@@ -102,7 +102,7 @@ The chat panel and voice-to-text rely on compositor-level keybinds.
 with any other compositor you set them up yourself. Bind whatever keys
 you like to these commands:
 
-- chat panel: `noctalia-shell ipc call plugin:opencrow-chat toggle`
+- chat panel: `noctalia-shell ipc call plugin:pi-chat toggle`
 - voice-to-text: `voxtype record toggle` (only if you imported the
   `voxtype` module — see below)
 
@@ -159,7 +159,7 @@ by default.
 ```
 As with integration 2, `Super+A` / `Super+S` are only bound automatically
 under `nixosModules.distro`. On any other compositor, bind your own keys
-to `noctalia-shell ipc call plugin:opencrow-chat toggle` (and
+to `noctalia-shell ipc call plugin:pi-chat toggle` (and
 `voxtype record toggle` if you also imported `nixosModules.voxtype`).
 
 Apply `overlays.noctalia` so distro can auto-enable its plugins:
@@ -172,7 +172,7 @@ Apply `overlays.noctalia` so distro can auto-enable its plugins:
 
 ### OpenRouter as an additional backend
 
-The chat agent (`opencrow-local`) defaults to the local LLM served by
+The chat agent (`pi-chat`) defaults to the local LLM served by
 llama-swap. You can add [OpenRouter](https://openrouter.ai) as an
 additional backend — pi's built-in `openrouter` provider exposes
 ~200 curated models, switchable mid-session from the chat panel.
@@ -186,7 +186,7 @@ additional backend — pi's built-in `openrouter` provider exposes
 2. Enable the provider in your NixOS config:
 
    ```nix
-   services.opencrow-local.openrouter = {
+   services.pi-chat.openrouter = {
      enable = true;
      apiKeyFile = "/etc/secrets/openrouter-api-key";
    };
@@ -200,7 +200,7 @@ additional backend — pi's built-in `openrouter` provider exposes
    `piModels`:
 
    ```nix
-   services.opencrow-local.piModels.providers.openrouter.modelOverrides = {
+   services.pi-chat.piModels.providers.openrouter.modelOverrides = {
      "anthropic/claude-sonnet-4.5".contextWindow = 200000;
    };
    ```
@@ -208,7 +208,7 @@ additional backend — pi's built-in `openrouter` provider exposes
 4. (Optional) Make an OpenRouter model the default at session start:
 
    ```nix
-   services.opencrow-local.defaultModel = "anthropic/claude-sonnet-4.5";
+   services.pi-chat.defaultModel = "anthropic/claude-sonnet-4.5";
    ```
 
 llama-swap stays enabled alongside; pick the provider per session
@@ -218,7 +218,7 @@ from the chat panel's model selector.
 
 `checks.x86_64-linux.test-machine` is dual-mode. With
 `OPENROUTER_API_KEY` unset it exercises the local llama-swap backend.
-With the env var set it switches the in-VM opencrow to the openrouter
+With the env var set it switches the in-VM pi-chat to the openrouter
 provider and runs a real round-trip against `api.openrouter.ai`.
 
 Repo-local secrets live in `.env` (gitignored). [direnv] loads it on

@@ -8,7 +8,7 @@ The user's current location is available as a JSON file, updated every 10 minute
 ### Read current location
 
 ```bash
-cat /run/opencrow-location/location.json
+cat "$XDG_RUNTIME_DIR/distro/location.json"
 ```
 
 This returns a JSON object with `latitude`, `longitude`, `accuracy_meters`, `description`, and `updated` fields.

@@ -37,15 +37,15 @@ in
   # Expose a second model so the chat dropdown has more than one entry.
   # The full list shown by `!models` is discovered at runtime from
   # llama-swap's /v1/models endpoint.
-  services.opencrow-local.defaultModel = "qwen2.5:0.5b";
+  services.pi-chat.defaultModel = "qwen2.5:0.5b";
 
   services.llama-swap.settings.models.smollm = {
     cmd = "${llama-server} -m ${smollm-gguf} --port \${PORT} --no-webui";
   };
 
   # Make qwen2.5:0.5b output deterministic so the chat round-trip test
-  # (which routes through opencrow and so cannot pass per-request sampling
-  # params) reliably produces the same reply.
+  # gets the same reply across runs. Pi-chat sends temperature via its
+  # provider config; llama-swap fills in via modelExtraArgs.
   services.llama-swap.modelExtraArgs."qwen2.5:0.5b" = "--temp 0 --seed 42";
   system.stateVersion = "25.05";
 }

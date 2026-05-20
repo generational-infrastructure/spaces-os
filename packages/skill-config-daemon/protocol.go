@@ -68,9 +68,9 @@ type Ack struct {
 // frontend -> daemon (kept open for the lifetime of the subscription)
 type SubscribeReq struct{ Op string `json:"op"` } // "subscribe"
 
-// daemon -> subscriber. Instance is the value of $OPENCROW_INSTANCE the
+// daemon -> subscriber. Instance is the value of $DISTRO_PI_CHAT_INSTANCE the
 // daemon was started with — same value for every event from a given socket.
-// Plugins use it both to label which opencrow asked for input, and to know
+// Plugins use it both to label which session asked for input, and to know
 // which socket to send submit/cancel back to.
 type Snapshot struct {
 	Op       string         `json:"op"`       // "snapshot"

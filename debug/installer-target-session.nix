@@ -5,7 +5,7 @@
 # extraGroups = [ wheel networkmanager ], greetd autologin via
 # distro module's default_session, no DE imports beyond the distro
 # module) and verifies the full user-session path:
-#   greetd → niri → wayland socket → noctalia spawn → opencrow plugin
+#   greetd → niri → wayland socket → noctalia spawn → pi-chat plugin
 #   → compositor actually paints frames (OCR of test wallpaper).
 #
 # Closes the gap left by `installer-loadmodule`: that test stubs
@@ -75,15 +75,15 @@ pkgs.testers.runNixOSTest {
               timeout=30,
           )
 
-      with subtest("opencrow-chat plugin is autoloaded into noctalia"):
+      with subtest("pi-chat plugin is autoloaded into noctalia"):
           # systemd.user.tmpfiles rules fire at user-manager start; their
           # output must land for noctalia to pick the plugin up.
           target.wait_until_succeeds(
-              "test -L /home/installed/.config/noctalia/plugins/opencrow-chat",
+              "test -L /home/installed/.config/noctalia/plugins/pi-chat",
               timeout=30,
           )
           target.wait_until_succeeds(
-              "test -L /home/installed/.config/noctalia/plugins-autoload/opencrow-chat",
+              "test -L /home/installed/.config/noctalia/plugins-autoload/pi-chat",
               timeout=30,
           )
 

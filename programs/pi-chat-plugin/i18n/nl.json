@@ -21,7 +21,7 @@
     "quote-missing": "↳ (eerder bericht)"
   },
   "settings": {
-    "nixos-hint": "Peer-configuratie (pubkey, relays, weergavenaam) wordt beheerd door de NixOS-module — zie services.opencrow-chat in je configuratie.",
+    "nixos-hint": "Peer-configuratie (pubkey, relays, weergavenaam) wordt beheerd door de NixOS-module — zie services.pi-chat in je configuratie.",
     "history-limit-label": "Geschiedenislimiet",
     "history-limit-description": "Berichten bijgehouden in het in-memory-spiegel van het paneel (SQLite bewaart alles)."
   },

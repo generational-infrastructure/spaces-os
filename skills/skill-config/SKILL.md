@@ -1,6 +1,6 @@
 ---
 name: Skill Config
-description: Onboard or reconfigure other opencrow skills (URLs, usernames, credentials) by triggering a popup that the user fills in directly — values never travel through chat.
+description: Onboard or reconfigure other pi-chat skills (URLs, usernames, credentials) by triggering a popup that the user fills in directly — values never travel through chat.
 ---
 
 When the user wants to set up a skill, change a credential, add a second
@@ -9,7 +9,7 @@ instead of asking them to run shell commands.
 
 ## Why this skill never asks for credentials in chat
 
-Anything the user types into chat reaches opencrow's LLM — and from
+Anything the user types into chat reaches pi's LLM — and from
 there, the LLM provider's logs and prompt cache. Passwords, API keys,
 and tokens must never go that route. Instead, this skill collects each
 field via `skill-config request-input`, which opens a popup on the
@@ -74,16 +74,16 @@ chat clean and the flow consistent.
 ## Examples of when to invoke this flow
 
 - "Set up the calendar skill for my Nextcloud account"
-- "Add my work email to opencrow"
+- "Add my work email to pi-chat"
 - "Change the password on my personal CalDAV" → step 3, edit existing profile
 - A skill returned `error: <key> is not set` → propose running this flow
   for the missing field
 
 ## Notes
 
-- All `skill-config` commands run inside the opencrow container as the
-  opencrow user. No `sudo`, no `--instance` flag — the environment is
-  already correct.
+- All `skill-config` commands run inside the user's session against
+  the per-user `distro-skill-config-daemon` socket. No `sudo`, no
+  `--instance` flag — the environment is already correct.
 - Field names in `request-input`, `set`, and `get` are exactly as they
   appear in the schema output.
 - If the user wants to start over on a profile,

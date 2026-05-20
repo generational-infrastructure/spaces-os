@@ -1,11 +1,11 @@
 {
-  "id": "opencrow-chat",
+  "id": "pi-chat",
   "name": "AI Chat",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Jörg Thalheim",
   "official": false,
   "license": "MIT",
-  "description": "Chat panel for opencrow over a local UNIX socket",
+  "description": "Chat panel for the distro AI agent (pi --mode rpc) with multi-session support",
   "tags": ["Bar", "Panel", "Network", "AI"],
   "minNoctaliaVersion": "4.5.0",
   "entryPoints": {
@@ -19,7 +19,10 @@
   },
   "metadata": {
     "defaultSettings": {
-      "maxHistory": 200
+      "maxHistory": 200,
+      "defaultWorkspaceRoot": "",
+      "idleTimeoutMinutes": 10,
+      "memoryHigh": "4G"
     }
   }
 }
