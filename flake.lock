@@ -217,11 +217,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1779196688,
-        "narHash": "sha256-JUb3Fs7V01sMsOKN0vjoO3cOHF62dbFqmUDpR+syc6o=",
+        "lastModified": 1779203795,
+        "narHash": "sha256-vATRCTKc87qT7Zrw/8oBZETP7h4etARpp2d+0rKofKw=",
         "owner": "generational-infrastructure",
         "repo": "opencrow",
-        "rev": "8c5e3f67817ec97723ac9812decf3351220b844f",
+        "rev": "b7d08bcb84dd2669c03fe63c05cb0617df6d9af3",
         "type": "github"
       },
       "original": {
