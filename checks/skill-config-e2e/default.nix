@@ -1,13 +1,18 @@
 # Skill-config prompt round-trip test.
 #
 # Boots the skill-config-daemon and an offscreen quickshell with a
-# test shell that subscribes to the daemon socket. The driver acts
-# as a CLI (request-input), asserts the prompt bubble appears in the
-# session's messages, submits a value, and verifies both the CLI and
-# the bubble see the result.
+# test shell that subscribes to the daemon socket. The driver runs
+# the REAL `skill-config request-input` CLI binary (same one pi uses
+# inside a sandboxed scope) against a staged test-skill, asserts the
+# prompt bubble appears, submits a value, and verifies the CLI exits 0
+# with the value persisted to config.toml.
 #
 # No pi process, no LLM, no compositor. ~5s.
 { pkgs, inputs, ... }:
+let
+  skillConfigDaemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
+  skillConfig = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config;
+in
 pkgs.runCommand "skill-config-e2e-test"
   {
     nativeBuildInputs = [
@@ -17,7 +22,8 @@ pkgs.runCommand "skill-config-e2e-test"
       pkgs.bash
       pkgs.qt6.qtbase
       pkgs.qt6.qtdeclarative
-      inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon
+      skillConfigDaemon
+      skillConfig
     ];
     pluginDir = ../../programs/pi-chat-plugin;
   }
@@ -28,7 +34,8 @@ pkgs.runCommand "skill-config-e2e-test"
     export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
     export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml
     python3 ${./driver.py} \
-      ${pkgs.lib.getExe inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon} \
+      ${pkgs.lib.getExe skillConfigDaemon} \
+      ${pkgs.lib.getExe skillConfig} \
       ${pkgs.lib.getExe pkgs.quickshell} \
       ${./.} \
       "$pluginDir" \

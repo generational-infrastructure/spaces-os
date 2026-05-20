@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""End-to-end skill-config prompt test.
+"""End-to-end skill-config prompt round-trip test.
 
-Verifies the full request-input → prompt bubble → submit round-trip:
+Exercises the REAL production path:
 
   1. Start the skill-config-daemon.
   2. Boot quickshell (offscreen) with the test shell that subscribes
      to the daemon socket and pushes prompt bubbles into PiSession.
-  3. Act as a CLI: connect to the daemon, send a Request, get Registered.
-  4. Assert a `type:"prompt"` bubble with `promptState:"pending"` appears
-     in the session's messages (via qs ipc).
-  5. Submit a value through the daemon.
-  6. Assert the CLI receives `op:"submitted"` with the value.
-  7. Assert the bubble state changes to `"submitted"` in the session.
+  3. Run the actual `skill-config request-input` CLI binary against
+     a staged test-skill with a known schema — exactly as pi would
+     inside a sandboxed scope.
+  4. Assert a `type:"prompt"` bubble with `promptState:"pending"`
+     appears in the session's messages (via qs ipc).
+  5. Submit a value through the QML IPC handler (simulating the user
+     filling in the popup).
+  6. Assert the CLI process exits 0 (value was saved).
+  7. Assert the bubble state transitions to `"submitted"`.
 
 No pi process, no LLM, no compositor. ~5s.
 """
@@ -19,7 +22,6 @@ No pi process, no LLM, no compositor. ~5s.
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -55,7 +57,6 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
         os.path.join(plugin_dir, "PiSession.qml"),
         os.path.join(shell_root, "PiSession.qml"),
     )
-    # Touch all files so Qt qmlcache sees fresh mtimes.
     now = time.time()
     for root, _dirs, files in os.walk(shell_root):
         for f in files:
@@ -66,87 +67,41 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     return shell_root
 
 
-def stage_systemd_run_stub(test_dir: str, work_dir: str) -> str:
+def stage_systemd_run_stub(work_dir: str) -> str:
     """Install systemd-run stub into work_dir/bin."""
     bin_dir = os.path.join(work_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
     dst = os.path.join(bin_dir, "systemd-run")
-    # PiSession._buildCommand() calls systemd-run; we need a stub
-    # that just execs the trailing command after --.
     with open(dst, "w") as f:
         f.write("#!/usr/bin/env bash\n")
         f.write('while [[ "$1" != "--" ]] && [[ $# -gt 0 ]]; do shift; done\n')
-        f.write("shift  # skip the --\n")
+        f.write("shift\n")
         f.write('exec "$@"\n')
     os.chmod(dst, 0o755)
     return bin_dir
 
 
-# ── daemon socket protocol helpers ────────────────────────────────
-
-def daemon_connect(sock_path: str, timeout: float = 5.0) -> socket.socket:
-    """Connect to the daemon, retrying briefly."""
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.connect(sock_path)
-            return s
-        except (ConnectionRefusedError, FileNotFoundError):
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.1)
-
-
-def daemon_send_recv(sock_path: str, payload: dict) -> dict:
-    """One-shot: connect, send JSON line, read one JSON line, close."""
-    s = daemon_connect(sock_path)
-    try:
-        f = s.makefile("rwb")
-        f.write((json.dumps(payload) + "\n").encode())
-        f.flush()
-        line = f.readline()
-        return json.loads(line) if line else {}
-    finally:
-        s.close()
-
-
-def cli_request(sock_path: str, skill: str, profile: str, field: str,
-                description: str, secret: bool = False,
-                timeout_secs: int = 30) -> tuple[socket.socket, str]:
-    """Simulate `skill-config request-input`.
-
-    Returns (socket, request_id). Caller keeps the socket open and
-    reads the terminal reply after the test submits/cancels.
-    """
-    s = daemon_connect(sock_path)
-    f = s.makefile("rwb")
-    req = {
-        "op": "request",
-        "skill": skill,
-        "profile": profile,
-        "field": field,
-        "description": description,
-        "secret": secret,
-        "timeout_secs": timeout_secs,
-    }
-    f.write((json.dumps(req) + "\n").encode())
-    f.flush()
-    registered = json.loads(f.readline())
-    if registered.get("op") != "registered":
-        fail(f"expected 'registered', got {registered}")
-    return s, registered["request_id"]
-
-
-def cli_read_reply(sock: socket.socket) -> dict:
-    """Read the terminal reply from an open CLI connection."""
-    f = sock.makefile("rb")
-    line = f.readline()
-    sock.close()
-    return json.loads(line) if line else {}
+def stage_test_skill(state_dir: str) -> None:
+    """Create a minimal test-skill in skills-defs with a known schema."""
+    skill_dir = os.path.join(state_dir, "skills-defs", "test-skill")
+    os.makedirs(skill_dir, exist_ok=True)
+    with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+        f.write(
+            "---\n"
+            "name: Test Skill\n"
+            "description: Fixture skill for integration testing.\n"
+            "config:\n"
+            "  url: Server URL for the test service.\n"
+            "secrets:\n"
+            "  token: Secret access token.\n"
+            "---\n"
+            "\n"
+            "This skill exists only in the test harness.\n"
+        )
 
 
 # ── quickshell IPC ────────────────────────────────────────────────
+
 
 def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
     cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:skill", *args]
@@ -161,27 +116,42 @@ def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
 
 # ── main ──────────────────────────────────────────────────────────
 
+
 def main():
-    daemon_bin, qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:6]
+    (daemon_bin, skill_config_bin, qs_bin, test_dir, plugin_dir, work_dir) = sys.argv[
+        1:7
+    ]
 
     # Directories.
     state_dir = os.path.join(work_dir, "state")
     agent_dir = os.path.join(state_dir, "pi-agent")
     sessions_dir = os.path.join(state_dir, "sessions", "test")
+    skill_config_store = os.path.join(state_dir, "skill-config")
     workspace = os.path.join(work_dir, "workspace")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
     sock_path = os.path.join(xdg_runtime, "distro-skill-config.sock")
-    for d in [state_dir, agent_dir, sessions_dir, workspace, xdg_runtime]:
+    for d in [
+        state_dir,
+        agent_dir,
+        sessions_dir,
+        skill_config_store,
+        workspace,
+        xdg_runtime,
+    ]:
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
 
-    # Write minimal pi settings so PiSession doesn't choke.
+    # Minimal pi settings.
     with open(os.path.join(agent_dir, "settings.json"), "w") as f:
         json.dump({"extensions": [], "skills": []}, f)
 
+    # Stage a test skill in skills-defs — same layout the NixOS
+    # module creates via tmpfiles symlinks.
+    stage_test_skill(state_dir)
+
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
-    bin_dir = stage_systemd_run_stub(test_dir, work_dir)
+    bin_dir = stage_systemd_run_stub(work_dir)
 
     env = {
         "HOME": work_dir,
@@ -196,6 +166,11 @@ def main():
         "TEST_SKILL_SOCK": sock_path,
     }
 
+    # CLI env: daemon socket + state dir (so it finds skills-defs).
+    cli_env = dict(env)
+    cli_env["SKILL_CONFIG_SOCKET"] = sock_path
+    cli_env["DISTRO_PI_CHAT_STATE_DIR"] = state_dir
+
     # 1. Start skill-config-daemon.
     daemon_env = dict(env)
     daemon_env["SKILL_CONFIG_SOCKET"] = sock_path
@@ -206,7 +181,6 @@ def main():
         stderr=subprocess.STDOUT,
     )
 
-    # Wait for socket to appear.
     if not wait_until(lambda: os.path.exists(sock_path), timeout_s=5):
         daemon_proc.kill()
         fail("skill-config-daemon never created socket")
@@ -221,7 +195,12 @@ def main():
         stderr=qs_stderr,
     )
 
+    # Track the CLI process once launched.
+    cli_proc = None
+
     def cleanup():
+        if cli_proc and cli_proc.poll() is None:
+            cli_proc.kill()
         qs_proc.terminate()
         daemon_proc.terminate()
         qs_proc.wait(timeout=5)
@@ -238,9 +217,6 @@ def main():
         dump("qs.stdout.log", os.path.join(work_dir, "qs.stdout.log"))
         dump("qs.stderr.log", os.path.join(work_dir, "qs.stderr.log"))
 
-        # Dump daemon output.
-        daemon_proc.stdout.close() if daemon_proc.stdout else None
-
         # Dump qslog if present.
         qs_rt = os.path.join(xdg_runtime, "quickshell")
         if os.path.isdir(qs_rt):
@@ -254,7 +230,7 @@ def main():
                         sys.stderr.write(f"\n== {fpath} ==\n<unreadable>\n")
 
     try:
-        # Wait for IPC handler to register.
+        # Wait for IPC handler.
         def ipc_ready():
             r = subprocess.run(
                 [qs_bin, "ipc", "-p", shell_qml, "show"],
@@ -264,7 +240,9 @@ def main():
                 timeout=5,
             )
             if r.returncode != 0:
-                sys.stderr.write(f"[ipc_ready] exit={r.returncode} stderr={r.stderr!r}\n")
+                sys.stderr.write(
+                    f"[ipc_ready] exit={r.returncode} stderr={r.stderr!r}\n"
+                )
                 return False
             return "test:skill" in r.stdout
 
@@ -272,18 +250,35 @@ def main():
             cleanup()
             fail("quickshell never bound the test:skill IPC target")
 
-        # Give the subscriber socket a moment to connect to the daemon.
+        # Give the subscriber a moment to connect to the daemon.
         time.sleep(0.5)
 
-        # 3. Simulate a CLI request-input.
-        cli_sock, request_id = cli_request(
-            sock_path,
-            skill="calendar",
-            profile="default",
-            field="caldav_url",
-            description="CalDAV server URL",
-            secret=False,
+        # 3. Run the REAL skill-config CLI (same binary pi uses).
+        #    request-input blocks until submitted/cancelled/timeout.
+        cli_proc = subprocess.Popen(
+            [
+                skill_config_bin,
+                "request-input",
+                "test-skill.default.url",
+                "--timeout",
+                "30",
+            ],
+            env=cli_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+
+        # The CLI should still be running (blocking on the daemon).
+        time.sleep(0.3)
+        if cli_proc.poll() is not None:
+            cleanup()
+            fail(
+                f"skill-config request-input exited immediately "
+                f"(code={cli_proc.returncode}):\n"
+                f"stdout: {cli_proc.stdout.read()!r}\n"
+                f"stderr: {cli_proc.stderr.read()!r}"
+            )
 
         # 4. Poll for the prompt bubble.
         def has_prompt_bubble():
@@ -295,34 +290,62 @@ def main():
             return any(
                 m.get("type") == "prompt"
                 and m.get("promptState") == "pending"
-                and m.get("promptField") == "caldav_url"
-                and m.get("promptSkill") == "calendar"
-                and m.get("id") == request_id
+                and m.get("promptField") == "url"
+                and m.get("promptSkill") == "test-skill"
                 for m in msgs
             )
 
         if not wait_until(has_prompt_bubble, timeout_s=10):
-            cli_sock.close()
+            # CLI might have crashed after all.
+            if cli_proc.poll() is not None:
+                cleanup()
+                fail(
+                    f"skill-config exited (code={cli_proc.returncode}) "
+                    f"before bubble appeared:\n"
+                    f"stdout: {cli_proc.stdout.read()!r}\n"
+                    f"stderr: {cli_proc.stderr.read()!r}"
+                )
             cleanup()
             raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
             fail(
-                f"expected a prompt bubble with field='caldav_url' and "
+                f"expected a prompt bubble with field='url' and "
                 f"promptState='pending', got messages={raw}"
             )
 
-        # 5. Submit a value through the IPC handler.
-        qs_ipc_call(qs_bin, shell_qml, env, "submit", request_id, "https://cloud.example.com/dav")
+        # Find the request_id from the bubble.
+        raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+        msgs = json.loads(raw)
+        prompt = next(
+            m
+            for m in msgs
+            if m.get("type") == "prompt" and m.get("promptField") == "url"
+        )
+        request_id = prompt["id"]
 
-        # 6. Verify the CLI receives the submitted value.
-        reply = cli_read_reply(cli_sock)
-        if reply.get("op") != "submitted":
-            cleanup()
-            fail(f"expected CLI to receive op='submitted', got {reply}")
-        if reply.get("value") != "https://cloud.example.com/dav":
-            cleanup()
-            fail(f"expected value='https://cloud.example.com/dav', got {reply.get('value')!r}")
+        # 5. Submit a value through the QML IPC handler.
+        qs_ipc_call(
+            qs_bin, shell_qml, env, "submit", request_id, "https://test.example.com/api"
+        )
 
-        # 7. Verify the bubble state changed.
+        # 6. CLI should exit 0 with "saved ..." on stdout.
+        try:
+            cli_stdout, cli_stderr = cli_proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            cli_proc.kill()
+            cleanup()
+            fail("skill-config request-input didn't exit after submit")
+
+        if cli_proc.returncode != 0:
+            cleanup()
+            fail(
+                f"skill-config exited {cli_proc.returncode} after submit:\n"
+                f"stdout: {cli_stdout!r}\nstderr: {cli_stderr!r}"
+            )
+        if "saved" not in cli_stdout:
+            cleanup()
+            fail(f"expected 'saved' in CLI stdout, got: {cli_stdout!r}")
+
+        # 7. Bubble should have transitioned to "submitted".
         def bubble_submitted():
             raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
             try:
@@ -330,8 +353,7 @@ def main():
             except Exception:
                 return False
             return any(
-                m.get("id") == request_id
-                and m.get("promptState") == "submitted"
+                m.get("id") == request_id and m.get("promptState") == "submitted"
                 for m in msgs
             )
 
@@ -339,6 +361,22 @@ def main():
             cleanup()
             raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
             fail(f"prompt bubble never transitioned to 'submitted', messages={raw}")
+
+        # 8. Verify the value was persisted to config.toml.
+        import tomllib
+
+        config_path = os.path.join(skill_config_store, "config.toml")
+        if not os.path.isfile(config_path):
+            cleanup()
+            fail(f"config.toml not created at {config_path}")
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+        stored = config.get("test-skill", {}).get("default", {}).get("url")
+        if stored != "https://test.example.com/api":
+            cleanup()
+            fail(
+                f"expected url='https://test.example.com/api' in config.toml, got {stored!r}"
+            )
 
         print("OK")
     finally:

@@ -50,6 +50,8 @@ let
   piAgentRel = "${stateRel}/pi-agent";
   sessionsRel = "${stateRel}/sessions";
   sessionsIndexRel = "${stateRel}/sessions.json";
+  skillsDefsRel = "${stateRel}/skills-defs";
+  skillConfigStoreRel = "${stateRel}/skill-config";
 
   # All skills (built-ins + user-supplied via cfg.skills), merged into
   # one linked-farm so the plugin can pass a single dir or pi can read
@@ -391,6 +393,15 @@ in
       # launch without a special-case branch.
       ''f %h/${sessionsIndexRel} 0644 - - - {"version":1,"sessions":[],"activeSessionId":null}''
       "L+ %h/${piAgentRel}/settings.json - - - - ${piSettingsJson}"
+      # skill-config CLI resolves schemas from $state_dir/skills-defs/<skill>/SKILL.md.
+      # Symlink each skill so request-input can validate fields before
+      # contacting the daemon.
+      "d %h/${skillsDefsRel} 0755 - - -"
+    ]
+    ++ lib.mapAttrsToList (name: path: "L+ %h/${skillsDefsRel}/${name} - - - - ${path}") allSkills
+    ++ [
+      # skill-config stores per-skill config.toml / secrets.toml here.
+      "d %h/${skillConfigStoreRel} 0755 - - -"
     ]
     ++ lib.optional (cfg.piModels != { }) "L+ %h/${piAgentRel}/models.json - - - - ${piModelsJson}"
     ++ lib.optional cfg.openrouter.enable "L+ %h/${piAgentRel}/auth.json - - - - ${piAuthJson}"

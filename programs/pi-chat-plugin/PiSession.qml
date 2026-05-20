@@ -246,6 +246,8 @@ QtObject {
     const xdgRuntime = String(Quickshell.env("XDG_RUNTIME_DIR"));
     const sessionState = stateDir + "/sessions/" + sessionId;
     const skillSockHost = xdgRuntime + "/distro-skill-config.sock";
+    const skillsDefs = stateDir + "/skills-defs";
+    const skillConfigStore = stateDir + "/skill-config";
 
     // systemd-run --user as a transient service (not --scope): user
     // scopes silently reject namespace-creating properties like
@@ -262,11 +264,16 @@ QtObject {
       "--setenv=PI_CODING_AGENT_DIR=" + piAgentDir,
       "--setenv=LLAMA_SWAP_BASE_URL=" + llmUrl,
       "--setenv=SKILL_CONFIG_SOCKET=" + skillSockHost,
+      "--setenv=DISTRO_PI_CHAT_STATE_DIR=" + stateDir,
       "--setenv=PI_TELEMETRY=0",
       "--setenv=PI_OFFLINE=0",
       "--property=BindPaths=" + sessionState + ":" + sessionState,
       "--property=BindPaths=" + workspacePath + ":" + workspacePath,
       "--property=BindPaths=" + skillSockHost + ":" + skillSockHost,
+      // skill-config needs the skill schemas (read-only nix-store
+      // symlinks) and the user's config/secrets store (read-write).
+      "--property=BindReadOnlyPaths=" + skillsDefs + ":" + skillsDefs,
+      "--property=BindPaths=" + skillConfigStore + ":" + skillConfigStore,
       "--property=PrivateTmp=true",
       "--property=PrivateDevices=true",
       "--property=ProtectKernelTunables=true",
