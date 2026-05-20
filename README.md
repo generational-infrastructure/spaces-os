@@ -38,7 +38,7 @@ by default.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    distro.url = "github:numtide/distro";
+    distro.url = "github:generational-infrastructure/distro";
   };
 
   outputs = { nixpkgs, distro, ... }: {
