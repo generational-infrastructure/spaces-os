@@ -27,6 +27,16 @@ Item {
   readonly property string sockPath:
     String(Quickshell.env("XDG_RUNTIME_DIR")) + "/opencrow-chat.sock"
 
+  // Sidecar IPC socket for skill-config credential prompts. Same shape
+  // as chat.sock (per-user symlink installed by opencrow-socket-link
+  // pointing at the in-container /run/opencrow-<inst>/skill-config.sock).
+  // Prompts arrive on a persistent `subscribe` connection and are
+  // rendered as `type: "prompt"` bubbles in the chat history; submit
+  // and cancel are short-lived one-shot connections per the daemon's
+  // protocol.
+  readonly property string skillConfigSockPath:
+    String(Quickshell.env("XDG_RUNTIME_DIR")) + "/opencrow-skill-config.sock"
+
   // Host-side staging dir for file attachments (symlinked to the
   // socket dir's attachments/ subdirectory, which is bind-mounted
   // into the container).
@@ -111,6 +121,19 @@ Item {
     function confirmRespond(id, confirmed) {
       root.sockSend({ cmd: root.cmd.confirmResponse, id: id, confirmed: confirmed });
       patch(id, { confirmState: confirmed ? "allowed" : "denied" });
+    }
+
+    // Answer a pending skill-config prompt. Submit sends the typed
+    // value to the sidecar daemon's socket; cancel sends a `cancel`.
+    // We optimistically patch local state — the daemon's `removed`
+    // event on the subscribe stream is the authoritative ack.
+    function promptRespond(id, value) {
+      root.skillConfigSend({ op: "submit", request_id: id, value: value });
+      patch(id, { promptState: "submitted", text: "" });
+    }
+    function promptCancel(id) {
+      root.skillConfigSend({ op: "cancel", request_id: id });
+      patch(id, { promptState: "cancelled" });
     }
 
     // Refresh model list from the daemon. Result arrives via 'models' event.
@@ -246,6 +269,169 @@ Item {
     if (!sock.item?.connected) return;  // replay-on-connect covers the gap
     sock.item.write(JSON.stringify(c) + "\n");
     sock.item.flush();
+  }
+
+  // ── skill-config sidecar socket ────────────────────────────────────
+  // Persistent subscribe stream feeding `type: "prompt"` bubbles, plus
+  // a one-shot sender for submit/cancel. Mirrors the chat-socket Loader
+  // pattern (recreate-on-failure) for the same reason: QLocalSocket
+  // wedges after a refused connect and the only QML-side recovery is
+  // dropping the underlying Socket and creating a fresh one.
+  Loader {
+    id: skillSock
+    sourceComponent: skillSockComponent
+    readonly property bool connected: item?.connected ?? false
+  }
+  Component {
+    id: skillSockComponent
+    Socket {
+      path: root.skillConfigSockPath
+      connected: true
+      parser: SplitParser { onRead: line => root.recvSkillConfig(line) }
+      onConnectionStateChanged: {
+        if (connected) {
+          skillReconnect.stop();
+          skillReconnect.interval = 500;
+          write(JSON.stringify({ op: "subscribe" }) + "\n");
+          flush();
+        } else {
+          // Daemon down (container restart, symlink missing, …). Mark
+          // any pending prompt bubbles as retracted so the user doesn't
+          // keep typing into a card that can't deliver.
+          root.retractAllPendingPrompts();
+          skillReconnect.start();
+        }
+      }
+      onError: (e) => {
+        Logger.w("OpencrowChat", "skill-config subscribe", e, "path", path);
+        skillReconnect.start();
+      }
+    }
+  }
+  Timer {
+    id: skillReconnect
+    interval: 500
+    onTriggered: {
+      skillSock.active = false; skillSock.active = true;
+      interval = Math.min(interval * 2, 4000);
+    }
+  }
+  Component {
+    id: skillOneShotComponent
+    Socket {
+      property var payload: null
+      // Gate the dial on `path` being set — literal `connected: true`
+      // triggers a connect at the default empty path before initial
+      // properties land, which wedges QLocalSocket.
+      connected: path !== ""
+      onConnectionStateChanged: {
+        if (!connected) return;
+        write(JSON.stringify(payload) + "\n");
+        flush();
+      }
+      onError: (e) => Logger.w("OpencrowChat", "skill-config one-shot", e)
+      parser: SplitParser { onRead: () => {} }  // ack ignored — `removed` is the truth
+    }
+  }
+  function skillConfigSend(payload) {
+    const c = skillOneShotComponent.createObject(root, {
+      path: root.skillConfigSockPath,
+      payload: payload,
+    });
+    // Daemon closes after the ack — schedule destruction so we don't
+    // leak QLocalSockets across many prompts.
+    Qt.callLater(() => c.destroy(2000));
+  }
+
+  function retractAllPendingPrompts() {
+    const arr = chat.messages.slice();
+    let changed = false;
+    for (let i = 0; i < arr.length; i++) {
+      const m = arr[i];
+      if (m.type === "prompt" && (m.promptState ?? "pending") === "pending") {
+        arr[i] = Object.assign({}, m, { promptState: "retracted" });
+        changed = true;
+      }
+    }
+    if (changed) chat.messages = arr;
+  }
+
+  // One NDJSON line from the skill-config subscribe stream.
+  function recvSkillConfig(raw) {
+    let ev;
+    try { ev = JSON.parse(raw); }
+    catch (e) { Logger.w("OpencrowChat", "bad skill-config json", raw); return; }
+    switch (ev.op) {
+    case "snapshot":
+      // Authoritative reset on (re)subscribe. Bubbles still flagged
+      // pending locally but absent from the snapshot were served by a
+      // peer subscriber (or timed out) while we were offline.
+      _reconcilePromptSnapshot(ev.instance, ev.requests || []);
+      break;
+    case "added":
+      _pushPrompt(ev.instance, ev.request);
+      break;
+    case "removed":
+      _retractPrompt(ev.request_id);
+      break;
+    default:
+      Logger.w("OpencrowChat", "unknown skill-config op", ev.op);
+    }
+  }
+
+  function _pushPrompt(instance, req) {
+    if (!req || !req.request_id) return;
+    const id = req.request_id;
+    const arr = chat.messages.slice();
+    if (arr.some(x => x.id === id)) return;  // dup from snapshot/race
+    arr.push({
+      id: id,
+      text: req.description || "",
+      ts: Date.now(),
+      ack: "", image: "", replyTo: "",
+      state: root.state.sent, tries: 0,
+      from: "peer",
+      type: "prompt",
+      promptInstance: instance || "",
+      promptSkill: req.skill || "",
+      promptProfile: req.profile || "",
+      promptField: req.field || "",
+      promptSecret: !!req.secret,
+      promptState: "pending",
+    });
+    const max = cfg("maxHistory") || 200;
+    chat.messages = arr.length > max ? arr.slice(-max) : arr;
+    // Notify so a closed panel doesn't silently swallow the request.
+    // The bubble itself is the durable affordance once the panel opens.
+    root.notifyIncoming((req.skill || "") + " · " + (req.field || ""));
+  }
+
+  function _retractPrompt(rid) {
+    const i = chat.messages.findIndex(m => m.id === rid);
+    if (i < 0) return;
+    const m = chat.messages[i];
+    if (m.type !== "prompt") return;
+    // Local submit/cancel already settled the state — preserve it.
+    if ((m.promptState ?? "pending") !== "pending") return;
+    chat.patch(rid, { promptState: "retracted" });
+  }
+
+  function _reconcilePromptSnapshot(instance, requests) {
+    const live = {};
+    for (const r of requests) live[r.request_id] = r;
+    const arr = chat.messages.slice();
+    let changed = false;
+    for (let i = 0; i < arr.length; i++) {
+      const m = arr[i];
+      if (m.type !== "prompt") continue;
+      if ((m.promptState ?? "pending") !== "pending") continue;
+      if (!live[m.id]) {
+        arr[i] = Object.assign({}, m, { promptState: "retracted" });
+        changed = true;
+      }
+    }
+    if (changed) chat.messages = arr;
+    for (const r of requests) _pushPrompt(instance, r);
   }
 
   // Container paths come back inside file messages because the daemon

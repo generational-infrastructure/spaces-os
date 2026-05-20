@@ -35,16 +35,22 @@ Item {
   // Emitted when the user clicks Allow/Deny on a confirm bubble.
   // Panel forwards to chat.confirmRespond.
   signal confirmRequested(bool confirmed)
+  // Emitted when the user submits or cancels a prompt bubble.
+  // Panel forwards to chat.promptRespond / chat.promptCancel.
+  signal promptSubmit(string value)
+  signal promptCancel
 
   readonly property bool mine: msg.from === "me"
   readonly property bool isNotification: (msg.type ?? "") === "notification"
   readonly property bool isConfirm: (msg.type ?? "") === "confirm"
+  readonly property bool isPrompt: (msg.type ?? "") === "prompt"
   // Match locally — O(1) and can't drift from Panel's hit list since
   // it's the same predicate.
   readonly property bool searchHit:
     searchQuery !== "" && (msg.text || "").toLowerCase().includes(searchQuery)
 
   implicitHeight: row.isConfirm ? confirmCard.implicitHeight
+                                : row.isPrompt ? promptCard.implicitHeight
                                 : row.isNotification ? notifText.implicitHeight
                                                      : bubble.implicitHeight
 
@@ -60,7 +66,7 @@ Item {
     anchors.right: row.mine ? bubble.left : undefined
     anchors.margins: Style.marginXS
     opacity: (hov.hovered || hovering) ? 1 : 0
-    visible: !row.isConfirm && !row.isNotification && opacity > 0
+    visible: !row.isConfirm && !row.isPrompt && !row.isNotification && opacity > 0
     Behavior on opacity { NumberAnimation { duration: 100 } }
     onClicked: row.replyRequested()
   }
@@ -72,7 +78,7 @@ Item {
     anchors.left:  row.isNotification ? undefined : (row.mine ? undefined : parent.left)
     anchors.right: row.isNotification ? undefined : (row.mine ? parent.right : undefined)
     anchors.horizontalCenter: row.isNotification ? parent.horizontalCenter : undefined
-    visible: !row.isNotification && !row.isConfirm
+    visible: !row.isNotification && !row.isConfirm && !row.isPrompt
     // Image/quote/streaming bubbles snap to the cap; plain text shrinks
     // to fit so short replies don't stretch edge-to-edge.
     width: ((msg.image ?? "") !== "" || (msg.replyTo ?? "") !== "" || (msg.state ?? "") === "streaming")
@@ -287,6 +293,127 @@ Item {
           ? row.tr("bubble.confirm-allowed")
           : row.tr("bubble.confirm-denied")
         color: (msg.confirmState === "allowed") ? Color.mTertiary : Color.mError
+        pointSize: Style.fontSizeS
+        font.bold: true
+      }
+    }
+  }
+
+  // Prompt card: skill-config credential request rendered inline.
+  // Header (instance/skill/profile/field) + description (markdown so
+  // SKILL.md can use bold and lists) + text input + Submit/Cancel.
+  // Secret fields mask the input. Once submitted/cancelled/retracted
+  // the controls disappear and an outcome label stays as audit trail.
+  Rectangle {
+    id: promptCard
+    visible: row.isPrompt
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.margins: 0
+    implicitHeight: promptCol.implicitHeight + Style.marginM * 2
+    radius: Style.radiusS
+    color: Color.mSurfaceVariant
+    border.width: 1
+    border.color: {
+      const s = msg.promptState ?? "pending";
+      if (s === "submitted") return Color.mTertiary;
+      if (s === "cancelled") return Color.mError;
+      if (s === "retracted") return Color.mOutline;
+      return Color.mPrimary;
+    }
+    readonly property bool pending: (msg.promptState ?? "pending") === "pending"
+    ColumnLayout {
+      id: promptCol
+      anchors.fill: parent
+      anchors.margins: Style.marginM
+      spacing: Style.marginXS
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NIcon {
+          icon: msg.promptSecret ? "key" : "edit"
+          pointSize: Style.fontSizeL
+          color: Color.mPrimary
+        }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: 0
+          NText {
+            text: msg.promptInstance ? ("opencrow-" + msg.promptInstance) : ""
+            pointSize: Style.fontSizeXS
+            color: Color.mOnSurfaceVariant
+          }
+          NText {
+            text: (msg.promptSkill || "") + " · "
+              + (msg.promptProfile || "") + " · "
+              + (msg.promptField || "")
+            pointSize: Style.fontSizeM
+            font.bold: true
+            color: Color.mOnSurface
+          }
+        }
+      }
+      // Description: markdown so SKILL.md formatting survives.
+      NText {
+        Layout.fillWidth: true
+        visible: (msg.text || "") !== ""
+        text: msg.text
+        wrapMode: Text.Wrap
+        markdownTextEnabled: true
+        color: Color.mOnSurfaceVariant
+        pointSize: Style.fontSizeS
+      }
+      // Live input — only while pending. After submit we drop the value
+      // from the bubble (especially for secrets) so an audit-trail scroll
+      // doesn't leak it.
+      TextField {
+        id: promptInput
+        Layout.fillWidth: true
+        visible: promptCard.pending
+        echoMode: msg.promptSecret ? TextInput.Password : TextInput.Normal
+        placeholderText: msg.promptSecret
+          ? row.tr("bubble.prompt-placeholder-secret")
+          : row.tr("bubble.prompt-placeholder")
+        Keys.onReturnPressed: e => {
+          if (text.length > 0) { row.promptSubmit(text); text = ""; }
+        }
+        Keys.onEscapePressed: e => { text = ""; row.promptCancel(); }
+      }
+      RowLayout {
+        Layout.alignment: Qt.AlignRight
+        spacing: Style.marginS
+        visible: promptCard.pending
+        Button {
+          text: row.tr("bubble.prompt-cancel")
+          onClicked: { promptInput.text = ""; row.promptCancel(); }
+        }
+        Button {
+          text: row.tr("bubble.prompt-submit")
+          highlighted: true
+          enabled: promptInput.text.length > 0
+          onClicked: {
+            const v = promptInput.text;
+            promptInput.text = "";
+            row.promptSubmit(v);
+          }
+        }
+      }
+      NText {
+        Layout.alignment: Qt.AlignRight
+        visible: !promptCard.pending
+        text: {
+          const s = msg.promptState ?? "";
+          if (s === "submitted") return row.tr("bubble.prompt-submitted");
+          if (s === "cancelled") return row.tr("bubble.prompt-cancelled");
+          if (s === "retracted") return row.tr("bubble.prompt-retracted");
+          return "";
+        }
+        color: {
+          const s = msg.promptState ?? "";
+          if (s === "submitted") return Color.mTertiary;
+          if (s === "cancelled") return Color.mError;
+          return Color.mOnSurfaceVariant;
+        }
         pointSize: Style.fontSizeS
         font.bold: true
       }

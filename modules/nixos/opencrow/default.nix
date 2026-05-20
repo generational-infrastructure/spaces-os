@@ -46,7 +46,6 @@ let
   discoverExtension = ./llama-swap-discover.ts;
 
   pluginDir = ../../../programs/opencrow-chat-plugin;
-  skillConfigPluginDir = ../../../programs/opencrow-skill-config-plugin;
 
   locationDir = "/run/opencrow-location";
 
@@ -388,11 +387,12 @@ in
     systemd.user.tmpfiles.rules = lib.optionals cfg.noctaliaPlugin [
       "d %h/.config/noctalia/plugins 0755 - - -"
       "L+ %h/.config/noctalia/plugins/opencrow-chat - - - - ${pluginDir}"
-      "L+ %h/.config/noctalia/plugins/opencrow-skill-config - - - - ${skillConfigPluginDir}"
       # Also symlink into autoload dir so the patched noctalia auto-enables it.
+      # Stale entries from prior generations (e.g. the dropped opencrow-
+      # skill-config plugin) are garbage-collected by noctalia's
+      # PluginAutoload patch on next startup — no tmpfiles cleanup needed.
       "d %h/.config/noctalia/plugins-autoload 0755 - - -"
       "L+ %h/.config/noctalia/plugins-autoload/opencrow-chat - - - - ${pluginDir}"
-      "L+ %h/.config/noctalia/plugins-autoload/opencrow-skill-config - - - - ${skillConfigPluginDir}"
     ];
 
     # Symlink opencrow's socket and clear stale QML cache on plugin updates.
@@ -407,7 +407,6 @@ in
       # invalidation and the old compiled QML keeps loading.
       restartTriggers = [
         "${pluginDir}"
-        "${skillConfigPluginDir}"
       ];
       serviceConfig = {
         Type = "oneshot";

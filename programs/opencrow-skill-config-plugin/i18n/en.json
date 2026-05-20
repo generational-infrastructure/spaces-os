@@ -1,9 +1,0 @@
-{
-  "panel": {
-    "placeholder-secret": "Type secret value (hidden)…",
-    "placeholder-value": "Type value…",
-    "submit": "Submit",
-    "cancel": "Cancel",
-    "queue-hint": "{n} more after this"
-  }
-}

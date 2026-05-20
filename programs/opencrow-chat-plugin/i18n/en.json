@@ -24,7 +24,14 @@
     "confirm-allow": "Allow",
     "confirm-deny": "Deny",
     "confirm-allowed": "✓ allowed",
-    "confirm-denied": "✗ denied"
+    "confirm-denied": "✗ denied",
+    "prompt-placeholder": "Enter value",
+    "prompt-placeholder-secret": "Enter secret value",
+    "prompt-submit": "Submit",
+    "prompt-cancel": "Cancel",
+    "prompt-submitted": "✓ submitted",
+    "prompt-cancelled": "✗ cancelled",
+    "prompt-retracted": "⚠ retracted"
   },
   "settings": {
     "nixos-hint": "Peer configuration (pubkey, relays, display name) is managed by the NixOS module — see services.opencrow-chat in your config.",
