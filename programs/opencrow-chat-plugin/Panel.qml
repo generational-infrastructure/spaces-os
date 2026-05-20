@@ -391,9 +391,10 @@ Item {
         Layout.fillWidth: true
         // Grow with content up to ~5 lines, then scroll. Min matches
         // the icon buttons so the row stays aligned when empty.
-        // TextArea.implicitHeight already includes its own padding.
+        // contentHeight, not implicitHeight: avoids a binding loop
+        // with the dynamic top/bottom padding below.
         Layout.preferredHeight: Math.min(
-          Math.max(inputArea.implicitHeight,
+          Math.max(inputArea.contentHeight + Style.marginS * 2,
                    Style.baseWidgetSize * 1.1 * Style.uiScaleRatio),
           Style.baseWidgetSize * 4 * Style.uiScaleRatio)
 
@@ -429,8 +430,9 @@ Item {
             wrapMode: TextEdit.Wrap
             selectByMouse: true
             background: null
-            topPadding: Style.marginS
-            bottomPadding: Style.marginS
+            readonly property real _slack: Math.max(0, input.height - contentHeight - Style.marginS * 2)
+            topPadding: Style.marginS + _slack / 2
+            bottomPadding: Style.marginS + _slack / 2
             leftPadding: Style.marginM
             rightPadding: Style.marginM
             font.family: Settings.data.ui.fontDefault
