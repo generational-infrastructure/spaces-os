@@ -188,18 +188,14 @@ Item {
         icon: "rotate"
         tooltipText: root.tr("panel.reset-tooltip")
         baseSize: Style.baseWidgetSize * 0.9
-        // Clear the local bubble list first so the panel reflects the
-        // about-to-be-empty agent context without a flash of stale
-        // history; the daemon's "!restart" echo + ack will repopulate
-        // with the two confirmation bubbles. Going through chat.send
-        // (rather than a dedicated wire command) keeps the protocol
-        // unchanged — !restart is already handled server-side.
+        // chat.restart() clears the local bubble list and issues
+        // { type: "new_session" } to pi, which swaps in a fresh
+        // session in-place — same RPC process, empty history. The
+        // local clear keeps the panel from flashing stale bubbles
+        // while pi sets up the new session.
         onClicked: {
           if (!chat) return;
-          chat.messages = [];
-          chat.replyTarget = null;
-          chat.typing = false;
-          chat.send("!restart");
+          chat.restart();
         }
       }
       Rectangle {

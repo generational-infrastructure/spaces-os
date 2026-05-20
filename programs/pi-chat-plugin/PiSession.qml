@@ -165,6 +165,23 @@ QtObject {
     patch(id, { promptState: "cancelled" });
   }
 
+  // Wipe local UI and tell pi to start a fresh session in-place.
+  // Pi's runtimeHost.newSession() tears down the current agent, swaps
+  // the SessionManager to a new sessionId, and starts emitting events
+  // for the new session — so the same proc keeps streaming RPC, just
+  // against an empty history. Cold sessions get spawn()ed first so the
+  // new_session command has a process to land in; the next user
+  // message proceeds against that fresh session.
+  function restart() {
+    messages = [];
+    replyTarget = null;
+    typing = false;
+    lastError = "";
+    _streamingId = "";
+    spawn();
+    _send({ type: "new_session" });
+  }
+
   function listModels() {
     if (!_shouldRun) spawn();
     _send({ type: "get_available_models" });
