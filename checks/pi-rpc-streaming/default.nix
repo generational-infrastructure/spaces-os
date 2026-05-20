@@ -1,4 +1,4 @@
-# Streaming e2e check: pi --mode rpc ↔ mock OpenAI Chat Completions.
+# Streaming check: pi --mode rpc ↔ mock OpenAI Chat Completions.
 #
 # Asserts that text_delta events arrive at the RPC client in real time
 # (not buffered into a single message_end). Used as a smoke test for
@@ -11,7 +11,7 @@
 let
   piPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
 in
-pkgs.runCommand "streaming-pi-e2e-test"
+pkgs.runCommand "pi-rpc-streaming-test"
   {
     nativeBuildInputs = [ pkgs.python3 ];
     extDir = ../../modules/nixos/pi-chat/extensions;

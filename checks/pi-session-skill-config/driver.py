@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end skill-config prompt round-trip test.
+"""Skill-config prompt round-trip integration test.
 
 Exercises the REAL production path:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Streaming e2e for pi --mode rpc against a mock LLM.
+"""Streaming integration test for pi --mode rpc against a mock LLM.
 
 Sends a single prompt, then asserts:
   - message_update events with assistantMessageEvent.type=text_delta

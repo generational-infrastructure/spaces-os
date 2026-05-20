@@ -9,7 +9,7 @@
 let
   piPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
 in
-pkgs.runCommand "restart-pi-e2e-test"
+pkgs.runCommand "pi-session-restart-test"
   {
     nativeBuildInputs = [ pkgs.python3 ];
     extDir = ../../modules/nixos/pi-chat/extensions;
@@ -20,7 +20,7 @@ pkgs.runCommand "restart-pi-e2e-test"
     mkdir -p "$work"
     python3 ${./driver.py} \
       ${pkgs.lib.getExe piPkg} \
-      ${../streaming-pi-e2e/mock-llm.py} \
+      ${../pi-rpc-streaming/mock-llm.py} \
       "$extDir" \
       "$work"
     touch $out

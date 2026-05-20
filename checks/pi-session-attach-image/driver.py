@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end attach-image contract for the chat plugin.
+"""Attach-image contract test for the chat plugin.
 
 We mount PiSession.qml directly inside a small test shell, bypass the
 noctalia plugin host and the pi-chat NixOS module, and exercise the

@@ -11,7 +11,7 @@
 let
   piPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
 in
-pkgs.runCommand "attach-image-e2e-test"
+pkgs.runCommand "pi-session-attach-image-test"
   {
     nativeBuildInputs = [
       pkgs.python3
@@ -38,7 +38,7 @@ pkgs.runCommand "attach-image-e2e-test"
     python3 ${./driver.py} \
       ${pkgs.lib.getExe piPkg} \
       ${pkgs.lib.getExe pkgs.quickshell} \
-      ${../streaming-pi-e2e/mock-llm.py} \
+      ${../pi-rpc-streaming/mock-llm.py} \
       "$extDir" \
       ${./.} \
       "$pluginDir" \

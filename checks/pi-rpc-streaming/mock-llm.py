@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal OpenAI Chat Completions mock used by the streaming-pi-e2e
+"""Minimal OpenAI Chat Completions mock used by the pi-rpc-streaming
 check. Speaks just enough of the protocol for pi-mono's
 "openai-completions" provider to be happy:
 

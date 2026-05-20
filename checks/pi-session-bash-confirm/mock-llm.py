@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenAI Chat Completions mock for the bash-confirm e2e check.
+"""OpenAI Chat Completions mock for the bash-confirm check.
 
 Asks pi to run a bash command on the first turn, returns a short text
 reply once the tool result lands. Behaviour depends only on whether

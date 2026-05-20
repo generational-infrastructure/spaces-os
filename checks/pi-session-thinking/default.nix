@@ -1,4 +1,4 @@
-# Thinking display e2e test.
+# PiSession thinking-event handler component test.
 #
 # Injects mock pi RPC thinking events into PiSession via quickshell
 # IPC and asserts that thinking bubbles appear, stream, finalise, and
@@ -6,7 +6,7 @@
 #
 # No pi process, no LLM, no compositor. ~3s.
 { pkgs, ... }:
-pkgs.runCommand "thinking-e2e-test"
+pkgs.runCommand "pi-session-thinking-test"
   {
     nativeBuildInputs = [
       pkgs.python3

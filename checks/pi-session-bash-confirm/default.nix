@@ -1,4 +1,4 @@
-# End-to-end test for the bash-confirm pi extension talking pi RPC.
+# Integration test for the bash-confirm pi extension talking pi RPC.
 #
 # Spawns a mock OpenAI Chat Completions server in the build sandbox,
 # then drives pi --mode rpc with bash-confirm + llama-swap-discover
@@ -11,7 +11,7 @@
 let
   piPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
 in
-pkgs.runCommand "bash-confirm-e2e-test"
+pkgs.runCommand "pi-session-bash-confirm-test"
   {
     nativeBuildInputs = [ pkgs.python3 ];
     extDir = ../../modules/nixos/pi-chat/extensions;

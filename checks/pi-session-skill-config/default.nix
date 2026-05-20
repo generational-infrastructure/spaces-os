@@ -13,7 +13,7 @@ let
   skillConfigDaemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
   skillConfig = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config;
 in
-pkgs.runCommand "skill-config-e2e-test"
+pkgs.runCommand "pi-session-skill-config-test"
   {
     nativeBuildInputs = [
       pkgs.python3

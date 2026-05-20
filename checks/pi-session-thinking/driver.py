@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end test for thinking display in the chat plugin.
+"""Component test for thinking display in the chat plugin.
 
 Injects mock pi RPC events (thinking_start / thinking_delta /
 thinking_end) into PiSession via quickshell IPC and asserts:

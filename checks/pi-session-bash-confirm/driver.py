@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end test for the bash-confirm pi extension talking real RPC.
+"""Integration test for the bash-confirm pi extension talking real RPC.
 
 Spawns a mock OpenAI Chat Completions server, then drives pi --mode rpc
 with the bash-confirm + llama-swap-discover extensions loaded. Sends a
