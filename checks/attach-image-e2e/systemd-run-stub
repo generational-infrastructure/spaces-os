@@ -1,0 +1,26 @@
+#!/bin/sh
+# Stand-in for systemd-run inside the build sandbox. The plugin spawns
+# pi via `systemd-run --user --pipe --quiet --collect [--unit] [--slice]
+# [--service-type] [--working-directory] [--setenv=KEY=VAL …] [--property
+# …] -- piBin …pi-args`. We have no user-mode systemd here, so we strip
+# every flag, preserve --setenv assignments, and exec the tail.
+#
+# The result is pi running as a normal subprocess with the same env the
+# real sandbox would inject. None of the sandboxing properties matter
+# for asserting the wire-protocol path; that's covered separately by the
+# VM test.
+env_args=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --setenv=*)
+      env_args="$env_args ${1#--setenv=}"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+# shellcheck disable=SC2086
+exec env $env_args "$@"

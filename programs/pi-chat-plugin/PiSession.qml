@@ -572,7 +572,26 @@ QtObject {
   }
 
   function _readImage(path) {
+    // Immediately show the user's attachment in the chat list so there's
+    // visual feedback the moment the picker closes. The base64 encoding
+    // runs asynchronously; the prompt is sent to pi on completion.
+    const id = _localId();
+    _appendMessage({
+      id: id,
+      from: "me",
+      text: "",
+      ts: _now(),
+      state: "sent",
+      tries: 0,
+      ack: "",
+      image: path,
+      replyTo: replyTarget ? replyTarget.id : "",
+      type: "",
+    });
+    replyTarget = null;
+    needsPersist();
     const reader = _imageReaderComponent.createObject(session);
+    reader._imagePath = path;
     reader.command = ["sh", "-c",
       "mt=$(file -b --mime-type \"$1\"); " +
       "b64=$(base64 -w0 \"$1\"); " +
@@ -618,6 +637,7 @@ QtObject {
 
   readonly property Component _imageReaderComponent: Component {
     Process {
+      property string _imagePath: ""
       property string _staged: ""
       stdout: StdioCollector { onStreamFinished: _staged = text }
       onExited: code => {

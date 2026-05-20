@@ -1,0 +1,2 @@
+module Commons
+singleton Logger 1.0 Logger.qml
