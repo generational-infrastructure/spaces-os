@@ -73,6 +73,7 @@ QtObject {
   property var _process: null
   property var _stopProcess: null
   property string _streamingId: ""    // id of the bubble currently receiving deltas
+  property string _thinkingId: ""    // id of the bubble currently receiving thinking deltas
   property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
   // Cache of unanswered extension_ui_request ids so we can decline them
@@ -178,6 +179,7 @@ QtObject {
     typing = false;
     lastError = "";
     _streamingId = "";
+    _thinkingId = "";
     spawn();
     _send({ type: "new_session" });
   }
@@ -434,18 +436,65 @@ QtObject {
         messages = arr;
       }
       _streamingId = "";
+    } else if (me.type === "thinking_start") {
+      _thinkingId = "thinking-" + _now().toString(36);
+      _appendMessage({
+        id: _thinkingId,
+        from: "peer",
+        text: "",
+        ts: _now(),
+        state: "streaming",
+        tries: 0,
+        ack: "",
+        image: "",
+        replyTo: "",
+        type: "thinking",
+      });
+    } else if (me.type === "thinking_delta") {
+      if (!_thinkingId) return;
+      const arr = messages.slice();
+      const i = arr.findIndex(x => x.id === _thinkingId);
+      if (i >= 0) {
+        arr[i] = Object.assign({}, arr[i], { text: arr[i].text + (me.delta || "") });
+        messages = arr;
+      }
+    } else if (me.type === "thinking_end") {
+      if (!_thinkingId) return;
+      const arr = messages.slice();
+      const i = arr.findIndex(x => x.id === _thinkingId);
+      if (i >= 0) {
+        const finalText = me.content || arr[i].text;
+        if (!finalText) {
+          // Empty thinking block (omitted/summarized) — remove it.
+          arr.splice(i, 1);
+        } else {
+          arr[i] = Object.assign({}, arr[i], { state: "sent", text: finalText });
+        }
+        messages = arr;
+      }
+      _thinkingId = "";
     }
   }
 
   function _finalizeStreaming() {
-    if (!_streamingId) return;
-    const arr = messages.slice();
-    const i = arr.findIndex(x => x.id === _streamingId);
-    if (i >= 0) {
-      arr[i] = Object.assign({}, arr[i], { state: "sent" });
-      messages = arr;
+    if (_streamingId) {
+      const arr = messages.slice();
+      const i = arr.findIndex(x => x.id === _streamingId);
+      if (i >= 0) {
+        arr[i] = Object.assign({}, arr[i], { state: "sent" });
+        messages = arr;
+      }
+      _streamingId = "";
     }
-    _streamingId = "";
+    if (_thinkingId) {
+      const arr = messages.slice();
+      const i = arr.findIndex(x => x.id === _thinkingId);
+      if (i >= 0) {
+        arr[i] = Object.assign({}, arr[i], { state: "sent" });
+        messages = arr;
+      }
+      _thinkingId = "";
+    }
   }
 
   function _appendToolBubble(ev) {

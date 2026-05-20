@@ -44,6 +44,7 @@ Item {
   readonly property bool isNotification: (msg.type ?? "") === "notification"
   readonly property bool isConfirm: (msg.type ?? "") === "confirm"
   readonly property bool isPrompt: (msg.type ?? "") === "prompt"
+  readonly property bool isThinking: (msg.type ?? "") === "thinking"
   // Match locally — O(1) and can't drift from Panel's hit list since
   // it's the same predicate.
   readonly property bool searchHit:
@@ -52,7 +53,8 @@ Item {
   implicitHeight: row.isConfirm ? confirmCard.implicitHeight
                                 : row.isPrompt ? promptCard.implicitHeight
                                 : row.isNotification ? notifText.implicitHeight
-                                                     : bubble.implicitHeight
+                                : row.isThinking ? thinkingText.implicitHeight
+                                                 : bubble.implicitHeight
 
   // Hover-reveal reply button in the 15% gutter beside the bubble.
   // Lives on the row so it never covers text and doesn't fight
@@ -66,7 +68,7 @@ Item {
     anchors.right: row.mine ? bubble.left : undefined
     anchors.margins: Style.marginXS
     opacity: (hov.hovered || hovering) ? 1 : 0
-    visible: !row.isConfirm && !row.isPrompt && !row.isNotification && opacity > 0
+    visible: !row.isConfirm && !row.isPrompt && !row.isNotification && !row.isThinking && opacity > 0
     Behavior on opacity { NumberAnimation { duration: 100 } }
     onClicked: row.replyRequested()
   }
@@ -78,7 +80,7 @@ Item {
     anchors.left:  row.isNotification ? undefined : (row.mine ? undefined : parent.left)
     anchors.right: row.isNotification ? undefined : (row.mine ? parent.right : undefined)
     anchors.horizontalCenter: row.isNotification ? parent.horizontalCenter : undefined
-    visible: !row.isNotification && !row.isConfirm && !row.isPrompt
+    visible: !row.isNotification && !row.isConfirm && !row.isPrompt && !row.isThinking
     // Image/quote/streaming bubbles snap to the cap; plain text shrinks
     // to fit so short replies don't stretch edge-to-edge.
     width: ((msg.image ?? "") !== "" || (msg.replyTo ?? "") !== "" || (msg.state ?? "") === "streaming")
@@ -227,6 +229,20 @@ Item {
     horizontalAlignment: Text.AlignHCenter
     wrapMode: Text.Wrap
     pointSize: Style.fontSizeM
+    color: Qt.alpha(Color.mOnSurface, 0.45)
+  }
+
+  // Thinking: small grey text, no bubble, left-aligned. Streams in
+  // real-time as the model reasons, then stays as a faded record.
+  NText {
+    id: thinkingText
+    visible: row.isThinking
+    anchors.left: parent.left
+    width: parent.width * 0.85
+    text: (msg.text || "") !== "" ? msg.text : "thinking…"
+    wrapMode: Text.Wrap
+    pointSize: Style.fontSizeS
+    font.italic: true
     color: Qt.alpha(Color.mOnSurface, 0.45)
   }
 
