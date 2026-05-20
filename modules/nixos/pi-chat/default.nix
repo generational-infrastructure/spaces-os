@@ -97,6 +97,14 @@ let
   };
 
   piSettingsJson = jsonFormat.generate "pi-chat-settings.json" piSettings;
+
+  # Allowlist of regex patterns whose bash invocations skip the
+  # bash-confirm prompt. The bash-confirm extension reads this file at
+  # load from $PI_CODING_AGENT_DIR/bash-confirm.json — keep the name in
+  # sync with modules/nixos/pi-chat/extensions/bash-confirm.ts.
+  bashConfirmJson = jsonFormat.generate "pi-chat-bash-confirm.json" {
+    inherit (cfg.bashConfirm) allowPatterns;
+  };
   piModelsJson = jsonFormat.generate "pi-chat-models.json" cfg.piModels;
 
   piAuthJson = jsonFormat.generate "pi-chat-auth.json" {
@@ -277,6 +285,25 @@ in
       '';
     };
 
+    bashConfirm = {
+      allowPatterns = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "^skill-config(\\s|$)" ];
+        description = ''
+          ECMAScript regex patterns whose `bash` invocations skip the
+          bash-confirm prompt. The user/LLM still issues the command
+          through pi's normal bash tool, but the extension allows it
+          without prompting. Default whitelists every `skill-config`
+          subcommand because that CLI proxies through a dedicated IPC
+          daemon whose input/output never carries attacker-controlled
+          payloads.
+
+          Patterns are matched anywhere in the command unless you anchor
+          them yourself with `^` / `$`.
+        '';
+      };
+    };
+
     piSettings = lib.mkOption {
       inherit (jsonFormat) type;
       default = { };
@@ -393,6 +420,7 @@ in
       # launch without a special-case branch.
       ''f %h/${sessionsIndexRel} 0644 - - - {"version":1,"sessions":[],"activeSessionId":null}''
       "L+ %h/${piAgentRel}/settings.json - - - - ${piSettingsJson}"
+      "L+ %h/${piAgentRel}/bash-confirm.json - - - - ${bashConfirmJson}"
       # skill-config CLI resolves schemas from $state_dir/skills-defs/<skill>/SKILL.md.
       # Symlink each skill so request-input can validate fields before
       # contacting the daemon.

@@ -216,6 +216,52 @@ def run_scenario(pi_bin, env, work_dir, confirmed):
         pi.close()
 
 
+def run_scenario_allowed(pi_bin, env, work_dir):
+    """Allowlist matches the mock's bash command → no confirm prompt at all.
+
+    Pi should jump straight from `prompt` to executing the tool call, the
+    mock returns its follow-up text, and the agent_end carries assistant
+    text. If an extension_ui_request slips through, the allowlist plumbing
+    is broken — fail loudly.
+    """
+    cwd = os.path.join(work_dir, "cwd-allowed")
+    os.makedirs(cwd, exist_ok=True)
+    pi = PiClient(pi_bin, env, cwd)
+    try:
+        pi.send({"type": "prompt", "message": "please run a bash command"})
+        events = pi.drain_until(lambda e: e.get("type") == "agent_end", timeout=120)
+        prompts = [e for e in events if e.get("type") == "extension_ui_request"]
+        if prompts:
+            fail(
+                "allowlist scenario produced unexpected extension_ui_request(s); "
+                f"the bash-confirm allowlist is not being honored: {prompts!r}"
+            )
+        text_seen = False
+        for e in events:
+            if e.get("type") == "message_update":
+                me = e.get("assistantMessageEvent") or {}
+                if me.get("type") in ("text_delta", "text_end"):
+                    text_seen = True
+            if e.get("type") == "agent_end":
+                for m in e.get("messages") or []:
+                    if not isinstance(m, dict) or m.get("role") != "assistant":
+                        continue
+                    content = m.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for c in content:
+                        if (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
+                            and (c.get("text") or "").strip()
+                        ):
+                            text_seen = True
+        if not text_seen:
+            fail(f"no assistant text observed for allowlist scenario: {events!r}")
+    finally:
+        pi.close()
+
+
 def main():
     if len(sys.argv) != 5:
         fail("usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>")
@@ -239,6 +285,17 @@ def main():
     with open(os.path.join(agent_dir, "settings.json"), "w") as fh:
         json.dump(settings, fh)
 
+    # Second agent dir wired with a bash-confirm.json allowlist that
+    # matches the mock's "printf hello-from-bash" command exactly. The
+    # plain confirm scenarios reuse `agent_dir`, which never sees this
+    # file, so the order is independent.
+    allow_dir = os.path.join(work_dir, "agent-allow")
+    os.makedirs(allow_dir, exist_ok=True)
+    with open(os.path.join(allow_dir, "settings.json"), "w") as fh:
+        json.dump(settings, fh)
+    with open(os.path.join(allow_dir, "bash-confirm.json"), "w") as fh:
+        json.dump({"allowPatterns": ["^printf hello-from-bash$"]}, fh)
+
     mock, url = start_mock_llm(mock_script, work_dir)
     try:
         env = os.environ.copy()
@@ -253,6 +310,8 @@ def main():
         )
         run_scenario(pi_bin, env, work_dir, confirmed=True)
         run_scenario(pi_bin, env, work_dir, confirmed=False)
+        allow_env = dict(env, PI_CODING_AGENT_DIR=allow_dir)
+        run_scenario_allowed(pi_bin, allow_env, work_dir)
     finally:
         mock.terminate()
         try:
