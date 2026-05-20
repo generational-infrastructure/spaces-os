@@ -164,8 +164,9 @@ def main():
         )
         ev = read_event(
             sock_file,
-            lambda e: e.get("kind") == "models"
-            and active_model(e) == "local/alt-model",
+            lambda e: (
+                e.get("kind") == "models" and active_model(e) == "local/alt-model"
+            ),
             "models event marking alt-model active",
         )
         if active_model(ev) != "local/alt-model":
@@ -177,9 +178,11 @@ def main():
         send(sock, {"cmd": "send", "text": "!restart"})
         read_event(
             sock_file,
-            lambda e: e.get("kind") == "msg"
-            and e.get("msg", {}).get("dir") == "in"
-            and "Session restarted" in (e.get("msg", {}).get("content", "")),
+            lambda e: (
+                e.get("kind") == "msg"
+                and e.get("msg", {}).get("dir") == "in"
+                and "Session restarted" in (e.get("msg", {}).get("content", ""))
+            ),
             "Session restarted ack",
         )
 
