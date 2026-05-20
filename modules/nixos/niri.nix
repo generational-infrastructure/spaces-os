@@ -56,5 +56,7 @@ in
   systemd.user.services.niri = {
     environment.NIRI_CONFIG = toString niriConfig;
     enableDefaultPath = false;
+    # Avoid killing the desktop on deploy
+    restartIfChanged = false;
   };
 }
