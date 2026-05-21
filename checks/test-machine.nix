@@ -47,6 +47,20 @@ let
   testPiChat = ./test-pi-chat.py;
   mockLlm = ./test-machine-mock-llm.py;
 
+  # Python helper that strips the pi-chat bar widget from every section
+  # of ~/.config/noctalia/settings.json. Used by the regression subtest
+  # that simulates a host whose persisted settings.json predates the
+  # autoload widget-placement logic (mirrors hyperconfig/amy).
+  stripPiChatWidget = pkgs.writeText "strip-pi-chat-widget.py" ''
+    import json
+    p = "/home/test/.config/noctalia/settings.json"
+    d = json.load(open(p))
+    w = d.setdefault("bar", {}).setdefault("widgets", {})
+    for s in ("left", "center", "right"):
+        w[s] = [x for x in w.get(s, []) if x.get("id") != "plugin:pi-chat"]
+    json.dump(d, open(p, "w"))
+  '';
+
   baseTest = pkgs.testers.runNixOSTest {
     name = "test-machine${lib.optionalString useOpenrouter "-openrouter"}";
     node.specialArgs = { inherit inputs; };
@@ -243,6 +257,86 @@ let
                 )
                 raise Exception(
                     f"chat plugin failed to auto-enable in noctalia: {plugins_raw}"
+                )
+
+        def settings_widget_ids():
+            raw = machine.succeed(
+                "cat /home/test/.config/noctalia/settings.json"
+            )
+            data = _json.loads(raw)
+            widgets = data.get("bar", {}).get("widgets", {})
+            ids = []
+            for section in ("left", "center", "right"):
+                for w in widgets.get(section, []):
+                    if isinstance(w, dict) and "id" in w:
+                        ids.append((section, w["id"]))
+            return ids
+
+        with subtest("pi-chat bar widget is placed in the center section"):
+            # PluginAutoload.qml places the chat widget in `center` on
+            # first autoload. Settings.data persists to settings.json
+            # asynchronously after addWidgetToBar mutates it.
+            import time as _time
+            deadline = _time.monotonic() + 60
+            placement = None
+            while _time.monotonic() < deadline:
+                for section, wid in settings_widget_ids():
+                    if wid == "plugin:pi-chat":
+                        placement = section
+                        break
+                if placement:
+                    break
+                _time.sleep(0.5)
+            if placement != "center":
+                raise Exception(
+                    f"pi-chat bar widget not in center; saw placement={placement!r} "
+                    f"widgets={settings_widget_ids()}"
+                )
+
+        with subtest("widget is re-placed when stripped from settings.json on restart"):
+            # Regression for the hyperconfig/amy case: plugins.json
+            # already records pi-chat (so the original "first-discovery
+            # only" code path skipped widget placement), but the bar
+            # widget is no longer in settings.json. Patched
+            # PluginAutoload must re-add it on the next noctalia start.
+            machine.copy_from_host(
+                "${stripPiChatWidget}", "/tmp/strip-pi-chat-widget.py"
+            )
+            machine.succeed(
+                "systemctl --user --machine=test@.host stop noctalia-shell.service"
+            )
+            machine.succeed(
+                "sudo -u test python3 /tmp/strip-pi-chat-widget.py"
+            )
+            ids_after_strip = [
+                wid for _section, wid in settings_widget_ids()
+                if wid == "plugin:pi-chat"
+            ]
+            if ids_after_strip:
+                raise Exception(
+                    f"sanity: pi-chat widget still present after strip: {ids_after_strip!r}"
+                )
+            machine.succeed(
+                "systemctl --user --machine=test@.host start noctalia-shell.service"
+            )
+            machine.wait_until_succeeds(
+                "systemctl --user --machine=test@.host is-active noctalia-shell.service",
+                timeout=30,
+            )
+            deadline = _time.monotonic() + 60
+            restored = None
+            while _time.monotonic() < deadline:
+                for section, wid in settings_widget_ids():
+                    if wid == "plugin:pi-chat":
+                        restored = section
+                        break
+                if restored:
+                    break
+                _time.sleep(0.5)
+            if restored != "center":
+                raise Exception(
+                    "patched noctalia did not re-place the pi-chat bar widget; "
+                    f"saw placement={restored!r} widgets={settings_widget_ids()}"
                 )
 
         with subtest("plugin IPC verbs are registered"):

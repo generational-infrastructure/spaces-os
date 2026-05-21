@@ -43,13 +43,25 @@ Singleton {
     "opencrow-chat": true,
   })
 
-  // Plugin IDs already known from plugins.json before this session started.
-  // The regular plugin scan adds entries to pluginStates with enabled:false,
-  // so we need a snapshot from BEFORE that to know what's actually new.
+  // Snapshot of plugin IDs persisted in plugins.json on disk, taken at
+  // the start of every processAutoloadDir() call (race-free: we read
+  // the file ourselves rather than depending on PluginRegistry.FileView
+  // having loaded, and rather than caching a Component.onCompleted
+  // snapshot that races against the scan).
   property var initialKnownPlugins: ({})
 
-  Component.onCompleted: {
-    // Read plugins.json to capture user state before noctalia adds scan entries.
+  // Scan the autoload dir, GC stale autoload-owned entries, and register
+  // new ones. Invokes `done` after the in-memory pluginStates is settled
+  // so the caller can fire pluginsChanged with the cleaned-up view.
+  function processAutoloadDir(done) {
+    Logger.i("PluginAutoload", "Scanning autoload dir:", root.autoloadDir);
+    // Snapshot plugins.json on disk first. We need to know which ids
+    // were persisted BEFORE PluginRegistry.scanPluginFolder injected
+    // scan-only entries (enabled:false) into pluginStates — otherwise
+    // we cannot tell "first discovery, auto-enable" from "already
+    // known, preserve user state". A previous version of this patch
+    // took the snapshot in Component.onCompleted, which raced against
+    // the scan and produced order-dependent widget placement.
     var snap = Qt.createQmlObject(`
       import QtQuick
       import Quickshell.Io
@@ -59,25 +71,24 @@ Singleton {
         running: true
       }
     `, root, "AutoloadSnapshot");
+
     snap.exited.connect(function () {
+      root.initialKnownPlugins = ({});
       try {
-        var data = JSON.parse(String(snap.stdout.text || "{}"));
-        var states = data.states || {};
-        for (var k in states) {
+        var snapData = JSON.parse(String(snap.stdout.text || "{}"));
+        var snapStates = snapData.states || {};
+        for (var k in snapStates) {
           root.initialKnownPlugins[k] = true;
         }
       } catch (e) {
         Logger.w("PluginAutoload", "Failed to snapshot plugins.json:", e.toString());
       }
       snap.destroy();
+      _scanAutoloadDir(done);
     });
   }
 
-  // Scan the autoload dir, GC stale autoload-owned entries, and register
-  // new ones. Invokes `done` after the in-memory pluginStates is settled
-  // so the caller can fire pluginsChanged with the cleaned-up view.
-  function processAutoloadDir(done) {
-    Logger.i("PluginAutoload", "Scanning autoload dir:", root.autoloadDir);
+  function _scanAutoloadDir(done) {
     var scan = Qt.createQmlObject(`
       import QtQuick
       import Quickshell.Io
@@ -163,16 +174,27 @@ Singleton {
   }
 
   // Called from PluginService once all enabled plugins finished loading.
-  // Adds bar widgets for plugins that were autoloaded in this session.
+  // Ensures every autoload-owned plugin with a `barWidget` entry point
+  // is placed somewhere on the bar. `PluginService.addWidgetToBar` is
+  // idempotent — it bails when the widget id is already in left, center,
+  // or right — so this leaves user customizations (e.g. a widget the
+  // user moved to `right`) untouched and only re-places widgets that
+  // are genuinely absent. This matters across reboots: once a plugin
+  // is recorded in plugins.json, the first-discovery branch above stops
+  // queueing it, so without this enforcement a settings.json that lost
+  // the widget (manual edit, noctalia migration, etc.) would leave the
+  // plugin loaded but invisible until the user re-added it by hand.
   function addAutoloadedWidgets() {
-    for (var pid in root.pendingAutoloads) {
+    var states = PluginRegistry.pluginStates || {};
+    for (var pid in states) {
+      var entry = states[pid];
+      if (!entry || entry.autoload !== true) continue;
       var manifest = PluginRegistry.getPluginManifest(pid);
-      if (manifest && manifest.entryPoints && manifest.entryPoints.barWidget) {
-        var widgetId = "plugin:" + pid;
-        var section = root.pendingAutoloads[pid].barSection || "right";
-        PluginService.addWidgetToBar(widgetId, section);
-        Logger.i("PluginAutoload", "Added autoloaded bar widget:", widgetId, "to", section);
-      }
+      if (!manifest || !manifest.entryPoints || !manifest.entryPoints.barWidget) continue;
+      var widgetId = "plugin:" + pid;
+      var section = (root.pendingAutoloads[pid] && root.pendingAutoloads[pid].barSection) || "center";
+      PluginService.addWidgetToBar(widgetId, section);
+      Logger.i("PluginAutoload", "Ensured autoload widget on bar:", widgetId, "default section:", section);
     }
     root.pendingAutoloads = ({});
   }
