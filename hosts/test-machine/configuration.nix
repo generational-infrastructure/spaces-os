@@ -34,6 +34,11 @@ in
   # Override distro default user for greetd auto-login.
   services.greetd.settings.default_session.user = "test";
 
+  # test-machine is always run as a QEMU VM (via `nix build .#test-vm`
+  # or `checks/test-machine.nix`'s runNixOSTest). Use Alt so the guest
+  # doesn't fight the host compositor's Super grab.
+  services.distro.niri.modKey = "Alt";
+
   # Expose a second model so the chat dropdown has more than one entry.
   # The full list shown by `!models` is discovered at runtime from
   # llama-swap's /v1/models endpoint.

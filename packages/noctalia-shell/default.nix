@@ -6,5 +6,4 @@
 # whose nixpkgs ships a different version can grab this prebuilt
 # directly via `inputs.distro.packages.${system}.noctalia-shell` instead
 # of registering the overlay and re-patching their own nixpkgs.
-{ inputs, pkgs, ... }:
-inputs.self.lib.patchNoctaliaShell pkgs.noctalia-shell
+{ inputs, pkgs, ... }: inputs.self.lib.patchNoctaliaShell pkgs.noctalia-shell

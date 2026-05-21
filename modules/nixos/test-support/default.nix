@@ -45,6 +45,12 @@
   });
   systemd.user.services.niri.environment.NIRI_ALLOW_SOFTWARE_RENDERING = "1";
 
+  # ── VM-friendly modifier key ────────────────────────────────────
+  # Guest's Super grab fights with the host compositor (which
+  # captures Super for its own keybinds). Use Alt instead so VM-
+  # based tests can drive niri keybinds via virtio keyboard input.
+  services.distro.niri.modKey = "Alt";
+
   # ── Test wallpaper for OCR detection ────────────────────────────
   # The compositor starts with no default wallpaper renderer.  Spawn
   # swaybg with a pre-rendered wallpaper tiled with "DISTRO_TEST_OK"
