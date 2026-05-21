@@ -55,6 +55,10 @@ let
     sed -i '/^binds {$/a\    Super+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:pi-chat" "toggle"; }' $out
     # Super+S toggles voice-to-text recording.
     sed -i '/^binds {$/a\    Super+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
+    # Mod+Shift+N restarts the noctalia user service so a freshly
+    # rebuilt config / patched build lands without a full session
+    # logout.
+    sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "systemctl" "--user" "restart" "noctalia-shell.service"; }' $out
   '';
 in
 {
