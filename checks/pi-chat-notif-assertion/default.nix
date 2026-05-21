@@ -2,7 +2,7 @@
 # noctalia is launched by the systemd user unit (so the
 # `noctalia-shell.service` Environment= lines reach the process).
 #
-# A historical bug: amy's hyperconfig imported `nixosModules.noctalia-plugin`
+# A historical bug: a downstream config imported `nixosModules.noctalia-plugin`
 # (pi-chat + llama-swap) but NOT `nixosModules.noctalia` (the unit + ExecStart).
 # noctalia was started by niri's spawn-at-startup, so the redirect never
 # reached the running process and the notifications skill always returned

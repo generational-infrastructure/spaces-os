@@ -33,6 +33,24 @@ let
     grep -q 'spawn-at-startup "waybar"' $out  # fail loudly if upstream renamed it
     sed -i '/spawn-at-startup "waybar"/d' $out
     sed -i '/^input {$/a\    mod-key "${cfg.modKey}"' $out
+    # Replace upstream's touchpad block (mostly comments) with our
+    # opinionated libinput defaults: clickfinger button mapping, tap to
+    # click, drag-lock, natural scrolling, etc.
+    grep -q '^    touchpad {$' $out  # fail loudly if upstream renamed it
+    sed -i '/^    touchpad {$/,/^    }$/d' $out
+    sed -i '/^    mouse {$/i\
+    touchpad {\
+        tap\
+        dwt\
+        dwtp\
+        drag true\
+        drag-lock\
+        natural-scroll\
+        click-method "clickfinger"\
+        tap-button-map "left-right-middle"\
+    }\
+
+' $out
     # Super+A toggles the pi-chat panel in noctalia.
     sed -i '/^binds {$/a\    Super+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:pi-chat" "toggle"; }' $out
     # Super+S toggles voice-to-text recording.

@@ -50,7 +50,7 @@ let
   # Python helper that strips the pi-chat bar widget from every section
   # of ~/.config/noctalia/settings.json. Used by the regression subtest
   # that simulates a host whose persisted settings.json predates the
-  # autoload widget-placement logic (mirrors hyperconfig/amy).
+  # autoload widget-placement logic.
   stripPiChatWidget = pkgs.writeText "strip-pi-chat-widget.py" ''
     import json
     p = "/home/test/.config/noctalia/settings.json"
@@ -294,7 +294,7 @@ let
                 )
 
         with subtest("widget is re-placed when stripped from settings.json on restart"):
-            # Regression for the hyperconfig/amy case: plugins.json
+            # Regression for the case where plugins.json
             # already records pi-chat (so the original "first-discovery
             # only" code path skipped widget placement), but the bar
             # widget is no longer in settings.json. Patched
@@ -340,7 +340,7 @@ let
                 )
 
         with subtest("plugin-sync wipes legacy entries from plugins-autoload"):
-            # Mirrors the hyperconfig/amy case where a previous distro
+            # Mirrors the case where a previous distro
             # generation wrote `~/.config/noctalia/plugins-autoload/<old-id>`
             # symlinks (the plugin was renamed at some point) and the
             # current generation has no record of them. distro owns this
