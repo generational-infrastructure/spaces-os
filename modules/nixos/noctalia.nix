@@ -30,6 +30,10 @@
       pkgs.libnotify
     ];
 
+    # noctalia's Battery bar widget queries UPower over D-Bus; without
+    # upowerd running the widget renders blank on laptops.
+    services.upower.enable = true;
+
     # Symlink pi-chat into the autoload directory so noctalia
     # auto-enables it and places its bar widget in the center section.
     systemd.user.tmpfiles.rules = [
