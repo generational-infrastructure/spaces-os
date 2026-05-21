@@ -22,6 +22,7 @@ Item {
     piAgentDir: Quickshell.env("TEST_AGENT_DIR")
     workspacePath: Quickshell.env("TEST_WORKSPACE")
     llmUrl: "http://127.0.0.1:1"
+    backend: root
   }
 
   // ── skill-config subscriber (mirror of PiChatBackend) ──────────

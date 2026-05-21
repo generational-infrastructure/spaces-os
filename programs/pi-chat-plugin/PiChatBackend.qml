@@ -452,6 +452,7 @@ Item {
       let obj = _sessionObjs[s.id];
       if (!obj) {
         obj = _piSessionComponent.createObject(root, {
+          backend: root,
           sessionId: s.id,
           sessionName: s.name,
           workspacePath: s.workspacePath,

@@ -41,6 +41,7 @@ QtObject {
   property string modelPref: ""
 
   // ── deployment env (set by the backend before spawn) ──
+  property var    backend: null      // PiChatBackend, used for skill-config socket sends
   property string piBin              // /nix/store/.../bin/pi
   property string stateDir           // ~/.local/state/distro/pi
   property string piAgentDir         // <stateDir>/pi-agent
@@ -156,14 +157,18 @@ QtObject {
   }
 
   function promptRespond(id, value) {
-    // Skill-config prompts live in messages but the daemon socket
-    // owns them, so we just patch local state here. PiChatBackend's
-    // skill-config sock send does the wire write.
+    // Patch local state for immediate UI feedback, then push the value
+    // to the skill-config daemon over the sidecar socket. The daemon
+    // unblocks the waiting `skill-config request-input` CLI, which
+    // writes the value to disk and exits 0 so pi sees the saved
+    // confirmation in its bash tool output.
     patch(id, { promptState: "submitted", text: "" });
+    if (backend) backend.skillConfigSend({ op: "submit", request_id: id, value: value });
   }
 
   function promptCancel(id) {
     patch(id, { promptState: "cancelled" });
+    if (backend) backend.skillConfigSend({ op: "cancel", request_id: id });
   }
 
   // Wipe local UI and tell pi to start a fresh session in-place.
