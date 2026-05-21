@@ -508,14 +508,20 @@ in
         set -eu
         src=${pluginDir}
         dst="$HOME/.config/noctalia/plugins/${pluginId}"
-        mkdir -p "$(dirname "$dst")" "$HOME/.config/noctalia/plugins-autoload"
+        autoload_dir="$HOME/.config/noctalia/plugins-autoload"
+        mkdir -p "$(dirname "$dst")" "$autoload_dir"
         rm -rf "$dst"
         # cp without -p leaves mtimes at the current time.
         cp -rT "$src" "$dst"
         chmod -R u+w "$dst"
-        # Make plugins-autoload point at the same materialized copy
-        # so noctalia's autoload-driven enable-state stays in sync.
-        ln -sfn "$dst" "$HOME/.config/noctalia/plugins-autoload/${pluginId}"
+        # Distro owns plugins-autoload/ exclusively: blow away every
+        # entry on each run so symlinks written by a previous distro
+        # generation (renamed plugin ids, dropped plugins, ...) don't
+        # linger and keep ghost entries alive in plugins.json. The
+        # immediately-following ln -sfn re-materializes whatever we
+        # currently ship.
+        find "$autoload_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        ln -sfn "$dst" "$autoload_dir/${pluginId}"
       '';
     };
 

@@ -339,6 +339,84 @@ let
                     f"saw placement={restored!r} widgets={settings_widget_ids()}"
                 )
 
+        with subtest("plugin-sync wipes legacy entries from plugins-autoload"):
+            # Mirrors the hyperconfig/amy case where a previous distro
+            # generation wrote `~/.config/noctalia/plugins-autoload/<old-id>`
+            # symlinks (the plugin was renamed at some point) and the
+            # current generation has no record of them. distro owns this
+            # directory exclusively, so plugin-sync must wipe it on every
+            # run and re-materialize just the currently-shipped ids.
+            # Without that wipe the legacy symlinks survive forever:
+            # PluginAutoload's GC only drops a plugins.json entry when
+            # its manifest is gone from the autoload dir, so a live
+            # symlink to a still-resident /nix/store path keeps the
+            # ghost entry alive across reboots.
+            machine.succeed(
+                "systemctl --user --machine=test@.host stop noctalia-shell.service"
+            )
+            # Plant a legacy autoload symlink. Its target only needs to
+            # carry a manifest.json so a naive (no-wipe) plugin-sync run
+            # would leave it intact and PluginAutoload would treat it as
+            # live. Reuse the materialized pi-chat dir for that.
+            machine.succeed(
+                "sudo -u test ln -sfn "
+                "/home/test/.config/noctalia/plugins/pi-chat "
+                "/home/test/.config/noctalia/plugins-autoload/opencrow-chat"
+            )
+            # Plant a matching plugins.json entry to verify Layer-1 GC
+            # also drops it once the symlink is gone.
+            machine.succeed(
+                "sudo -u test python3 -c \""
+                "import json; "
+                "p='/home/test/.config/noctalia/plugins.json'; "
+                "d=json.load(open(p)); "
+                "d.setdefault('states', {})['opencrow-chat']="
+                "{'enabled': True, 'autoload': True, "
+                "'sourceUrl': 'https://github.com/noctalia-dev/noctalia-plugins'}; "
+                "json.dump(d, open(p, 'w'))\""
+            )
+            machine.succeed(
+                "test -L /home/test/.config/noctalia/plugins-autoload/opencrow-chat"
+            )
+
+            machine.succeed(
+                "systemctl --user --machine=test@.host restart "
+                "distro-pi-chat-plugin-sync.service"
+            )
+            # Sync wiped the legacy symlink; pi-chat's symlink survives.
+            machine.fail(
+                "test -e /home/test/.config/noctalia/plugins-autoload/opencrow-chat"
+            )
+            machine.succeed(
+                "test -L /home/test/.config/noctalia/plugins-autoload/pi-chat"
+            )
+
+            machine.succeed(
+                "systemctl --user --machine=test@.host start noctalia-shell.service"
+            )
+            machine.wait_until_succeeds(
+                "systemctl --user --machine=test@.host is-active noctalia-shell.service",
+                timeout=30,
+            )
+            # PluginAutoload's GC runs on first scan after start and
+            # rewrites plugins.json without the legacy id.
+            import time as _time
+            deadline = _time.monotonic() + 60
+            cleaned = False
+            while _time.monotonic() < deadline:
+                raw = machine.succeed(
+                    "cat /home/test/.config/noctalia/plugins.json"
+                )
+                if "opencrow-chat" not in _json.loads(raw).get("states", {}):
+                    cleaned = True
+                    break
+                _time.sleep(0.5)
+            if not cleaned:
+                raise Exception(
+                    "plugins.json still references opencrow-chat after wipe + restart: "
+                    + machine.succeed("cat /home/test/.config/noctalia/plugins.json")
+                )
+
         with subtest("plugin IPC verbs are registered"):
             # ipc show enumerates every IpcHandler target the running
             # daemon has bound. If our plugin's QML threw at load time
