@@ -77,7 +77,9 @@ Item {
       parser: SplitParser { onRead: () => {} }
     }
   }
-  function _sendOneShot(payload) {
+  // PiSession.promptRespond/promptCancel call this to push the value
+  // back to the daemon. Same shape as PiChatBackend.skillConfigSend.
+  function skillConfigSend(payload) {
     const c = skillOneShotComponent.createObject(root, {
       path: root.sockPath,
       payload: payload,
@@ -167,13 +169,10 @@ Item {
       return JSON.stringify(session.messages || []);
     }
     function submit(requestId: string, value: string) {
-      // Mirror PiChatBackend.skillConfigSend + PiSession.promptRespond
-      session.patch(requestId, { promptState: "submitted", text: "" });
-      root._sendOneShot({ op: "submit", request_id: requestId, value: value });
+      session.promptRespond(requestId, value);
     }
     function cancel(requestId: string) {
-      session.patch(requestId, { promptState: "cancelled" });
-      root._sendOneShot({ op: "cancel", request_id: requestId });
+      session.promptCancel(requestId);
     }
   }
 }
