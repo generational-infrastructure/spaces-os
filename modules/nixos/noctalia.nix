@@ -4,21 +4,29 @@
 # symlinks the pi-chat plugin into the autoload directory so it
 # is enabled automatically when noctalia starts.
 #
-# The patched package is materialized by extending `pkgs` locally rather
-# than by registering an overlay on `nixpkgs.overlays`. NixOS test
-# frameworks (and any other consumer that pins nixpkgs read-only) make
-# `nixpkgs.overlays` unmergeable, so a module-level overlay assignment
-# breaks `nix flake check`. `pkgs.extend` sidesteps that without
-# changing the resulting derivation.
+# The patched build is wired in via `nixpkgs.overlays`, so any
+# `pkgs.noctalia-shell` reference anywhere in the consumer's config
+# resolves to the patched derivation — including home-manager wrappers
+# that re-wrap it for their own env vars.
+#
+# Consumers whose nixpkgs ships a noctalia-shell version that the patch
+# was NOT generated against (currently ≥ 4.7.6) will see patchPhase
+# fail; bump nixpkgs, or grab the prebuilt
+# `inputs.distro.packages.<sys>.noctalia-shell` directly (built from
+# distro's own nixpkgs pin) and skip importing this module.
+#
+# `runNixOSTest` defaults to `pkgsReadOnly = true`, which makes
+# `nixpkgs.overlays` unmergeable from inside a node. Tests that import
+# this module must set `node.pkgsReadOnly = false;` (see
+# `checks/test-machine.nix`).
 { flake, ... }:
 { pkgs, ... }:
-let
-  pkgs' = pkgs.extend flake.overlays.noctalia;
-in
 {
   config = {
+    nixpkgs.overlays = [ flake.overlays.noctalia ];
+
     environment.systemPackages = [
-      pkgs'.noctalia-shell
+      pkgs.noctalia-shell
       pkgs.libnotify
     ];
 
@@ -35,9 +43,9 @@ in
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
-      restartTriggers = [ pkgs'.noctalia-shell ];
+      restartTriggers = [ pkgs.noctalia-shell ];
       serviceConfig = {
-        ExecStart = "${pkgs'.noctalia-shell}/bin/noctalia-shell";
+        ExecStart = "${pkgs.noctalia-shell}/bin/noctalia-shell";
         Restart = "on-failure";
         Slice = "session.slice";
         # Noctalia spawns helpers by bare name (`sh`, `wl-paste`, `voxtype`, ...)

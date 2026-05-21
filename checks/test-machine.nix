@@ -50,6 +50,10 @@ let
   baseTest = pkgs.testers.runNixOSTest {
     name = "test-machine${lib.optionalString useOpenrouter "-openrouter"}";
     node.specialArgs = { inherit inputs; };
+    # Required because `nixosModules.noctalia` registers an overlay via
+    # `nixpkgs.overlays`; runNixOSTest's default (pkgsReadOnly=true)
+    # would make that assignment fail.
+    node.pkgsReadOnly = false;
 
     nodes.test-machine =
       { lib, pkgs, ... }:

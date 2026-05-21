@@ -17,6 +17,10 @@
 pkgs.testers.runNixOSTest {
   name = "installer-target-session";
   node.specialArgs = { inherit inputs; };
+  # Required because `nixosModules.noctalia` registers an overlay via
+  # `nixpkgs.overlays`; runNixOSTest's default (pkgsReadOnly=true)
+  # would make that assignment fail.
+  node.pkgsReadOnly = false;
   enableOCR = true;
 
   nodes.target =
