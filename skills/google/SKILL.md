@@ -103,9 +103,12 @@ google-cli auth <profile>
 This:
 
 1. Picks a free loopback port and starts a local HTTP server on it.
-2. **Prints a Google consent URL to stdout.** Show the URL to the user
-   verbatim — tell them to open it in their browser, sign in with the
-   matching Google account, and approve the requested scopes.
+2. **Asks the noctalia plugin to open the consent URL in the user's
+   browser.** google-cli runs inside pi's sandbox, so it can't launch
+   Firefox directly — it sends the URL over a unix socket and the
+   plugin opens it in the real user session. The URL is also printed
+   to stdout, so if the browser open silently fails (no GUI session,
+   plugin not running) you can still surface the link to the user.
 3. Waits up to 5 minutes for Google's redirect to hit the loopback
    listener, exchanges the authorization code for a refresh token, and
    stores it as `google.<profile>.refresh_token` automatically.
@@ -118,6 +121,14 @@ Failure modes:
   in the consent screen. Offer to retry.
 - `timed out waiting for the OAuth callback` — the user did not finish
   the consent flow within the timeout. Offer to retry.
+- **`Access blocked: <app> has not completed the Google verification
+  process` / `Error 403: access_denied`** — the OAuth consent screen
+  is in **Testing** mode (the default) and the user's Google address
+  is not in the test-users list. Tell them to open
+  <https://console.cloud.google.com/apis/credentials/consent>, scroll
+  to **Test users**, click **Add users**, paste their own Google
+  address, save, then retry. (Step 1 of first-time setup already
+  covers this — users frequently skip it.)
 - `Google returned no refresh_token …` — happens when a previous
   consent for the same Cloud project is still active and Google skips
   the offline-access prompt. Have the user revoke pi-chat at

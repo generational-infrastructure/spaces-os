@@ -48,6 +48,7 @@ import socket
 import subprocess
 import sys
 import threading
+import webbrowser
 import urllib.parse
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -263,6 +264,41 @@ def _exchange_code(
         raise SystemExit(f"token exchange failed: HTTP {e.code} {detail.strip()}")
 
 
+def _open_url(url: str) -> None:
+    """Open `url` in the user's browser.
+
+    pi-chat runs each agent under a systemd-run sandbox (ProtectHome=
+    tmpfs + private namespaces), so a direct `webbrowser.open` spawns
+    Firefox/Chromium inside the sandbox where it cannot see the real
+    user profile (Firefox: "Profile Missing"). The noctalia pi-chat
+    plugin runs in the user's session and listens on a unix socket
+    bind-mounted into the sandbox at $DISTRO_OPEN_URL_SOCKET; writing a
+    single JSON line there delegates the open to the real session via
+    `Qt.openUrlExternally`.
+
+    When the env var is unset or the socket cannot be reached (headless
+    invocations, the unit test harness, the daemon being down) we fall
+    back to `webbrowser.open` so the helper stays useful outside the
+    pi-chat sandbox.
+    """
+    sock_path = os.environ.get("DISTRO_OPEN_URL_SOCKET")
+    if sock_path:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2.0)
+                s.connect(sock_path)
+                s.sendall((json.dumps({"url": url}) + "\n").encode())
+            return
+        except OSError:
+            # Daemon not running / stale bind / refused — fall through to
+            # the local webbrowser so the user at least gets *some* way to
+            # reach the URL.
+            pass
+    try:
+        webbrowser.open(url, new=2)
+    except webbrowser.Error:
+        pass
+
 def cmd_auth(args: argparse.Namespace) -> None:
     creds = load_profile(args.profile, require_refresh=False)
     scopes = list(DEFAULT_SCOPES)
@@ -281,10 +317,15 @@ def cmd_auth(args: argparse.Namespace) -> None:
     print(
         "\n──────────────────────────────────────────────────────────"
         "\n  Open this URL in your browser to authorize pi-chat:"
-        "\n──────────────────────────────────────────────────────────\n"
+        "\n──────────────────────────────────────────────────────────\n",
+        flush=True,
     )
-    print(url)
-    print(f"\nWaiting for the callback on {redirect_uri} (timeout: {args.timeout}s).\n")
+    print(url, flush=True)
+    print(
+        f"\nWaiting for the callback on {redirect_uri} (timeout: {args.timeout}s).\n",
+        flush=True,
+    )
+    _open_url(url)
 
     # handle_request returns either when one request is served or when
     # the timeout fires. Loop so a stray GET (favicon, refresh) doesn't

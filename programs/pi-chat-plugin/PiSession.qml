@@ -253,6 +253,7 @@ QtObject {
     const xdgRuntime = String(Quickshell.env("XDG_RUNTIME_DIR"));
     const sessionState = stateDir + "/sessions/" + sessionId;
     const skillSockHost = xdgRuntime + "/distro-skill-config.sock";
+    const openUrlSockHost = xdgRuntime + "/distro-pi-open-url.sock";
     const skillsDefs = stateDir + "/skills-defs";
     const skillConfigStore = stateDir + "/skill-config";
     // Dedicated dir for noctalia's notification history file. noctalia
@@ -279,6 +280,7 @@ QtObject {
       "--setenv=PI_CODING_AGENT_DIR=" + piAgentDir,
       "--setenv=LLAMA_SWAP_BASE_URL=" + llmUrl,
       "--setenv=SKILL_CONFIG_SOCKET=" + skillSockHost,
+      "--setenv=DISTRO_OPEN_URL_SOCKET=" + openUrlSockHost,
       "--setenv=DISTRO_PI_CHAT_STATE_DIR=" + stateDir,
       "--setenv=DISTRO_NOTIFICATIONS_FILE=" + notificationsFile,
       "--setenv=PI_TELEMETRY=0",
@@ -286,6 +288,10 @@ QtObject {
       "--property=BindPaths=" + sessionState + ":" + sessionState,
       "--property=BindPaths=" + workspacePath + ":" + workspacePath,
       "--property=BindPaths=" + skillSockHost + ":" + skillSockHost,
+      // `-` prefix: don't abort sandbox start if the noctalia plugin
+      // hasn't bound the socket yet. google-cli falls back to local
+      // webbrowser.open when the path isn't reachable.
+      "--property=BindPaths=-" + openUrlSockHost + ":" + openUrlSockHost,
       // skill-config needs the skill schemas (read-only nix-store
       // symlinks) and the user's config/secrets store (read-write).
       "--property=BindReadOnlyPaths=" + skillsDefs + ":" + skillsDefs,

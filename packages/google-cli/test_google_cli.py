@@ -19,6 +19,10 @@ glue and a unit test mocking them only proves the mock is well-typed.
 
 from __future__ import annotations
 
+import argparse
+import json
+import socket
+import threading
 import base64
 import os
 import subprocess
@@ -181,6 +185,132 @@ class OAuthURLTests(unittest.TestCase):
             qs["scope"],
             f"{google_cli.GMAIL_SCOPE} {google_cli.CALENDAR_SCOPE}",
         )
+
+
+class OpenUrlTests(unittest.TestCase):
+    """`google-cli` runs inside pi-chat's systemd-run sandbox (ProtectHome
+    =tmpfs + private namespaces). A direct `webbrowser.open` therefore
+    spawns Firefox/Chromium inside the sandbox, where it cannot see the
+    user's real profile — Firefox renders 'Profile Missing'. Instead the
+    CLI dispatches to the noctalia pi-chat plugin via a unix socket that
+    lives in the user's $XDG_RUNTIME_DIR and is bind-mounted into the
+    sandbox. The plugin then calls Qt.openUrlExternally in the real user
+    session.
+
+    When DISTRO_OPEN_URL_SOCKET is unset (CI, the unit-test harness,
+    headless setups, …) we fall back to webbrowser.open so the helper
+    stays useful outside pi-chat.
+    """
+
+    def test_open_url_writes_json_line_to_socket_when_env_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sock_path = os.path.join(tmp, "open-url.sock")
+            received: list[str] = []
+            ready = threading.Event()
+
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            srv.listen(1)
+
+            def accept_once() -> None:
+                ready.set()
+                conn, _ = srv.accept()
+                with conn:
+                    buf = b""
+                    while not buf.endswith(b"\n"):
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    received.append(buf.decode())
+
+            t = threading.Thread(target=accept_once)
+            t.start()
+            ready.wait(timeout=2)
+
+            with mock.patch.dict(os.environ, {"DISTRO_OPEN_URL_SOCKET": sock_path}):
+                google_cli._open_url("https://example.com/auth?x=1")
+
+            t.join(timeout=2)
+            srv.close()
+
+            self.assertEqual(len(received), 1)
+            self.assertTrue(received[0].endswith("\n"))
+            payload = json.loads(received[0])
+            self.assertEqual(payload, {"url": "https://example.com/auth?x=1"})
+
+    def test_open_url_falls_back_to_webbrowser_when_env_unset(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "DISTRO_OPEN_URL_SOCKET"}
+        opened: list[str] = []
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch("webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True),
+        ):
+            google_cli._open_url("https://example.com/auth?x=1")
+        self.assertEqual(opened, ["https://example.com/auth?x=1"])
+
+    def test_open_url_falls_back_when_socket_path_does_not_exist(self) -> None:
+        """If the daemon is down the helper should not crash the auth flow."""
+        opened: list[str] = []
+        with (
+            mock.patch.dict(os.environ, {"DISTRO_OPEN_URL_SOCKET": "/nonexistent/x.sock"}),
+            mock.patch("webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True),
+        ):
+            google_cli._open_url("https://example.com/")
+        self.assertEqual(opened, ["https://example.com/"])
+
+
+class CmdAuthBrowserTests(unittest.TestCase):
+    """End-to-end: cmd_auth must route the consent URL through _open_url
+    (not call webbrowser directly), so the socket path is exercised when
+    pi-chat sets DISTRO_OPEN_URL_SOCKET inside the sandbox."""
+
+    def setUp(self) -> None:
+        self.sc = StubSkillConfig()
+        self._env_patch = mock.patch.dict(os.environ, self.sc.env())
+        self._env_patch.start()
+        self.sc.set("google.default.client_id", "abc.apps.googleusercontent.com")
+        self.sc.set("google.default.client_secret", "shh")
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+        self.sc.cleanup()
+
+    def test_cmd_auth_dispatches_consent_url_through_open_url(self) -> None:
+        class FakeServer:
+            timeout = 0
+
+            def __init__(self, *_a, **_kw) -> None:
+                pass
+
+            def handle_request(self) -> None:
+                google_cli._CallbackHandler.result = {"code": "AUTHCODE"}
+
+            def server_close(self) -> None:
+                pass
+
+        opened: list[str] = []
+
+        ns = argparse.Namespace(profile="default", timeout=1)
+
+        with (
+            mock.patch.object(google_cli.http.server, "HTTPServer", FakeServer),
+            mock.patch.object(
+                google_cli,
+                "_exchange_code",
+                return_value={"refresh_token": "rt"},
+            ),
+            mock.patch.object(google_cli, "_open_url", side_effect=opened.append),
+        ):
+            google_cli.cmd_auth(ns)
+
+        self.assertEqual(len(opened), 1, "expected exactly one _open_url call")
+        parsed = urllib.parse.urlsplit(opened[0])
+        self.assertEqual(parsed.netloc, "accounts.google.com")
+        qs = dict(urllib.parse.parse_qsl(parsed.query))
+        self.assertEqual(qs["client_id"], "abc.apps.googleusercontent.com")
+        self.assertEqual(qs["access_type"], "offline")
+        self.assertEqual(self.sc.get("google.default.refresh_token"), "rt")
 
 
 class GmailEnvelopeTests(unittest.TestCase):

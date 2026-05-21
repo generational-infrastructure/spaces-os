@@ -63,6 +63,7 @@ Item {
     return configAdapter.idleTimeoutMinutes > 0 ? configAdapter.idleTimeoutMinutes : 10;
   }
   readonly property string skillConfigSockPath: runtimeDir + "/distro-skill-config.sock"
+  readonly property string openUrlSockPath: runtimeDir + "/distro-pi-open-url.sock"
 
   // ── sessions index ──
   // Plain-JS array so QML bindings re-evaluate on assignment.
@@ -327,6 +328,14 @@ Item {
       payload: payload,
     });
     Qt.callLater(() => c.destroy(2000));
+  }
+
+  // ── open-url socket ──────────────────────────────────────────────
+  // The pi sandbox can't reach the user's browser. Sandboxed skills
+  // (google-cli auth, future OAuth flows) write `{"url":"…"}\n` to
+  // this socket; OpenUrlListener opens it in the real user session.
+  OpenUrlListener {
+    sockPath: root.openUrlSockPath
   }
 
   function _recvSkillConfig(raw) {
