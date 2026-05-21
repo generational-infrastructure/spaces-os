@@ -48,8 +48,8 @@ Item {
 
   // SmartPanel.qml sizes by contentPreferred{Width,Height} — without
   // these it falls back to its 900px default, ignoring implicitHeight.
-  property real contentPreferredWidth: 1440
-  property real contentPreferredHeight: 1200
+  property real contentPreferredWidth: 1000
+  property real contentPreferredHeight: 800
   implicitWidth: contentPreferredWidth
   implicitHeight: contentPreferredHeight
 
