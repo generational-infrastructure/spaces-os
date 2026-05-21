@@ -19,12 +19,11 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 QUICKSHELL = sys.argv[1]
-TEST_DIR = sys.argv[2]   # checks/pi-session-open-url/
+TEST_DIR = sys.argv[2]  # checks/pi-session-open-url/
 PLUGIN_DIR = sys.argv[3]  # programs/pi-chat-plugin/
 WORK = Path(sys.argv[4])
 
@@ -39,14 +38,16 @@ for name in ("OpenUrlListener.qml",):
 # Stub the qs.Commons.Logger import used by OpenUrlListener.
 commons_dir = shell_qml.parent / "Commons"
 commons_dir.mkdir(exist_ok=True)
-(commons_dir / "qmldir").write_text("module qs.Commons\nsingleton Logger 1.0 Logger.qml\n")
+(commons_dir / "qmldir").write_text(
+    "module qs.Commons\nsingleton Logger 1.0 Logger.qml\n"
+)
 (commons_dir / "Logger.qml").write_text(
-    'import QtQuick\n'
-    'pragma Singleton\n'
-    'QtObject {\n'
-    '  function i() {}\n'
-    '  function w() {}\n'
-    '}\n'
+    "import QtQuick\n"
+    "pragma Singleton\n"
+    "QtObject {\n"
+    "  function i() {}\n"
+    "  function w() {}\n"
+    "}\n"
 )
 
 sock = WORK / "open-url.sock"

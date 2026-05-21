@@ -48,8 +48,8 @@ import socket
 import subprocess
 import sys
 import threading
-import webbrowser
 import urllib.parse
+import webbrowser
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any, Iterable
@@ -298,6 +298,7 @@ def _open_url(url: str) -> None:
         webbrowser.open(url, new=2)
     except webbrowser.Error:
         pass
+
 
 def cmd_auth(args: argparse.Namespace) -> None:
     creds = load_profile(args.profile, require_refresh=False)

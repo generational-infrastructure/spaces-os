@@ -20,15 +20,15 @@ glue and a unit test mocking them only proves the mock is well-typed.
 from __future__ import annotations
 
 import argparse
-import json
-import socket
-import threading
 import base64
+import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -244,7 +244,9 @@ class OpenUrlTests(unittest.TestCase):
         opened: list[str] = []
         with (
             mock.patch.dict(os.environ, env, clear=True),
-            mock.patch("webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True),
+            mock.patch(
+                "webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True
+            ),
         ):
             google_cli._open_url("https://example.com/auth?x=1")
         self.assertEqual(opened, ["https://example.com/auth?x=1"])
@@ -253,8 +255,12 @@ class OpenUrlTests(unittest.TestCase):
         """If the daemon is down the helper should not crash the auth flow."""
         opened: list[str] = []
         with (
-            mock.patch.dict(os.environ, {"DISTRO_OPEN_URL_SOCKET": "/nonexistent/x.sock"}),
-            mock.patch("webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True),
+            mock.patch.dict(
+                os.environ, {"DISTRO_OPEN_URL_SOCKET": "/nonexistent/x.sock"}
+            ),
+            mock.patch(
+                "webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True
+            ),
         ):
             google_cli._open_url("https://example.com/")
         self.assertEqual(opened, ["https://example.com/"])
