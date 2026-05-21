@@ -37,6 +37,7 @@ let
   skillConfigPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config;
   skillConfigDaemonPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
   notificationsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.notifications-cli;
+  googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
   piPkg = cfg.piPackage;
 
   pluginDir = ../../../programs/pi-chat-plugin;
@@ -68,6 +69,7 @@ let
     notifications = "${skillsDir}/notifications";
     skill-config = "${skillsDir}/skill-config";
     calendar = "${skillsDir}/calendar";
+    google = "${skillsDir}/google";
   };
   allSkills = builtinSkills // cfg.skills;
 
@@ -274,7 +276,7 @@ in
       description = ''
         Additional skill directories for pi, keyed by name. Merged
         with the built-in distro skills (datetime, location, maps,
-        skill-config, calendar).
+        skill-config, calendar, google, notifications).
       '';
     };
 
@@ -441,6 +443,7 @@ in
     environment.systemPackages = [
       skillConfigPkg
       notificationsCliPkg
+      googleCliPkg
     ];
 
     # Materialize pi's config dir into user state. Symlinking from a

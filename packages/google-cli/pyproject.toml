@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "google-cli"
+version = "0.1.0"
+description = "Gmail + Google Calendar CLI for pi-chat skills"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+  "google-api-python-client",
+  "google-auth",
+]
+
+[project.scripts]
+google-cli = "google_cli:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["google_cli.py"]
