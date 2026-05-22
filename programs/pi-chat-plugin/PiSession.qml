@@ -48,6 +48,16 @@ QtObject {
   property string llmUrl: "http://127.0.0.1:8012"
   property string memoryHigh: "4G"
   property bool   openrouterEnabled: false
+  // Memory extension. memoryDbDir is the writable vector store the
+  // sandbox bind-mounts; memoryHfHome is the absolute /nix/store
+  // path that ships the pre-baked embedding model — reachable from
+  // inside the sandbox without a bind because /nix/store is visible.
+  // memoryEnabled is per-session; toggling it writes/removes a marker
+  // file in the session state dir and the extension's hooks pick
+  // that up on the next prompt without a respawn.
+  property bool   memoryEnabled: true
+  property string memoryDbDir: ""
+  property string memoryHfHome: ""
 
   // ── live state observable by Panel.qml via PiChatBackend.chat ──
   property string peerName: sessionName
@@ -217,12 +227,35 @@ QtObject {
     }
     _shouldRun = true;
     _spawnSeq += 1;
+    _syncMemoryMarker();
     const proc = _processComponent.createObject(session);
     _process = proc;
     proc.command = _buildCommand();
     proc.running = true;
     streaming = true;
   }
+
+  // ── per-session memory toggle ──
+  //
+  // The marker convention is opt-out: file present → disabled. The
+  // memory extension reads this from
+  // $DISTRO_PI_CHAT_STATE_DIR/sessions/<id>/memory-off at each hook
+  // entry, so flipping the bit here propagates to the next prompt
+  // without a respawn. Reapplied on every spawn (and on startup) so
+  // the marker matches the persisted intent even after the session
+  // dir was wiped or pi was restarted.
+  function _syncMemoryMarker() {
+    if (!stateDir || !sessionId) return;
+    const markerPath = stateDir + "/sessions/" + sessionId + "/memory-off";
+    const cmd = memoryEnabled
+      ? ["rm", "-f", markerPath]
+      : ["sh", "-c", "mkdir -p \"$(dirname \"$0\")\" && touch \"$0\"", markerPath];
+    const proc = _markerComponent.createObject(session);
+    proc.command = cmd;
+    proc.running = true;
+  }
+  onMemoryEnabledChanged: _syncMemoryMarker()
+  Component.onCompleted: _syncMemoryMarker()
 
   function stop() {
     _shouldRun = false;
@@ -326,6 +359,19 @@ QtObject {
     }
     if (openrouterEnabled) {
       cmd.push("--property=LoadCredential=openrouter-api-key:/run/distro-secrets/openrouter-api-key");
+    }
+    if (memoryDbDir && memoryHfHome) {
+      // SEDIMENT_DB is the vector store (bind-mounted RW so the
+      // sandbox can write to the user's persistent state dir).
+      // HF_HOME points at the /nix/store path that bakes the
+      // embedding-model cache — already visible inside the sandbox
+      // because /nix/store is not hidden by ProtectHome=tmpfs, so no
+      // BindPath is needed. The per-session opt-out lives as a
+      // marker file inside the already-bound session state dir, so
+      // we don't need a separate sandbox flag for it.
+      cmd.push("--setenv=SEDIMENT_DB=" + memoryDbDir + "/data");
+      cmd.push("--setenv=HF_HOME=" + memoryHfHome);
+      cmd.push("--property=BindPaths=" + memoryDbDir + ":" + memoryDbDir);
     }
     cmd.push("--", piBin, "--mode", "rpc", "--session-dir", sessionState);
     // --continue picks the most recent jsonl in the session dir. On
@@ -710,6 +756,12 @@ QtObject {
         session._stopProcess = null;
       }
     }
+  }
+
+  // Short-lived process for `touch`/`rm -f` of the memory-off marker.
+  // Self-destructs on exit so we don't accumulate one per toggle.
+  readonly property Component _markerComponent: Component {
+    Process { onExited: _ => destroy(2000) }
   }
 
   readonly property Component _imageReaderComponent: Component {

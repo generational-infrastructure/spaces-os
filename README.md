@@ -214,6 +214,27 @@ additional backend — pi's built-in `openrouter` provider exposes
 llama-swap stays enabled alongside; pick the provider per session
 from the chat panel's model selector.
 
+### Long-term memory (cross-session recall)
+
+A local memory store extracts durable facts from each chat turn and
+surfaces relevant ones at the start of any later prompt, across all
+your chats. **On by default for each new chat**; the icon in the
+panel header toggles capture and recall off for that chat, and the
+eraser next to it wipes the entire store after an inline
+confirmation.
+
+Anything you type can be picked up by the extractor — flip the
+toggle off before pasting secrets.
+
+Inspect or prune from the terminal:
+
+```bash
+sediment stats
+sediment list --scope all
+sediment recall "favourite colour"
+sediment forget <id>
+```
+
 ### Running the test-machine VM test
 
 `checks.x86_64-linux.test-machine` is dual-mode. With

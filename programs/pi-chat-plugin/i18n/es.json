@@ -16,7 +16,13 @@
     "voice-tooltip": "Entrada de voz",
     "voice-stop-tooltip": "Detener grabación (transcribir)",
     "thinking-hide-tooltip": "Ocultar razonamiento en el chat",
-    "thinking-show-tooltip": "Mostrar razonamiento en el chat"
+    "thinking-show-tooltip": "Mostrar razonamiento en el chat",
+    "memory-on-tooltip": "Memoria a largo plazo: ACTIVADA (clic para desactivar en este chat)",
+    "memory-off-tooltip": "Memoria a largo plazo: DESACTIVADA (clic para activar en este chat)",
+    "memory-wipe-tooltip": "Borrar toda la memoria a largo plazo",
+    "memory-wipe-confirm": "¿Borrar todos los elementos guardados en memoria de todos los chats? Esta acción no se puede deshacer.",
+    "memory-wipe-yes": "Borrar",
+    "memory-wipe-no": "Cancelar"
   },
   "bubble": {
     "reply-tooltip": "Responder",

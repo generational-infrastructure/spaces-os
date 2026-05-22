@@ -44,6 +44,14 @@ Item {
       property int idleTimeoutMinutes: 10
       property string memoryHigh: "4G"
       property bool openrouterEnabled: false
+      // Memory extension paths. memoryDbDir is $HOME-relative; the
+      // QML resolves it against homeDir below. memoryHfHome is an
+      // absolute /nix/store path that ships the pre-baked embedding
+      // model — sediment reads it via HF_HOME and never downloads.
+      // The pi-chat NixOS module is the single source of truth for
+      // both; the per-chat opt-out lives on the session entry.
+      property string memoryDbDir: ""
+      property string memoryHfHome: ""
     }
   }
 
@@ -57,6 +65,15 @@ Item {
   readonly property string llmUrl: configAdapter.llmUrl
   readonly property string memoryHigh: configAdapter.memoryHigh
   readonly property bool openrouterEnabled: configAdapter.openrouterEnabled
+  // memoryDbDir is composed against $HOME; memoryHfHome is consumed
+  // as-is because it points at a /nix/store path that's already
+  // accessible inside the sandbox without an extra BindPath. Empty
+  // strings stay empty so PiSession's sandbox setup skips wiring
+  // anything when the module hasn't populated the JSON.
+  readonly property string memoryDbDir: configAdapter.memoryDbDir
+    ? homeDir + "/" + String(configAdapter.memoryDbDir).replace(/^\/+/, "")
+    : ""
+  readonly property string memoryHfHome: configAdapter.memoryHfHome
   readonly property int idleTimeoutMin: {
     const c = cfg("idleTimeoutMinutes");
     if (typeof c === "number" && c > 0) return c;
@@ -136,6 +153,10 @@ Item {
       createdAt: Date.now(),
       lastActiveAt: Date.now(),
       unread: 0,
+      // Long-term memory recall/storage on by default; the panel
+      // header surfaces a per-chat toggle that writes the opt-out
+      // marker the extension reads at each hook entry.
+      memoryEnabled: true,
     };
   }
 
@@ -143,7 +164,7 @@ Item {
   // per-session workspace and the per-session pi state directory
   // must exist on disk before PiSession spawns its systemd-run.
   function _ensureSessionDirs(sessionId, workspacePath) {
-    const proc = _mkdirComponent.createObject(root);
+    const proc = _oneShotProcess.createObject(root);
     proc.command = [
       "mkdir", "-p",
       workspacePath,
@@ -195,6 +216,31 @@ Item {
       activeSessionId = sessionsList.length > 0 ? sessionsList[0].id : "";
     }
     _persist();
+  }
+
+  // Toggle long-term memory for a single chat. Persisted on the
+  // session entry; PiSession handles the marker file atomically so
+  // the running pi process honours the new state on the next prompt.
+  function setSessionMemoryEnabled(id, enabled) {
+    if (!id) return;
+    const obj = _sessionObjs[id];
+    if (obj) obj.memoryEnabled = !!enabled;
+    sessionsList = sessionsList.map(s => s.id === id
+      ? Object.assign({}, s, { memoryEnabled: !!enabled })
+      : s);
+    _persist();
+  }
+
+  // Wipe every stored memory item from the shared sediment DB.
+  // Destructive and global: affects every chat session on this user.
+  // The Panel guards with a confirmation dialog; this just runs the
+  // rm. Empty/missing dir is fine — the next sediment write will
+  // recreate the LanceDB layout.
+  function wipeMemory() {
+    if (!memoryDbDir) return;
+    const proc = _oneShotProcess.createObject(root);
+    proc.command = ["find", memoryDbDir, "-mindepth", "1", "-delete"];
+    proc.running = true;
   }
 
   function sendTo(id, text) {
@@ -474,6 +520,11 @@ Item {
           llmUrl: Qt.binding(() => root.llmUrl),
           memoryHigh: Qt.binding(() => root.memoryHigh),
           openrouterEnabled: Qt.binding(() => root.openrouterEnabled),
+          // Per-session opt-out; missing field (legacy sessions.json)
+          // defaults to true so existing chats keep memory on.
+          memoryEnabled: s.memoryEnabled !== false,
+          memoryDbDir: Qt.binding(() => root.memoryDbDir),
+          memoryHfHome: Qt.binding(() => root.memoryHfHome),
         });
         const idCaptured = s.id;
         obj.needsPersist.connect(() => root._persist());
@@ -487,6 +538,8 @@ Item {
         if (obj.modelPref !== mp) obj.modelPref = mp;
         const u = s.unread || 0;
         if (obj.unread !== u) obj.unread = u;
+        const me = s.memoryEnabled !== false;
+        if (obj.memoryEnabled !== me) obj.memoryEnabled = me;
       }
     }
     for (const id in _sessionObjs) {
@@ -545,7 +598,7 @@ Item {
 
   // ── helper components ──
 
-  readonly property Component _mkdirComponent: Component {
+  readonly property Component _oneShotProcess: Component {
     Process { onExited: _ => destroy(2000) }
   }
 }

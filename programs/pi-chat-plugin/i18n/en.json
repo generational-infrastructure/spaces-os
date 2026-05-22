@@ -18,7 +18,13 @@
     "voice-stop-tooltip": "Stop recording (transcribe)",
     "new-session-tooltip": "Start a new chat session",
     "thinking-hide-tooltip": "Hide thinking in chat",
-    "thinking-show-tooltip": "Show thinking in chat"
+    "thinking-show-tooltip": "Show thinking in chat",
+    "memory-on-tooltip": "Long-term memory: ON (click to disable for this chat)",
+    "memory-off-tooltip": "Long-term memory: OFF (click to enable for this chat)",
+    "memory-wipe-tooltip": "Wipe all long-term memory",
+    "memory-wipe-confirm": "Wipe every stored memory item across all chats? This cannot be undone.",
+    "memory-wipe-yes": "Wipe",
+    "memory-wipe-no": "Cancel"
   },
   "bubble": {
     "reply-tooltip": "Reply",

@@ -16,7 +16,13 @@
     "voice-tooltip": "语音输入",
     "voice-stop-tooltip": "停止录音（转写）",
     "thinking-hide-tooltip": "在聊天中隐藏思考",
-    "thinking-show-tooltip": "在聊天中显示思考"
+    "thinking-show-tooltip": "在聊天中显示思考",
+    "memory-on-tooltip": "长期记忆:已开启(点击为该对话关闭)",
+    "memory-off-tooltip": "长期记忆:已关闭(点击为该对话开启)",
+    "memory-wipe-tooltip": "清空所有长期记忆",
+    "memory-wipe-confirm": "清空所有对话中保存的全部记忆项?此操作无法撤销。",
+    "memory-wipe-yes": "清空",
+    "memory-wipe-no": "取消"
   },
   "bubble": {
     "reply-tooltip": "回复",

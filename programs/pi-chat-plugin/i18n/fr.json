@@ -16,7 +16,13 @@
     "voice-tooltip": "Saisie vocale",
     "voice-stop-tooltip": "Arrêter l'enregistrement (transcrire)",
     "thinking-hide-tooltip": "Masquer le raisonnement dans le chat",
-    "thinking-show-tooltip": "Afficher le raisonnement dans le chat"
+    "thinking-show-tooltip": "Afficher le raisonnement dans le chat",
+    "memory-on-tooltip": "Mémoire à long terme : ACTIVÉE (cliquer pour désactiver pour ce chat)",
+    "memory-off-tooltip": "Mémoire à long terme : DÉSACTIVÉE (cliquer pour activer pour ce chat)",
+    "memory-wipe-tooltip": "Effacer toute la mémoire à long terme",
+    "memory-wipe-confirm": "Effacer tous les éléments mémorisés dans tous les chats ? Action irréversible.",
+    "memory-wipe-yes": "Effacer",
+    "memory-wipe-no": "Annuler"
   },
   "bubble": {
     "reply-tooltip": "Répondre",

@@ -16,7 +16,13 @@
     "voice-tooltip": "Spraakinvoer",
     "voice-stop-tooltip": "Opname stoppen (transcriberen)",
     "thinking-hide-tooltip": "Denken verbergen in chat",
-    "thinking-show-tooltip": "Denken tonen in chat"
+    "thinking-show-tooltip": "Denken tonen in chat",
+    "memory-on-tooltip": "Langetermijngeheugen: AAN (klik om uit te schakelen voor deze chat)",
+    "memory-off-tooltip": "Langetermijngeheugen: UIT (klik om in te schakelen voor deze chat)",
+    "memory-wipe-tooltip": "Alle langetermijngeheugen wissen",
+    "memory-wipe-confirm": "Alle opgeslagen geheugenitems in alle chats wissen? Dit kan niet ongedaan worden gemaakt.",
+    "memory-wipe-yes": "Wissen",
+    "memory-wipe-no": "Annuleren"
   },
   "bubble": {
     "reply-tooltip": "Beantwoorden",

@@ -28,20 +28,64 @@ PORT = 8012
 MODELS = ["qwen2.5:0.5b", "smollm"]
 
 
-def pick_reply(messages):
-    last_user = ""
+EXTRACT_PROMPT_OPENER = "You extract durable memory items from one assistant turn."
+MEMORY_FACT_SUBJECT = "hobby"
+MEMORY_FACT_BODY = "mountain biking"
+MEMORY_TRIGGER = MEMORY_FACT_BODY
+
+
+def system_text(messages):
+    parts = []
+    for m in messages:
+        if m.get("role") != "system":
+            continue
+        content = m.get("content", "")
+        if isinstance(content, list):
+            parts.extend(str(b.get("text", "")) for b in content if isinstance(b, dict))
+        else:
+            parts.append(str(content))
+    return "\n".join(parts)
+
+
+def user_text(messages):
     for m in reversed(messages):
-        if m.get("role") == "user":
-            content = m.get("content", "")
-            if isinstance(content, list):
-                # pi may send structured content blocks
-                last_user = " ".join(
-                    str(b.get("text", "")) for b in content if isinstance(b, dict)
-                )
-            else:
-                last_user = str(content)
-            break
+        if m.get("role") != "user":
+            continue
+        content = m.get("content", "")
+        if isinstance(content, list):
+            return " ".join(
+                str(b.get("text", "")) for b in content if isinstance(b, dict)
+            )
+        return str(content)
+    return ""
+
+
+def pick_reply(messages):
+    sys_text = system_text(messages)
+    last_user = user_text(messages)
     lower = last_user.lower()
+
+    # Memory-extension side-call: the user message wraps a scrubbed turn
+    # behind EXTRACT_PROMPT. If that turn mentioned the trigger phrase,
+    # emit a parseable fact line so the extension stores it.
+    if lower.startswith(EXTRACT_PROMPT_OPENER.lower()):
+        if MEMORY_TRIGGER in lower:
+            return f"pref | {MEMORY_FACT_SUBJECT} | {MEMORY_FACT_BODY}"
+        return ""
+
+    # Recall-driven reply: when the memory extension injects a
+    # <recalled_memories> block carrying the hobby fact, surface it in
+    # the answer. The driver asserts the body string is in the reply, so
+    # recall regressions are caught even if the model output drifts.
+    if "<recalled_memories>" in sys_text and MEMORY_FACT_BODY in sys_text:
+        if "hobby" in lower or "remember" in lower:
+            return f"Per your memory, your hobby is {MEMORY_FACT_BODY}."
+
+    # First leg of the memory subtest: user states the fact; mock
+    # acknowledges so pi reaches agent_end and triggers the extractor.
+    if MEMORY_TRIGGER in lower:
+        return f"Noted: {MEMORY_FACT_BODY}."
+
     if "sky" in lower:
         return "blue"
     return "hello back"

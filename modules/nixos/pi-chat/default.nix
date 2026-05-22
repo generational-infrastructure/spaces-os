@@ -38,7 +38,14 @@ let
   skillConfigDaemonPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
   notificationsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.notifications-cli;
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
+  sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   piPkg = cfg.piPackage;
+
+  # Memory extension: nix derivation that substitutes the absolute
+  # sediment binary path into a single-file pi extension. Path-typed
+  # so the existing extensions-loading logic treats it like any other
+  # bundled extension.
+  memoryExtensionPkg = pkgs.callPackage ./extensions/memory { sediment = sedimentPkg; };
 
   pluginDir = ../../../programs/pi-chat-plugin;
   pluginId = "pi-chat";
@@ -58,6 +65,13 @@ let
   # noctalia's cache. See systemd.user.services.noctalia-shell below.
   notificationsRel = "${stateRel}/notifications";
   notificationsFileRel = "${notificationsRel}/history.json";
+  # Long-term memory store (sediment). The vector DB is shared across
+  # all sessions of the same user; the per-session sandbox bind-mounts
+  # it read-write. The embedding model lives in a /nix/store path
+  # baked at build time (sedimentPkg.modelCache) so first runs need
+  # no network.
+  memoryDbRel = "${stateRel}/sediment";
+  memoryHfHome = sedimentPkg.modelCache;
 
   # All skills (built-ins + user-supplied via cfg.skills), merged into
   # one linked-farm so the plugin can pass a single dir or pi can read
@@ -78,6 +92,7 @@ let
   bundledExtensions = {
     bash-confirm = ./extensions/bash-confirm.ts;
     llama-swap-discover = ./extensions/llama-swap-discover.ts;
+    memory = memoryExtensionPkg;
   };
   resolveExtension =
     name: value:
@@ -91,6 +106,8 @@ let
       )
     else
       value;
+  # All bundled extensions are on by default; cfg.extensions can
+  # override either to a different path or to `false` to disable.
   enabledExtensions = lib.filterAttrs (_name: value: if builtins.isBool value then value else true) (
     bundledExtensions // cfg.extensions
   );
@@ -372,7 +389,6 @@ in
         description = "OnUnitActiveSec= for the location-update timer.";
       };
     };
-
     sandbox = {
       memoryHigh = lib.mkOption {
         type = lib.types.str;
@@ -439,12 +455,26 @@ in
     services.llama-swap.enable = lib.mkDefault true;
 
     # Skill-config CLI on PATH so pi (running as the interactive user)
-    # can `bash` it without going through nix-shell.
+    # can `bash` it without going through nix-shell. `sediment` is on
+    # PATH too so the operator can debug the same DB the chat sandbox
+    # writes to: `sediment stats`, `sediment list`,
+    # `sediment recall "<query>"`, `sediment forget <id>`. SEDIMENT_DB
+    # below points at the per-user DB so no `--db` flag is needed.
     environment.systemPackages = [
       skillConfigPkg
       notificationsCliPkg
       googleCliPkg
+      sedimentPkg
     ];
+
+    environment.sessionVariables = {
+      # sediment stashes its access.db alongside (i.e. in the parent
+      # of) SEDIMENT_DB. The sandbox only bind-mounts the leaf
+      # `memoryDbRel` dir RW, so SEDIMENT_DB has to point at a
+      # subdirectory of it — that way both the LanceDB tree and the
+      # access.db sibling land inside the bind mount.
+      SEDIMENT_DB = "$HOME/${memoryDbRel}/data";
+    };
 
     # Materialize pi's config dir into user state. Symlinking from a
     # /nix/store JSON keeps the file world-readable and tied to the
@@ -481,6 +511,11 @@ in
     ]
     ++ lib.optional (cfg.piModels != { }) "L+ %h/${piAgentRel}/models.json - - - - ${piModelsJson}"
     ++ lib.optional cfg.openrouter.enable "L+ %h/${piAgentRel}/auth.json - - - - ${piAuthJson}"
+    ++ [
+      # sediment DB only — the embedding-model cache is a /nix/store
+      # path baked into the sediment package, not a writable dir.
+      "d %h/${memoryDbRel} 0750 - - -"
+    ]
     ++ lib.optionals cfg.noctaliaPlugin [
       "d %h/.config/noctalia 0755 - - -"
       "d %h/.config/noctalia/plugins 0755 - - -"
@@ -626,6 +661,13 @@ in
       inherit (cfg.sandbox) idleTimeoutMinutes;
       inherit (cfg.sandbox) memoryHigh;
       openrouterEnabled = cfg.openrouter.enable;
+      # memoryDbDir is $HOME-relative (the user-writable vector store);
+      # memoryHfHome is the absolute /nix/store path that ships the
+      # pre-baked embedding-model cache. The per-chat memory toggle
+      # in the panel header writes/removes a marker file under each
+      # session's state dir, so both paths stay live regardless.
+      memoryDbDir = memoryDbRel;
+      memoryHfHome = toString memoryHfHome;
     };
   };
 }

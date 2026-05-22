@@ -207,6 +207,31 @@ Item {
         // MsgFilter binding recomputes immediately.
         onClicked: PluginSettings.toggleBool(pluginApi, "showThinking")
       }
+      // Per-session long-term-memory toggle. The active session owns
+      // the bool; the backend persists, writes the marker file the
+      // pi extension reads, and reflects back through chat.memoryEnabled.
+      NIconButton {
+        icon: (chat?.memoryEnabled ?? true) ? "brain" : "database-off"
+        tooltipText: (chat?.memoryEnabled ?? true)
+          ? root.tr("panel.memory-on-tooltip")
+          : root.tr("panel.memory-off-tooltip")
+        baseSize: Style.baseWidgetSize * 0.9
+        onClicked: {
+          const id = pluginApi?.mainInstance?.activeSessionId;
+          if (!id) return;
+          pluginApi.mainInstance.setSessionMemoryEnabled(id, !(chat?.memoryEnabled ?? true));
+        }
+      }
+      // Wipe every stored memory item across all sessions. Destructive
+      // and irreversible, so the click only opens the confirm row
+      // below the header — the actual rm runs from the "Wipe" button
+      // there.
+      NIconButton {
+        icon: "eraser"
+        tooltipText: root.tr("panel.memory-wipe-tooltip")
+        baseSize: Style.baseWidgetSize * 0.9
+        onClicked: wipeConfirmBar.visible = true
+      }
       NIconButton {
         icon: "rotate"
         tooltipText: root.tr("panel.reset-tooltip")
@@ -225,6 +250,39 @@ Item {
         id: relayDot
         implicitWidth: 8; implicitHeight: 8; radius: 4
         color: chat?.streaming ? Color.mTertiary : Color.mError
+      }
+    }
+
+    // Inline confirm strip for "Wipe all memory". Renders only when
+    // the user clicked the eraser button; closes itself on either
+    // confirm or cancel. We do not stop running pi sessions before
+    // the rm — the next sediment call will recreate an empty DB layout.
+    RowLayout {
+      id: wipeConfirmBar
+      visible: false
+      Layout.fillWidth: true
+      spacing: Style.marginS
+      NText {
+        Layout.fillWidth: true
+        text: root.tr("panel.memory-wipe-confirm")
+        pointSize: Style.fontSizeS
+        color: Color.mError
+        wrapMode: Text.Wrap
+      }
+      NIconButton {
+        icon: "check"
+        tooltipText: root.tr("panel.memory-wipe-yes")
+        baseSize: Style.baseWidgetSize * 0.85
+        onClicked: {
+          pluginApi?.mainInstance?.wipeMemory?.();
+          wipeConfirmBar.visible = false;
+        }
+      }
+      NIconButton {
+        icon: "x"
+        tooltipText: root.tr("panel.memory-wipe-no")
+        baseSize: Style.baseWidgetSize * 0.85
+        onClicked: wipeConfirmBar.visible = false
       }
     }
 

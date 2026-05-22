@@ -45,6 +45,7 @@ let
   apiKeyFile = if useOpenrouter then pkgs.writeText "openrouter-api-key" openrouterKey else null;
 
   testPiChat = ./test-pi-chat.py;
+  testPiMemory = ./test-pi-memory.py;
   mockLlm = ./test-machine-mock-llm.py;
 
   # Python helper that strips the pi-chat bar widget from every section
@@ -564,6 +565,68 @@ let
                 f"systemctl --user --machine=test@.host show pi-chat-{picked}.service "
                 "--property=ProtectHome | grep -q '^ProtectHome=tmpfs'"
             )
+
+        with subtest("memory extension stores facts and recalls them in a new session"):
+            # End-to-end: real sediment binary + real embedding model
+            # (pre-baked under $HF_HOME from sedimentPkg.modelCache,
+            # no network), real cross-session vector store, real RPC
+            # plumbing through the plugin. The mock LLM emits the
+            # extractor fact line when it sees the trigger phrase and
+            # surfaces the recalled body when the system prompt
+            # carries a <recalled_memories> block — so a regression
+            # in either hook (agent_end → store, before_agent_start →
+            # recall + inject) fails this subtest loudly.
+            machine.copy_from_host("${testPiMemory}", "/tmp/test-pi-memory.py")
+            code, mem_out = machine.execute(
+                sudo_env + "python3 /tmp/test-pi-memory.py "
+                "${noctaliaBin} ${target} 2>&1"
+            )
+            if code != 0:
+                # `sudo -u test …` strips sessionVariables, so SEDIMENT_DB
+                # and HF_HOME default to sediment's own ~/.sediment/data
+                # (empty) and trigger a HF download the sandbox is not on
+                # the hook for. Splice both straight from the same Nix
+                # values the pi-chat module writes into /etc/distro/pi-chat.json
+                # so diagnostics hit the live agent DB, and pass --scope all
+                # so globally-scoped writes from the agent actually show up.
+                sed_env = (
+                    "SEDIMENT_DB=/home/test/.local/state/distro/pi/sediment/data "
+                    "HF_HOME=${
+                      inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment.modelCache
+                    } "
+                )
+                _, sed_list = machine.execute(
+                    sudo_env + sed_env + "sediment list --scope all --json 2>&1 || true"
+                )
+                machine.log("== sediment list --scope all ==\n" + sed_list)
+                _, sed_stats = machine.execute(
+                    sudo_env + sed_env + "sediment stats 2>&1 || true"
+                )
+                machine.log("== sediment stats ==\n" + sed_stats)
+                _, mem_units = machine.execute(
+                    sudo_env
+                    + "journalctl --user -b --no-pager -u 'pi-chat-*.service' "
+                    "2>&1 | tail -120"
+                )
+                machine.log("== pi-chat journal (memory) ==\n" + mem_units)
+                # Pi's extension stderr surfaces through the noctalia
+                # QML log, not the systemd journal. Tail every active
+                # instance's log so failures inside the memory hooks
+                # (extract, store, recall) are visible.
+                _, noc_log = machine.execute(
+                    "for f in /run/user/${uid}/quickshell/by-id/*/log.log; do "
+                    "  echo === $f ===; tail -400 \"$f\" 2>&1; "
+                    "done"
+                )
+                machine.log("== noctalia log (memory) ==\n" + noc_log)
+                _, db_tree = machine.execute(
+                    "ls -laR /home/test/.local/state/distro/pi/sediment "
+                    "2>&1 || true"
+                )
+                machine.log("== sediment db tree ==\n" + db_tree)
+                raise Exception(
+                    "memory e2e failed (exit={}):\n{}".format(code, mem_out)
+                )
 
         with subtest("noctalia persists notifications under the pi state tree"):
             # Fires the same DBus path the chat plugin's notifications skill

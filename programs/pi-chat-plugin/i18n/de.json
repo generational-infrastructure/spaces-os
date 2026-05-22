@@ -16,7 +16,13 @@
     "voice-tooltip": "Spracheingabe",
     "voice-stop-tooltip": "Aufnahme stoppen (transkribieren)",
     "thinking-hide-tooltip": "Denkschritte im Chat ausblenden",
-    "thinking-show-tooltip": "Denkschritte im Chat anzeigen"
+    "thinking-show-tooltip": "Denkschritte im Chat anzeigen",
+    "memory-on-tooltip": "Langzeitgedächtnis: AN (klicken zum Deaktivieren für diesen Chat)",
+    "memory-off-tooltip": "Langzeitgedächtnis: AUS (klicken zum Aktivieren für diesen Chat)",
+    "memory-wipe-tooltip": "Gesamtes Langzeitgedächtnis löschen",
+    "memory-wipe-confirm": "Alle gespeicherten Erinnerungen über sämtliche Chats hinweg löschen? Das lässt sich nicht rückgängig machen.",
+    "memory-wipe-yes": "Löschen",
+    "memory-wipe-no": "Abbrechen"
   },
   "bubble": {
     "reply-tooltip": "Antworten",

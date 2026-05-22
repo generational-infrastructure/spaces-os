@@ -27,3 +27,13 @@ You **MUST NOT** bolt new subtests onto `checks/test-machine.nix`
 just because it already runs the plugin. The VM test is for
 cross-subsystem wiring; extend it only when the behaviour genuinely
 depends on the full boot path.
+
+## Translations
+
+The chat panel's user-visible strings live in
+`programs/pi-chat-plugin/i18n/<lang>.json`. `en.json` is the source
+of truth; every other locale must carry the same keys.
+
+When you add or rename a panel string you **MUST** update every
+locale file in the same change. A new key landing only in `en.json`
+ships untranslated UI to everyone else.
