@@ -28,6 +28,12 @@
     environment.systemPackages = [
       pkgs.noctalia-shell
       pkgs.libnotify
+      # Noctalia widgets shell out to these by bare name:
+      #   wl-copy/wl-paste — Network/Wifi/About copy buttons, launcher
+      #     calculator, "copy settings" actions
+      #   xdg-open — opening URLs from About/Contributors/Supporters tabs
+      pkgs.wl-clipboard
+      pkgs.xdg-utils
     ];
 
     # noctalia's Battery bar widget queries UPower over D-Bus; without
