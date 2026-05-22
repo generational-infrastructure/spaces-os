@@ -58,14 +58,14 @@ by default.
 This gives you:
 - **Mod+T** — terminal (alacritty)
 - **Mod+D** — app launcher (fuzzel)
-- **Super+A** — toggle the chat panel
-- **Super+S** — toggle voice-to-text recording
+- **Mod+A** — toggle the chat panel
+- **Mod+S** — toggle voice-to-text recording
 - Noctalia bar with system tray, workspaces, and chat widget
 
 #### Voice-to-text
 
 The full desktop module includes voice-to-text out of the box. Press
-**Super+S** to start recording and **Super+S** again to stop. Speech is
+**Mod+S** to start recording and **Mod+S** again to stop. Speech is
 transcribed locally and typed into the focused window.
 
 ### 2. Noctalia bar (any compositor)
@@ -98,7 +98,7 @@ After enabling the NixOS module, open noctalia's **Settings → Plugins** and
 enable the **AI Chat** plugin.
 
 The chat panel and voice-to-text rely on compositor-level keybinds.
-`nixosModules.distro` wires `Super+A` and `Super+S` into niri for you;
+`nixosModules.distro` wires `Mod+A` and `Mod+S` into niri for you;
 with any other compositor you set them up yourself. Bind whatever keys
 you like to these commands:
 
@@ -157,7 +157,7 @@ by default.
   };
 }
 ```
-As with integration 2, `Super+A` / `Super+S` are only bound automatically
+As with integration 2, `Mod+A` / `Mod+S` are only bound automatically
 under `nixosModules.distro`. On any other compositor, bind your own keys
 to `noctalia-shell ipc call plugin:pi-chat toggle` (and
 `voxtype record toggle` if you also imported `nixosModules.voxtype`).
