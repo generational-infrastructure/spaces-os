@@ -121,7 +121,7 @@ QtObject {
     });
     replyTarget = null;
     typing = true;
-    _send({ type: "prompt", message: text });
+    _send({ type: "prompt", message: text, streamingBehavior: "steer" });
     needsPersist();
   }
 
@@ -727,6 +727,7 @@ QtObject {
             type: "prompt",
             message: "",
             images: [{ type: "image", data: b64, mimeType: mt }],
+            streamingBehavior: "steer",
           });
           session.typing = true;
         }
