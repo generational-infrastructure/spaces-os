@@ -2,7 +2,8 @@
 #
 # Single import that pulls in every NixOS module this distro provides.
 # Builds on noctalia-bar (which includes noctalia-plugin: pi-chat +
-# llama-swap) and adds niri compositor + VM debug support.
+# llama-swap, plus voxtype) and adds niri compositor + VM debug
+# support.
 #
 # Configures greetd to auto-login into niri by default.  Override
 # `services.greetd` in your host config to customise.
@@ -11,7 +12,6 @@
 {
   imports = [
     inputs.self.nixosModules.noctalia-bar
-    inputs.self.nixosModules.voxtype
     inputs.self.nixosModules.niri
     inputs.self.nixosModules.vm-debug
     inputs.self.nixosModules.nix

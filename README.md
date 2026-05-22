@@ -14,7 +14,7 @@ voice-to-text.
 | Integration | What you get | You provide |
 |---|---|---|
 | **Full desktop** | Niri compositor, noctalia bar with chat widget, AI agent, local LLM | A NixOS machine |
-| **Noctalia bar** | Noctalia bar with chat widget + agent backend | Your own compositor (GNOME, Sway, Hyprland, …) |
+| **Noctalia bar** | Noctalia bar with chat widget + agent backend + voice-to-text | Your own compositor (GNOME, Sway, Hyprland, …) |
 | **Noctalia plugin** | Chat widget + agent backend (enabled by default) | An existing noctalia install |
 
 ## Binary Cache
@@ -103,21 +103,15 @@ with any other compositor you set them up yourself. Bind whatever keys
 you like to these commands:
 
 - chat panel: `noctalia-shell ipc call plugin:pi-chat toggle`
-- voice-to-text: `voxtype record toggle` (only if you imported the
-  `voxtype` module — see below)
+- voice-to-text: `voxtype record toggle`
 
 #### Voice-to-text
 
-The noctalia-bar module does **not** include voice-to-text. To add it, import
-the module alongside:
-
-```nix
-modules = [
-  distro.nixosModules.noctalia-bar
-  distro.nixosModules.voxtype  # voice-to-text
-  ./configuration.nix
-];
-```
+Voice-to-text is bundled with the noctalia-bar module — `voxtype`
+runs as a user service alongside noctalia. Trigger it from the
+chat panel's microphone button, from a `voxtype record toggle`
+keybind you wire in your compositor, or via the Mod+S binding that
+`nixosModules.distro` adds under niri.
 
 Then add `noctalia-shell` to your compositor's autostart:
 
