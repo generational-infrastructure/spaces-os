@@ -76,6 +76,9 @@ let
   # All skills (built-ins + user-supplied via cfg.skills), merged into
   # one linked-farm so the plugin can pass a single dir or pi can read
   # each one by absolute path from settings.json.
+  # Pi-chat's built-in skill set; the signal skill only joins when
+  # the distro-signal module is enabled, otherwise the SKILL.md
+  # advertises a CLI the sandbox can't reach.
   builtinSkills = {
     datetime = "${skillsDir}/datetime";
     location = "${skillsDir}/location";
@@ -84,6 +87,9 @@ let
     skill-config = "${skillsDir}/skill-config";
     calendar = "${skillsDir}/calendar";
     google = "${skillsDir}/google";
+  }
+  // lib.optionalAttrs (config.services.distro-signal.enable or false) {
+    signal = "${skillsDir}/signal";
   };
   allSkills = builtinSkills // cfg.skills;
 

@@ -89,6 +89,28 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     bridgeAfter = lib.concatStringsSep " " (bridge.after or [ ]);
     bridgeRestart = bridge.serviceConfig.Restart or "";
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
+    enabledTmpfiles = lib.concatStringsSep "\n" enabledSystem.config.systemd.user.tmpfiles.rules;
+    defaultTmpfiles =
+      lib.concatStringsSep "\n"
+        (inputs.nixpkgs.lib.nixosSystem {
+          specialArgs = {
+            inherit inputs;
+            flake = inputs.self;
+          };
+          modules = [
+            inputs.self.nixosModules.noctalia-bar
+            {
+              nixpkgs.hostPlatform = "x86_64-linux";
+              networking.hostName = "default";
+              fileSystems."/" = {
+                device = "none";
+                fsType = "tmpfs";
+              };
+              boot.loader.grub.enable = false;
+              system.stateVersion = "26.05";
+            }
+          ];
+        }).config.systemd.user.tmpfiles.rules;
   }
   ''
     set -euo pipefail
@@ -173,6 +195,21 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       | all(.source != "%t/distro-signal-panel.sock")
     ' "$pichatConfig" >/dev/null \
       || fail "panel socket must NOT be in sandboxBinds (security regression!): $binds"
+
+    # ── 2e. signal SKILL.md is included when distro-signal is enabled,
+    # and absent when it is not — guards against the agent advertising
+    # a CLI the sandbox doesn't actually ship. We look for the
+    # skills-defs/signal symlink line in the user-tmpfiles rules
+    # because that's where pi-chat materialises each skill into the
+    # agent's state dir.
+    case "$enabledTmpfiles" in
+      *"/skills-defs/signal "*) ;;
+      *) fail "signal SKILL.md never reached pi-chat skills-defs when distro-signal is enabled." ;;
+    esac
+    case "$defaultTmpfiles" in
+      *"/skills-defs/signal "*) fail "signal SKILL.md leaked into the default skills set." ;;
+      *) ;;
+    esac
 
     # ── 3. distro-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then
