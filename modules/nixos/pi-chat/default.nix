@@ -73,12 +73,15 @@ let
   memoryDbRel = "${stateRel}/sediment";
   memoryHfHome = sedimentPkg.modelCache;
 
-  # All skills (built-ins + user-supplied via cfg.skills), merged into
-  # one linked-farm so the plugin can pass a single dir or pi can read
-  # each one by absolute path from settings.json.
-  # Pi-chat's built-in skill set; the signal skill only joins when
-  # the distro-signal module is enabled, otherwise the SKILL.md
-  # advertises a CLI the sandbox can't reach.
+  # All skills (built-ins + user-supplied via cfg.skills), merged
+  # into one linked-farm so the plugin can pass a single dir or pi
+  # can read each one by absolute path from settings.json.
+  #
+  # The signal skill follows services.distro-signal.enable (which in
+  # turn defaults to services.pi-chat.enable). When opted out, the
+  # SKILL.md does not reach the agent — it advertises a CLI the
+  # sandbox can't actually reach, so dropping it avoids confusing
+  # tool calls.
   builtinSkills = {
     datetime = "${skillsDir}/datetime";
     location = "${skillsDir}/location";

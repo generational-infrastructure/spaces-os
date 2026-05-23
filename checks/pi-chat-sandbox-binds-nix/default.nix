@@ -44,6 +44,11 @@ let
         boot.loader.grub.enable = false;
         system.stateVersion = "26.05";
 
+        # Test the sandboxBinds wiring contract in isolation. The
+        # signal-cli module would otherwise inject four entries of
+        # its own (default-on with pi-chat) and the fixture counts
+        # would lie.
+        services.distro-signal.enable = false;
         services.pi-chat.sandboxBinds = fixture;
       }
     ];
@@ -126,6 +131,10 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
             };
             boot.loader.grub.enable = false;
             system.stateVersion = "26.05";
+
+            # Same isolation as above: with distro-signal default-on
+            # the "default" system would have four entries, not zero.
+            services.distro-signal.enable = false;
           }
         ];
       }).config.environment.etc."distro/pi-chat.json".source

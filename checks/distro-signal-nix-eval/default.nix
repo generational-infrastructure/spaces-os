@@ -10,14 +10,25 @@
 #      sandbox.
 #   3. Enabling distro-signal without pi-chat trips the module's own
 #      assertion (the integration is meaningless without the agent).
+#   4. Default-on follows pi-chat: an unconfigured noctalia-bar host
+#      (which auto-enables pi-chat) ships the signal-cli infra by
+#      default; an explicit `services.distro-signal.enable = false`
+#      strips it back out.
+#   5. Both user services carry ConditionPathExistsGlob so they
+#      silently no-op until the user runs `signal-cli link`; a
+#      systemd.user.paths.distro-signal-link unit watches for the
+#      account dir and triggers the daemon on first link; the bridge
+#      follows the daemon via wantedBy so it auto-starts in lockstep.
 #
 # Pure nix eval + jq. ~3-5s.
 { pkgs, inputs, ... }:
 let
   inherit (inputs.nixpkgs) lib;
   baseModules = [
+    # noctalia-bar -> noctalia-plugin imports the signal-cli module
+    # transitively, so the eval here exercises the same import
+    # graph distro users get.
     inputs.self.nixosModules.noctalia-bar
-    inputs.self.nixosModules.signal-cli
     {
       nixpkgs.hostPlatform = "x86_64-linux";
       fileSystems."/" = {
@@ -29,6 +40,10 @@ let
     }
   ];
 
+  # Default deployment shape: noctalia-bar (which auto-enables
+  # pi-chat) plus an explicit `enable = true` on distro-signal. The
+  # explicit set is redundant with the new pi-chat-tracking default
+  # but keeps the intent obvious next to the assertions below.
   enabledSystem = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
       inherit inputs;
@@ -38,6 +53,22 @@ let
       {
         networking.hostName = "signal-enabled";
         services.distro-signal.enable = true;
+      }
+    ];
+  };
+
+  # Opt-out path: same imports, explicit `enable = false`. Must
+  # leave NO distro-signal-* user units, NO sandbox binds, and the
+  # signal skill must not reach the agent's skills-defs farm.
+  disabledSystem = inputs.nixpkgs.lib.nixosSystem {
+    specialArgs = {
+      inherit inputs;
+      flake = inputs.self;
+    };
+    modules = baseModules ++ [
+      {
+        networking.hostName = "signal-disabled";
+        services.distro-signal.enable = false;
       }
     ];
   };
@@ -72,7 +103,9 @@ let
 
   service = enabledSystem.config.systemd.user.services.distro-signal-cli;
   bridge = enabledSystem.config.systemd.user.services.distro-signal-bridge;
+  pathUnit = enabledSystem.config.systemd.user.paths.distro-signal-link;
   pichatConfig = enabledSystem.config.environment.etc."distro/pi-chat.json".source;
+  disabledPichatCfg = disabledSystem.config.environment.etc."distro/pi-chat.json";
 in
 pkgs.runCommand "distro-signal-nix-eval-test"
   {
@@ -90,27 +123,34 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     bridgeRestart = bridge.serviceConfig.Restart or "";
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
     enabledTmpfiles = lib.concatStringsSep "\n" enabledSystem.config.systemd.user.tmpfiles.rules;
-    defaultTmpfiles =
-      lib.concatStringsSep "\n"
-        (inputs.nixpkgs.lib.nixosSystem {
-          specialArgs = {
-            inherit inputs;
-            flake = inputs.self;
-          };
-          modules = [
-            inputs.self.nixosModules.noctalia-bar
-            {
-              nixpkgs.hostPlatform = "x86_64-linux";
-              networking.hostName = "default";
-              fileSystems."/" = {
-                device = "none";
-                fsType = "tmpfs";
-              };
-              boot.loader.grub.enable = false;
-              system.stateVersion = "26.05";
-            }
-          ];
-        }).config.systemd.user.tmpfiles.rules;
+    disabledTmpfiles = lib.concatStringsSep "\n" disabledSystem.config.systemd.user.tmpfiles.rules;
+    # Condition that gates both user units. Empty when not set, which
+    # makes the assertion below fail clearly instead of silently
+    # treating "no condition" as a match.
+    serviceCondition = lib.concatStringsSep " " (
+      lib.toList (service.unitConfig.ConditionPathExistsGlob or [ ])
+    );
+    bridgeCondition = lib.concatStringsSep " " (
+      lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ])
+    );
+    # Path-activation unit: starts the daemon when an account dir
+    # first appears under ~/.local/share/signal-cli/data/.
+    pathExistsGlob = lib.concatStringsSep " " (lib.toList (pathUnit.pathConfig.PathExistsGlob or [ ]));
+    pathUnitTarget = pathUnit.pathConfig.Unit or "";
+    pathUnitWantedBy = lib.concatStringsSep " " (pathUnit.wantedBy or [ ]);
+    # Bridge follows daemon: when the daemon is path-triggered, the
+    # bridge must start too. wantedBy on the unit edge does that.
+    bridgeWantedBy = lib.concatStringsSep " " (bridge.wantedBy or [ ]);
+    # When the user opts out, distro-signal-cli must NOT be declared
+    # at all (not "declared but disabled"). Empty string = absent.
+    disabledHasSignalUnits =
+      let
+        names = builtins.attrNames disabledSystem.config.systemd.user.services;
+      in
+      if builtins.elem "distro-signal-cli" names then "yes" else "no";
+    # Likewise sandboxBinds must not carry signal entries when opted
+    # out — we surface the raw JSON for a jq check.
+    disabledPichatConfig = disabledPichatCfg.source;
   }
   ''
     set -euo pipefail
@@ -196,20 +236,64 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     ' "$pichatConfig" >/dev/null \
       || fail "panel socket must NOT be in sandboxBinds (security regression!): $binds"
 
-    # ── 2e. signal SKILL.md is included when distro-signal is enabled,
-    # and absent when it is not — guards against the agent advertising
-    # a CLI the sandbox doesn't actually ship. We look for the
-    # skills-defs/signal symlink line in the user-tmpfiles rules
-    # because that's where pi-chat materialises each skill into the
-    # agent's state dir.
+    # ── 2e. signal SKILL.md is included by default (since enable
+    # tracks pi-chat.enable) and stripped when explicitly disabled.
+    # Guards against the agent advertising a CLI the sandbox doesn't
+    # actually ship. The skill is materialised as a symlink line in
+    # the user-tmpfiles rules.
     case "$enabledTmpfiles" in
       *"/skills-defs/signal "*) ;;
       *) fail "signal SKILL.md never reached pi-chat skills-defs when distro-signal is enabled." ;;
     esac
-    case "$defaultTmpfiles" in
-      *"/skills-defs/signal "*) fail "signal SKILL.md leaked into the default skills set." ;;
+    case "$disabledTmpfiles" in
+      *"/skills-defs/signal "*) fail "signal SKILL.md still present after services.distro-signal.enable = false." ;;
       *) ;;
     esac
+
+    # ── 2f. ConditionPathExistsGlob gates both units so they no-op
+    # silently until the user runs `signal-cli link`. Without this
+    # the daemon spins a JVM at every login for nothing on fresh
+    # systems; with it, login does not start signal-cli until an
+    # account dir appears.
+    expectedGlob='%h/.local/share/signal-cli/data/*.d'
+    [ "$serviceCondition" = "$expectedGlob" ] \
+      || fail "daemon ConditionPathExistsGlob must be '$expectedGlob', got '$serviceCondition'"
+    [ "$bridgeCondition" = "$expectedGlob" ] \
+      || fail "bridge ConditionPathExistsGlob must be '$expectedGlob', got '$bridgeCondition'"
+
+    # ── 2g. systemd.user.paths.distro-signal-link auto-starts the
+    # daemon when the account dir is created by `signal-cli link`.
+    # Without this the first link requires a manual `systemctl
+    # --user start` — defeats the auto-onboarding goal.
+    [ "$pathExistsGlob" = "$expectedGlob" ] \
+      || fail "path-unit PathExistsGlob must be '$expectedGlob', got '$pathExistsGlob'"
+    [ "$pathUnitTarget" = "distro-signal-cli.service" ] \
+      || fail "path-unit must target distro-signal-cli.service, got '$pathUnitTarget'"
+    case " $pathUnitWantedBy " in
+      *" default.target "*) ;;
+      *) fail "path-unit must be wantedBy=default.target so login arms it, got '$pathUnitWantedBy'" ;;
+    esac
+
+    # ── 2h. Bridge follows daemon. The path-unit only triggers the
+    # daemon; the bridge must be wantedBy that daemon so it comes
+    # up in lockstep when the first link happens.
+    case " $bridgeWantedBy " in
+      *" distro-signal-cli.service "*) ;;
+      *) fail "bridge must be wantedBy=distro-signal-cli.service (so path-activation propagates), got '$bridgeWantedBy'" ;;
+    esac
+
+    # ── 2i. Opt-out path: explicit `enable = false` strips every
+    # signal-cli-shaped artifact from the system, including the user
+    # units and the pi-chat sandbox binds.
+    [ "$disabledHasSignalUnits" = "no" ] \
+      || fail "distro-signal-cli unit still declared after explicit enable = false"
+    jq -e '
+      .sandboxBinds
+      | all(.source | startswith("%t/signal-cli/") | not)
+      and all(.source | startswith("%h/.local/state/distro/signal") | not)
+      and all(.source | startswith("%t/distro-signal-") | not)
+    ' "$disabledPichatConfig" >/dev/null \
+      || fail "sandboxBinds still carry signal-cli entries after explicit enable = false: $(jq -c '.sandboxBinds' "$disabledPichatConfig")"
 
     # ── 3. distro-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then

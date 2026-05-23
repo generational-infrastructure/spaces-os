@@ -305,7 +305,10 @@ class TestContactsGroups(CliBase):
         os.environ["DISTRO_SIGNAL_DAEMON_SOCKET"] = "/nonexistent.sock"
         rc, _, err = _run(["contacts"])
         self.assertNotEqual(rc, 0)
-        self.assertIn("daemon unreachable", err)
+        # When the socket *file* is missing (vs. ECONNREFUSED on a
+        # half-up daemon), the CLI prints an onboarding hint pointing
+        # at `signal-cli link` instead of a bare connect-failure trace.
+        self.assertIn("signal-cli link", err)
 
 
 # ── send / enqueue ──────────────────────────────────────────────────
@@ -372,7 +375,10 @@ class TestSend(CliBase):
         os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = "/nonexistent.sock"
         rc, _, err = _run(["send", "+15559998888", "hi"])
         self.assertNotEqual(rc, 0)
-        self.assertIn("bridge unreachable", err)
+        # Same onboarding hint as contacts/groups; the send path is
+        # the most common first-touch point so the hint matters most
+        # here.
+        self.assertIn("signal-cli link", err)
 
 
 # ── argparse plumbing ───────────────────────────────────────────────

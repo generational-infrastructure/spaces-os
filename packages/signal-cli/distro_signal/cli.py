@@ -54,6 +54,12 @@ def _daemon_socket_path() -> str:
     return env or f"{_runtime_dir()}/signal-cli/socket"
 
 
+_ONBOARDING_HINT = (
+    "if signal-cli has never been linked on this host, run on your "
+    'host shell:\n  signal-cli link -n "$(hostname)-pi"\n'
+    "and scan the printed tsdevice: URL with your phone's Signal app."
+)
+
 # ── formatting ──────────────────────────────────────────────────────
 
 
@@ -165,8 +171,21 @@ def cmd_groups(args: argparse.Namespace) -> int:
 
 
 def _daemon_list(args, method: str, formatter) -> int:
+    daemon_sock = _daemon_socket_path()
     try:
-        client = JsonRpcClient(_daemon_socket_path())
+        client = JsonRpcClient(daemon_sock)
+    except FileNotFoundError:
+        # Distinct from ECONNREFUSED: the socket file does not exist
+        # at all, which on a default distro install means the user
+        # has never linked a Signal account (and the path-activated
+        # daemon unit has therefore never started). Point at the
+        # link command instead of an opaque "no such file".
+        print(
+            f"error: signal-cli daemon socket missing ({daemon_sock}).\n"
+            f"{_ONBOARDING_HINT}",
+            file=sys.stderr,
+        )
+        return 1
     except OSError as exc:
         print(f"error: signal-cli daemon unreachable: {exc}", file=sys.stderr)
         return 1
@@ -239,6 +258,13 @@ def cmd_send(args: argparse.Namespace) -> int:
     payload = {"op": "send", "to": args.recipient, "body": args.body}
     try:
         resp = _enqueue_call(payload)
+    except FileNotFoundError:
+        sock = _enqueue_socket_path()
+        print(
+            f"error: signal bridge socket missing ({sock}).\n{_ONBOARDING_HINT}",
+            file=sys.stderr,
+        )
+        return 1
     except (OSError, ValueError) as exc:
         print(f"error: bridge unreachable: {exc}", file=sys.stderr)
         return 1

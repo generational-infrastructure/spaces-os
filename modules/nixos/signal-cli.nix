@@ -48,10 +48,28 @@ let
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/distro/signal";
   enqueueSockName = "distro-signal-enqueue.sock";
+
+  # systemd condition + path-unit glob. signal-cli writes per-account
+  # state into ~/.local/share/signal-cli/data/<account-id>{,.d}; the
+  # exact <account-id> naming varies by signal-cli version (older
+  # builds use `+<phone-number>`, newer ones use opaque numeric IDs),
+  # but the `.d/` per-account directory is created in both cases
+  # only after a successful link/register. accounts.json exists from
+  # first run with an empty array, so it can't be the signal.
+  linkedAccountGlob = "%h/${identityRel}/data/*.d";
 in
 {
   options.services.distro-signal = {
-    enable = lib.mkEnableOption "signal-cli daemon backing the distro AI agent's Signal skill";
+    enable = lib.mkEnableOption "signal-cli daemon backing the distro AI agent's Signal skill" // {
+      # Default tracks pi-chat: anything pulling noctalia-plugin
+      # gets the signal infrastructure for free, but the *units*
+      # stay condition-gated below so a fresh system pays nothing
+      # until the user runs `signal-cli link`. Standalone imports
+      # (no pi-chat in the config) fall back to false so the
+      # assertion further down has something to refuse cleanly.
+      default = config.services.pi-chat.enable or false;
+      defaultText = lib.literalExpression "config.services.pi-chat.enable";
+    };
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -101,22 +119,30 @@ in
       "d %h/${storeRel} 0700 - - -"
     ];
 
+    # Daemon unit. Condition-gated on the account dir so a fresh
+    # system without a linked Signal device doesn't spin up a JVM
+    # at every login — the unit reports `condition: skipped` and
+    # exits 0 immediately. Once the user runs `signal-cli link`,
+    # the path-activation unit below triggers this service and the
+    # condition passes on every subsequent login.
     systemd.user.services.distro-signal-cli = {
       description = "signal-cli daemon (distro AI agent Signal backend)";
       wantedBy = [ "default.target" ];
       after = [ "default.target" ];
 
+      unitConfig.ConditionPathExistsGlob = linkedAccountGlob;
+
       serviceConfig = {
         # `exec` so systemd reports ready when the JVM has actually
-        # invoked exec(); `simple` would race subscribers that try to
-        # connect before the socket is bound.
+        # invoked exec(); `simple` would race subscribers that try
+        # to connect before the socket is bound.
         Type = "exec";
         ExecStart = lib.concatStringsSep " " [
           (lib.getExe cfg.package)
           "daemon"
           # --socket without `=path` uses the default
-          # $XDG_RUNTIME_DIR/signal-cli/socket, which RuntimeDirectory
-          # below creates with the right mode.
+          # $XDG_RUNTIME_DIR/signal-cli/socket, which
+          # RuntimeDirectory below creates with the right mode.
           "--socket"
           "--receive-mode=on-start"
           "--no-receive-stdout"
@@ -138,18 +164,43 @@ in
     # auto-approving themselves.
     systemd.user.services.distro-signal-bridge = {
       description = "distro signal bridge (forwarder + send broker)";
-      wantedBy = [ "default.target" ];
+      # wantedBy includes the daemon service so path-activation
+      # propagates: when the daemon is started by the path unit on
+      # first link, systemd pulls the bridge in too. The
+      # default.target entry covers the normal login start-up path
+      # for already-linked systems.
+      wantedBy = [
+        "default.target"
+        "distro-signal-cli.service"
+      ];
       after = [
         "default.target"
         "distro-signal-cli.service"
       ];
       requires = [ "distro-signal-cli.service" ];
 
+      unitConfig.ConditionPathExistsGlob = linkedAccountGlob;
+
       serviceConfig = {
         Type = "exec";
         ExecStart = "${signalCliPkg}/bin/distro-signal-bridge";
         Restart = "always";
         RestartSec = 3;
+      };
+    };
+
+    # Path-activation: signal-cli's `link` (and `register`) write
+    # the account file into ~/.local/share/signal-cli/data/+<phone>;
+    # this unit watches for that and triggers the daemon
+    # automatically on first link. Without it the user would have
+    # to run `systemctl --user start distro-signal-cli` themselves.
+    # The bridge follows via wantedBy on the daemon above.
+    systemd.user.paths.distro-signal-link = {
+      description = "Trigger signal-cli daemon when a Signal account is linked";
+      wantedBy = [ "default.target" ];
+      pathConfig = {
+        PathExistsGlob = linkedAccountGlob;
+        Unit = "distro-signal-cli.service";
       };
     };
 
