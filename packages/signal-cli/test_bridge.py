@@ -41,6 +41,7 @@ class FakeSignalDaemon:
 
         self.subscribed_conns: list[socket.socket] = []
         self.send_calls: list[dict] = []
+        self.sync_requests: list[dict] = []
         self._lock = threading.Lock()
 
         self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -145,6 +146,10 @@ class FakeSignalDaemon:
             with self._lock:
                 if conn not in self.subscribed_conns:
                     self.subscribed_conns.append(conn)
+            result = {}
+        elif method == "sendSyncRequest":
+            with self._lock:
+                self.sync_requests.append(params)
             result = {}
         elif method == "send":
             self.send_calls.append(params)
@@ -709,6 +714,60 @@ class TestClassifyAndSelf(unittest.TestCase):
                 }
             )
         )
+
+
+class TestStartupSync(BridgeHarness):
+    def test_sendSyncRequest_issued_for_each_account_at_startup(self) -> None:
+        if not _wait_until(lambda: len(self.daemon.sync_requests) >= 1):
+            self.fail("bridge never issued sendSyncRequest at startup")
+        accounts_requested = {p.get("account") for p in self.daemon.sync_requests}
+        self.assertEqual(accounts_requested, {"+15550000001"})
+
+    def test_sendSyncRequest_not_repeated_on_account_refresh(self) -> None:
+        if not _wait_until(lambda: len(self.daemon.sync_requests) >= 1):
+            self.fail("bridge never issued sendSyncRequest at startup")
+        baseline = len(self.daemon.sync_requests)
+        # Force a refresh — should NOT trigger another sync request,
+        # otherwise repeated refreshes hammer the primary device.
+        self.bridge._refresh_accounts()
+        time.sleep(0.1)
+        self.assertEqual(len(self.daemon.sync_requests), baseline)
+
+
+class TestStartupSyncMultiAccount(unittest.TestCase):
+    def test_one_request_per_account(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        daemon_sock = str(base / "signal.sock")
+        enqueue_sock = str(base / "enqueue.sock")
+        panel_sock = str(base / "panel.sock")
+        db_path = base / "messages.db"
+
+        daemon = FakeSignalDaemon(daemon_sock)
+        daemon.accounts = [
+            {"uuid": "u1", "number": "+1111"},
+            {"uuid": "u2", "number": "+2222"},
+        ]
+        self.addCleanup(daemon.stop)
+
+        bridge = bridge_mod.Bridge(
+            bridge_mod.BridgeConfig(
+                db_path=db_path,
+                daemon_socket=daemon_sock,
+                enqueue_socket=enqueue_sock,
+                panel_socket=panel_sock,
+            ),
+            accounts_refresh_seconds=60.0,
+        )
+        bridge.start()
+        self.addCleanup(bridge.stop)
+
+        if not _wait_until(lambda: len(daemon.sync_requests) >= 2):
+            self.fail(f"expected 2 sync requests, got {len(daemon.sync_requests)}")
+        time.sleep(0.1)
+        accounts_requested = sorted(p.get("account") for p in daemon.sync_requests)
+        self.assertEqual(accounts_requested, ["+1111", "+2222"])
 
 
 if __name__ == "__main__":

@@ -282,6 +282,7 @@ class Bridge:
         # the very first send.
         self._rpc_client = self._client_factory()
         self._refresh_accounts()
+        self._request_initial_sync()
 
         self._spawn(self._run_receiver, name="receiver")
         self._spawn(self._run_enqueue_listener, name="enqueue")
@@ -348,6 +349,35 @@ class Bridge:
     def _run_accounts_refresher(self) -> None:
         while not self._stop.wait(self._accounts_refresh_seconds):
             self._refresh_accounts()
+
+    def _request_initial_sync(self) -> None:
+        """Ask the primary device to push a fresh metadata sync.
+
+        signal-cli's `sendSyncRequest` covers contacts, groups,
+        blocked list, configuration, and keys — **NOT** message
+        history. The Signal protocol has no "give me old messages"
+        primitive that signal-cli speaks (the January-2025
+        linked-device history archive is a separate provisioning-time
+        channel that signal-cli has not implemented; see
+        AsamK/signal-cli#1708).
+
+        We fire this once per process startup so a user who has
+        added/removed contacts or groups on their phone since the
+        last bridge run sees an up-to-date `listContacts` /
+        `listGroups` without having to unlink-and-relink. Failures
+        are non-fatal — the primary device may be offline.
+        """
+        if self._rpc_client is None:
+            return
+        for acct in self._accounts_snapshot():
+            account = acct.get("number") or acct.get("uuid")
+            if not account:
+                continue
+            try:
+                self._rpc_client.call("sendSyncRequest", {"account": account})
+                log.info("requested primary-device metadata sync for %s", account)
+            except (JsonRpcError, OSError, TimeoutError) as exc:
+                log.warning("sendSyncRequest(%s) failed: %s", account, exc)
 
     # ── receiver ────────────────────────────────────────────────────
 
