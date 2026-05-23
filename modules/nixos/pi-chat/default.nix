@@ -310,6 +310,74 @@ in
       '';
     };
 
+    sandboxBinds = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            source = lib.mkOption {
+              type = lib.types.str;
+              description = ''
+                Host path to bind into the per-session pi sandbox. May
+                contain systemd specifiers `%h` (user `$HOME`) and `%t`
+                (`$XDG_RUNTIME_DIR`); both are expanded by the panel at
+                session-spawn time.
+              '';
+            };
+            target = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Path inside the sandbox the source is bound to. Same
+                specifier expansion as `source`. When null (the default),
+                the source path is reused on both sides.
+              '';
+            };
+            mode = lib.mkOption {
+              type = lib.types.enum [
+                "ro"
+                "rw"
+              ];
+              default = "ro";
+              description = ''
+                `ro` → systemd `BindReadOnlyPaths=`; `rw` → `BindPaths=`.
+                Default `ro` because skills almost always only need to
+                read configuration and data they did not produce.
+              '';
+            };
+            optional = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                When true, prefix the bind source with `-` so systemd
+                skips the entry instead of refusing to start the sandbox
+                when the host path is missing. Use for sockets whose
+                publisher may legitimately be down (e.g. a forwarder
+                service that hasn't booted yet).
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          { source = "%t/signal-cli/socket"; mode = "rw"; }
+          { source = "%h/.local/state/distro/signal"; mode = "rw"; }
+          { source = "%h/.local/share/signal-cli/attachments"; mode = "ro"; }
+        ]
+      '';
+      description = ''
+        Extra bind-mounts to inject into each per-session pi sandbox.
+
+        NixOS modules that add a skill **MUST** publish their required
+        host paths through this option rather than patching the
+        pi-chat plugin's internal bind list. The panel resolves these
+        at session-spawn time and appends the corresponding
+        systemd-run `--property=BindPaths` / `--property=BindReadOnlyPaths`
+        flags after the pi-chat-owned baseline binds.
+      '';
+    };
+
     bashConfirm = {
       allowPatterns = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -668,6 +736,11 @@ in
       # session's state dir, so both paths stay live regardless.
       memoryDbDir = memoryDbRel;
       memoryHfHome = toString memoryHfHome;
+      # Extra sandbox binds contributed via services.pi-chat.sandboxBinds.
+      # The panel expands %h / %t and emits one systemd-run BindPaths
+      # (or BindReadOnlyPaths) property per entry, after the
+      # pi-chat-owned baseline binds.
+      inherit (cfg) sandboxBinds;
     };
   };
 }

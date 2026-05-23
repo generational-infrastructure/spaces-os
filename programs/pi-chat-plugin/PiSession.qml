@@ -58,6 +58,16 @@ QtObject {
   property bool   memoryEnabled: true
   property string memoryDbDir: ""
   property string memoryHfHome: ""
+  // Extra sandbox bind-mounts contributed by NixOS modules via
+  // services.pi-chat.sandboxBinds. Each entry:
+  //   { source: string, target?: string, mode: "ro"|"rw", optional?: bool }
+  // Both source and target accept systemd specifiers `%h` (HOME) and
+  // `%t` ($XDG_RUNTIME_DIR), expanded at session-spawn time. When
+  // target is omitted, source is reused on both sides of the bind.
+  // `optional: true` prefixes the source with `-` so a missing path
+  // doesn't abort sandbox start — useful for sockets the publisher
+  // may not have bound yet.
+  property var    sandboxBinds: []
 
   // ── live state observable by Panel.qml via PiChatBackend.chat ──
   property string peerName: sessionName
@@ -372,6 +382,25 @@ QtObject {
       cmd.push("--setenv=SEDIMENT_DB=" + memoryDbDir + "/data");
       cmd.push("--setenv=HF_HOME=" + memoryHfHome);
       cmd.push("--property=BindPaths=" + memoryDbDir + ":" + memoryDbDir);
+    }
+    // Module-contributed binds (services.pi-chat.sandboxBinds). Pushed
+    // last so the baseline pi-chat-owned binds above stay in a stable
+    // position regardless of how many skills opt in. Anything malformed
+    // is silently skipped — a typo in a downstream module must not be
+    // able to abort sandbox setup.
+    const homeDir = String(Quickshell.env("HOME"));
+    function _expandSpecifiers(p) {
+      return String(p || "").replace(/%h/g, homeDir).replace(/%t/g, xdgRuntime);
+    }
+    const extraBinds = sandboxBinds || [];
+    for (let i = 0; i < extraBinds.length; i++) {
+      const b = extraBinds[i];
+      if (!b || !b.source) continue;
+      const src = _expandSpecifiers(b.source);
+      const tgt = b.target ? _expandSpecifiers(b.target) : src;
+      const prop = b.mode === "ro" ? "BindReadOnlyPaths" : "BindPaths";
+      const prefix = b.optional ? "-" : "";
+      cmd.push("--property=" + prop + "=" + prefix + src + ":" + tgt);
     }
     cmd.push("--", piBin, "--mode", "rpc", "--session-dir", sessionState);
     // --continue picks the most recent jsonl in the session dir. On

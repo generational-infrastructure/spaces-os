@@ -52,6 +52,12 @@ Item {
       // both; the per-chat opt-out lives on the session entry.
       property string memoryDbDir: ""
       property string memoryHfHome: ""
+      // Extra sandbox bind-mounts contributed by NixOS modules via
+      // services.pi-chat.sandboxBinds. List of
+      //   { source, target?, mode: "ro"|"rw", optional?: bool }
+      // Forwarded verbatim to each PiSession; %h/%t are expanded at
+      // session-spawn time inside PiSession._buildCommand().
+      property var sandboxBinds: []
     }
   }
 
@@ -74,6 +80,7 @@ Item {
     ? homeDir + "/" + String(configAdapter.memoryDbDir).replace(/^\/+/, "")
     : ""
   readonly property string memoryHfHome: configAdapter.memoryHfHome
+  readonly property var sandboxBinds: configAdapter.sandboxBinds || []
   readonly property int idleTimeoutMin: {
     const c = cfg("idleTimeoutMinutes");
     if (typeof c === "number" && c > 0) return c;
@@ -525,6 +532,7 @@ Item {
           memoryEnabled: s.memoryEnabled !== false,
           memoryDbDir: Qt.binding(() => root.memoryDbDir),
           memoryHfHome: Qt.binding(() => root.memoryHfHome),
+          sandboxBinds: Qt.binding(() => root.sandboxBinds),
         });
         const idCaptured = s.id;
         obj.needsPersist.connect(() => root._persist());
