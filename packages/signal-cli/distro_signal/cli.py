@@ -28,6 +28,7 @@ import json
 import os
 import socket
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from . import db as dbmod
@@ -90,10 +91,34 @@ def _truncate(text: str | None, n: int = 80) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+def _signal_running() -> bool:
+    """True iff the signal stack appears installed on this host.
+
+    Probes socket-file existence rather than reachability: any signal
+    socket means the systemd units have run at least once, which only
+    happens after the user completes `signal-cli link`. Both sockets
+    are optional bind-mounts in the pi-chat sandbox, so a half-up
+    system (one socket only) still counts as "configured" — DB-backed
+    reads should proceed against the data the bridge already wrote.
+    """
+    return Path(_daemon_socket_path()).exists() or Path(_enqueue_socket_path()).exists()
+
+
+def _emit_unconfigured_hint() -> None:
+    print(
+        "error: signal infrastructure not running "
+        "(neither daemon nor bridge socket present).\n" + _ONBOARDING_HINT,
+        file=sys.stderr,
+    )
+
+
 # ── commands ────────────────────────────────────────────────────────
 
 
 def cmd_threads(args: argparse.Namespace) -> int:
+    if not _signal_running():
+        _emit_unconfigured_hint()
+        return 1
     db = dbmod.connect(dbmod.default_db_path())
     rows = dbmod.list_threads(db, limit=args.limit)
     if args.json:
@@ -117,6 +142,9 @@ def cmd_threads(args: argparse.Namespace) -> int:
 
 
 def cmd_read(args: argparse.Namespace) -> int:
+    if not _signal_running():
+        _emit_unconfigured_hint()
+        return 1
     db = dbmod.connect(dbmod.default_db_path())
     rows = dbmod.query_messages(
         db,
@@ -144,6 +172,9 @@ def cmd_read(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if not _signal_running():
+        _emit_unconfigured_hint()
+        return 1
     db = dbmod.connect(dbmod.default_db_path())
     rows = dbmod.query_messages(db, body_query=args.query, limit=args.limit)
     if args.json:

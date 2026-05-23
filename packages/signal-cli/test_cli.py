@@ -166,6 +166,16 @@ class CliBase(unittest.TestCase):
         }
         os.environ["DISTRO_SIGNAL_DB"] = str(self.db_path)
         os.environ["XDG_RUNTIME_DIR"] = str(self.runtime)
+        # Default-shape: a configured-and-running system has both
+        # sockets present (bind-mounted from outside the sandbox).
+        # Touch empty files so the CLI's "is the signal stack up?"
+        # check passes — tests that need to simulate an unconfigured
+        # host remove them explicitly.
+        self.daemon_sock_default = self.runtime / "signal-cli" / "socket"
+        self.daemon_sock_default.parent.mkdir(parents=True, exist_ok=True)
+        self.daemon_sock_default.touch()
+        self.enqueue_sock_default = self.runtime / "distro-signal-enqueue.sock"
+        self.enqueue_sock_default.touch()
 
     def tearDown(self) -> None:
         for k, v in self._old_env.items():
@@ -394,6 +404,71 @@ class TestSend(CliBase):
         # the most common first-touch point so the hint matters most
         # here.
         self.assertIn("signal-cli link", err)
+
+
+# ── unconfigured-host hint ──────────────────────────────────────────
+
+
+class TestUnconfigured(CliBase):
+    """Regression: a fresh host where the user has never run
+    `signal-cli link` shipped the systemd units in skipped state, so
+    neither the daemon nor bridge socket exists. Pre-fix, the DB-
+    backed reads opened (and silently created) an empty messages.db,
+    then printed "(no threads)" / "(no messages…)" to stdout with
+    rc=0. The agent took that as "configured but empty" and
+    confidently told the user setup was complete — until the first
+    command that actually hit the daemon (`signal contacts`) blew up
+    with "daemon socket missing".
+
+    Post-fix every command surfaces the onboarding hint on stderr
+    and exits non-zero before the DB is touched, so the agent sees
+    the real state on its very first call.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Strip the dummy sockets CliBase touches by default — this
+        # class simulates the unlinked-host case from the bug report.
+        self.daemon_sock_default.unlink()
+        self.enqueue_sock_default.unlink()
+
+    def _assert_unconfigured(self, rc: int, out: str, err: str) -> None:
+        # 1. Non-zero exit so bash callers (and the agent) trip on it.
+        self.assertNotEqual(rc, 0, f"expected non-zero rc, stdout={out!r}")
+        # 2. stdout MUST be silent. The original failure was the
+        #    misleading "(no threads)" landing on stdout where the
+        #    agent took it as a legitimate empty-state answer.
+        self.assertEqual(out, "", f"stdout leaked unconfigured-state content: {out!r}")
+        # 3. The hint must point at the actual fix.
+        self.assertIn("signal-cli link", err)
+
+    def test_threads_does_not_pretend_db_is_truth(self) -> None:
+        rc, out, err = _run(["threads"])
+        self._assert_unconfigured(rc, out, err)
+        # Belt-and-braces: the exact lie from the bug report
+        # ("(no threads)") must NOT appear anywhere.
+        self.assertNotIn("no threads", out + err)
+
+    def test_read_does_not_pretend_db_is_truth(self) -> None:
+        rc, out, err = _run(["read", "uuid-alice"])
+        self._assert_unconfigured(rc, out, err)
+        self.assertNotIn("no messages", out + err)
+
+    def test_search_does_not_pretend_db_is_truth(self) -> None:
+        rc, out, err = _run(["search", "hello"])
+        self._assert_unconfigured(rc, out, err)
+        self.assertNotIn("no matches", out + err)
+
+    def test_one_socket_present_is_enough(self) -> None:
+        # If only one of the two sockets exists (e.g. the daemon is
+        # up but the bridge is transiently down, or vice versa),
+        # DB-backed reads should still proceed against whatever the
+        # bridge has already written. Half-up is still "configured".
+        self.daemon_sock_default.parent.mkdir(parents=True, exist_ok=True)
+        self.daemon_sock_default.touch()
+        rc, out, _ = _run(["threads"])
+        self.assertEqual(rc, 0)
+        self.assertIn("no threads", out)
 
 
 # ── argparse plumbing ───────────────────────────────────────────────
