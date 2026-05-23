@@ -9,9 +9,11 @@
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     noctalia-shell.url = "github:noctalia-dev/noctalia-shell/v4.7.7";
     noctalia-shell.inputs.nixpkgs.follows = "nixpkgs";
+    noctalia-shell.inputs.noctalia-qs.inputs.treefmt-nix.follows = "treefmt-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
+    llm-agents.inputs.blueprint.follows = "blueprint";
     voxtype.url = "github:peteonrails/voxtype";
     voxtype.inputs.nixpkgs.follows = "nixpkgs";
   };
