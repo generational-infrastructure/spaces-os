@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "distro-signal-cli"
+version = "0.1.0"
+description = "Signal skill for the distro AI agent (CLI + bridge daemon)"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+# `signal` is the agent-facing CLI invoked from inside the pi-chat
+# sandbox. `distro-signal-bridge` is the host-side long-lived service
+# that subscribes to signal-cli, persists messages, and brokers the
+# enqueue/approve flow.
+signal = "distro_signal.cli:main"
+distro-signal-bridge = "distro_signal.bridge:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["distro_signal"]

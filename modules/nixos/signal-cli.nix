@@ -32,6 +32,7 @@
 #
 # After linking, signal-cli's data dir holds the linked-device keys
 # and the daemon will see every message the primary device sees.
+{ inputs, ... }:
 {
   config,
   lib,
@@ -41,9 +42,12 @@
 let
   cfg = config.services.distro-signal;
 
+  signalCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.signal-cli;
+
   socketRel = "signal-cli/socket"; # relative to $XDG_RUNTIME_DIR
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/distro/signal";
+  enqueueSockName = "distro-signal-enqueue.sock";
 in
 {
   options.services.distro-signal = {
@@ -78,16 +82,22 @@ in
 
     # signal-cli on PATH so the user can run the one-time link/register
     # flow and ad-hoc debugging commands (listGroups, listContacts, …)
-    # against the same data dir the daemon uses.
-    environment.systemPackages = [ cfg.package ];
+    # against the same data dir the daemon uses. signalCliPkg also goes
+    # on PATH so the user can drive the `signal` CLI from a regular
+    # shell (debugging, scripting) against the same bridge sockets the
+    # sandbox uses.
+    environment.systemPackages = [
+      cfg.package
+      signalCliPkg
+    ];
 
     systemd.user.tmpfiles.rules = [
       # identity dir: 0700 so per-device keys are not world-readable.
       # signal-cli will create it itself on first link; we pre-create
       # so the mode is correct from the start.
       "d %h/${identityRel} 0700 - - -"
-      # distro-side store dir for the forwarder / message DB the
-      # signal skill will write to (lands in step 3).
+      # distro-side store dir: holds messages.db (the bridge writes,
+      # the agent's `signal` CLI reads via a bind-mounted RW path).
       "d %h/${storeRel} 0700 - - -"
     ];
 
@@ -120,11 +130,33 @@ in
       };
     };
 
-    # Expose what the pi-chat sandbox needs to talk to Signal. The
-    # daemon socket and the distro-side store (where the forwarder
-    # lands its SQLite in step 3) get bound RW; signal-cli's
-    # attachment dir is bound RO so the agent can read images / files
-    # users send without being able to clobber the cache.
+    # Bridge: subscribes to the daemon, persists envelopes into
+    # messages.db, and brokers the enqueue/approve flow over two
+    # separate sockets. The enqueue socket is bind-mounted into the
+    # pi-chat sandbox; the panel socket is NOT — that split is the
+    # security boundary that keeps prompt-injected sends from
+    # auto-approving themselves.
+    systemd.user.services.distro-signal-bridge = {
+      description = "distro signal bridge (forwarder + send broker)";
+      wantedBy = [ "default.target" ];
+      after = [
+        "default.target"
+        "distro-signal-cli.service"
+      ];
+      requires = [ "distro-signal-cli.service" ];
+
+      serviceConfig = {
+        Type = "exec";
+        ExecStart = "${signalCliPkg}/bin/distro-signal-bridge";
+        Restart = "always";
+        RestartSec = 3;
+      };
+    };
+
+    # Sandbox-facing surface. Daemon socket + distro-side store +
+    # signal-cli's attachment cache + bridge enqueue socket. The
+    # bridge's panel socket is deliberately absent: only the chat
+    # panel running outside the sandbox may approve outbound sends.
     services.pi-chat.sandboxBinds = [
       {
         source = "%t/${socketRel}";
@@ -144,6 +176,13 @@ in
         # first attachment, so it may legitimately be missing.
         optional = true;
         mode = "ro";
+      }
+      {
+        source = "%t/${enqueueSockName}";
+        # Bridge starts after the daemon and may not have bound the
+        # enqueue socket yet when the first sandbox spawns.
+        optional = true;
+        mode = "rw";
       }
     ];
   };

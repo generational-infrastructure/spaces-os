@@ -71,6 +71,7 @@ let
   );
 
   service = enabledSystem.config.systemd.user.services.distro-signal-cli;
+  bridge = enabledSystem.config.systemd.user.services.distro-signal-bridge;
   pichatConfig = enabledSystem.config.environment.etc."distro/pi-chat.json".source;
 in
 pkgs.runCommand "distro-signal-nix-eval-test"
@@ -83,6 +84,10 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     serviceType = service.serviceConfig.Type or "";
     restart = service.serviceConfig.Restart or "";
     wantedBy = lib.concatStringsSep " " service.wantedBy;
+    bridgeExecStart = bridge.serviceConfig.ExecStart;
+    bridgeRequires = lib.concatStringsSep " " (bridge.requires or [ ]);
+    bridgeAfter = lib.concatStringsSep " " (bridge.after or [ ]);
+    bridgeRestart = bridge.serviceConfig.Restart or "";
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
   }
   ''
@@ -138,6 +143,36 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       | any(.source == "%h/.local/share/signal-cli/attachments" and .mode == "ro" and .optional == true)
     ' "$pichatConfig" >/dev/null \
       || fail "signal-cli attachments dir not in sandboxBinds: $binds"
+
+    # ── 2b. bridge unit shape ────────────────────────────────────────
+    case "$bridgeExecStart" in
+      */bin/distro-signal-bridge) ;;
+      *) fail "bridge ExecStart must be /…/bin/distro-signal-bridge, got '$bridgeExecStart'" ;;
+    esac
+    case " $bridgeRequires " in
+      *" distro-signal-cli.service "*) ;;
+      *) fail "bridge must require distro-signal-cli.service, got '$bridgeRequires'" ;;
+    esac
+    case " $bridgeAfter " in
+      *" distro-signal-cli.service "*) ;;
+      *) fail "bridge must come after distro-signal-cli.service, got '$bridgeAfter'" ;;
+    esac
+    [ "$bridgeRestart" = "always" ] || fail "bridge Restart must be 'always', got '$bridgeRestart'"
+
+    # ── 2c. enqueue socket bind is present (RW, optional)
+    jq -e '
+      .sandboxBinds
+      | any(.source == "%t/distro-signal-enqueue.sock" and .mode == "rw" and .optional == true)
+    ' "$pichatConfig" >/dev/null \
+      || fail "enqueue socket not in sandboxBinds: $binds"
+
+    # ── 2d. panel socket is NOT bind-mounted — that split is the
+    # whole security boundary of the confirmation flow.
+    jq -e '
+      .sandboxBinds
+      | all(.source != "%t/distro-signal-panel.sock")
+    ' "$pichatConfig" >/dev/null \
+      || fail "panel socket must NOT be in sandboxBinds (security regression!): $binds"
 
     # ── 3. distro-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then
