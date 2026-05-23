@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Borrar toda la memoria a largo plazo",
     "memory-wipe-confirm": "¿Borrar todos los elementos guardados en memoria de todos los chats? Esta acción no se puede deshacer.",
     "memory-wipe-yes": "Borrar",
-    "memory-wipe-no": "Cancelar"
+    "memory-wipe-no": "Cancelar",
+    "signal-pending-prefix": "Mensaje de Signal pendiente para {to}:",
+    "signal-approve": "Enviar",
+    "signal-deny": "Cancelar"
   },
   "bubble": {
     "reply-tooltip": "Responder",

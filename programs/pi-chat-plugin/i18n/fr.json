@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Effacer toute la mémoire à long terme",
     "memory-wipe-confirm": "Effacer tous les éléments mémorisés dans tous les chats ? Action irréversible.",
     "memory-wipe-yes": "Effacer",
-    "memory-wipe-no": "Annuler"
+    "memory-wipe-no": "Annuler",
+    "signal-pending-prefix": "Message Signal en attente pour {to} :",
+    "signal-approve": "Envoyer",
+    "signal-deny": "Annuler"
   },
   "bubble": {
     "reply-tooltip": "Répondre",

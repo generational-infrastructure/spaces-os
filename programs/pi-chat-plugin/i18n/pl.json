@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Wyczyść całą pamięć długoterminową",
     "memory-wipe-confirm": "Wyczyścić wszystkie zapamiętane elementy ze wszystkich czatów? Nie można tego cofnąć.",
     "memory-wipe-yes": "Wyczyść",
-    "memory-wipe-no": "Anuluj"
+    "memory-wipe-no": "Anuluj",
+    "signal-pending-prefix": "Oczekujące wysłanie Signal do {to}:",
+    "signal-approve": "Wyślij",
+    "signal-deny": "Anuluj"
   },
   "bubble": {
     "reply-tooltip": "Odpowiedz",

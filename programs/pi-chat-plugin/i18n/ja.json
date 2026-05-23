@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "長期メモリをすべて消去",
     "memory-wipe-confirm": "すべてのチャットの保存済みメモリ項目を消去しますか?元には戻せません。",
     "memory-wipe-yes": "消去",
-    "memory-wipe-no": "キャンセル"
+    "memory-wipe-no": "キャンセル",
+    "signal-pending-prefix": "{to} 宛の Signal 送信を承認待ち:",
+    "signal-approve": "送信",
+    "signal-deny": "キャンセル"
   },
   "bubble": {
     "reply-tooltip": "返信",

@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Gesamtes Langzeitgedächtnis löschen",
     "memory-wipe-confirm": "Alle gespeicherten Erinnerungen über sämtliche Chats hinweg löschen? Das lässt sich nicht rückgängig machen.",
     "memory-wipe-yes": "Löschen",
-    "memory-wipe-no": "Abbrechen"
+    "memory-wipe-no": "Abbrechen",
+    "signal-pending-prefix": "Ausstehende Signal-Nachricht an {to}:",
+    "signal-approve": "Senden",
+    "signal-deny": "Abbrechen"
   },
   "bubble": {
     "reply-tooltip": "Antworten",

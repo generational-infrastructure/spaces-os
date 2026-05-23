@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Cancella tutta la memoria a lungo termine",
     "memory-wipe-confirm": "Cancellare ogni elemento memorizzato da tutte le chat? L'operazione è irreversibile.",
     "memory-wipe-yes": "Cancella",
-    "memory-wipe-no": "Annulla"
+    "memory-wipe-no": "Annulla",
+    "signal-pending-prefix": "Messaggio Signal in attesa per {to}:",
+    "signal-approve": "Invia",
+    "signal-deny": "Annulla"
   },
   "bubble": {
     "reply-tooltip": "Rispondi",

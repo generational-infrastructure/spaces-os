@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Apagar toda a memória de longo prazo",
     "memory-wipe-confirm": "Apagar todos os itens guardados em todas as conversas? Esta ação é irreversível.",
     "memory-wipe-yes": "Apagar",
-    "memory-wipe-no": "Cancelar"
+    "memory-wipe-no": "Cancelar",
+    "signal-pending-prefix": "Mensagem do Signal pendente para {to}:",
+    "signal-approve": "Enviar",
+    "signal-deny": "Cancelar"
   },
   "bubble": {
     "reply-tooltip": "Responder",

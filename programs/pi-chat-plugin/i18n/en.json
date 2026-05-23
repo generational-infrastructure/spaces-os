@@ -24,7 +24,10 @@
     "memory-wipe-tooltip": "Wipe all long-term memory",
     "memory-wipe-confirm": "Wipe every stored memory item across all chats? This cannot be undone.",
     "memory-wipe-yes": "Wipe",
-    "memory-wipe-no": "Cancel"
+    "memory-wipe-no": "Cancel",
+    "signal-pending-prefix": "Pending Signal send to {to}:",
+    "signal-approve": "Send",
+    "signal-deny": "Cancel"
   },
   "bubble": {
     "reply-tooltip": "Reply",

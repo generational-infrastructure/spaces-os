@@ -455,6 +455,175 @@ class TestPanelDecision(BridgeHarness):
         self.assertIn("already", second["error"])
 
 
+class _PanelSubscriber:
+    """Persistent panel-side conn that captures every event the bridge
+    pushes via `op:"added"` / `op:"removed"`. Used by subscribe tests
+    to verify the bridge actually broadcasts state mutations.
+    """
+
+    def __init__(self, sock_path: str) -> None:
+        self.events: list[dict] = []
+        self._stop = threading.Event()
+        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._sock.settimeout(5.0)
+        self._sock.connect(sock_path)
+        self._sock.sendall((json.dumps({"op": "subscribe"}) + "\n").encode("utf-8"))
+        self._reader = threading.Thread(target=self._run, daemon=True)
+        self._reader.start()
+
+    def send(self, payload: dict) -> None:
+        self._sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+
+    def close(self) -> None:
+        self._stop.set()
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+        self._reader.join(timeout=2.0)
+
+    def _run(self) -> None:
+        f = self._sock.makefile("r", encoding="utf-8", newline="\n")
+        while not self._stop.is_set():
+            try:
+                line = f.readline()
+            except OSError:
+                return
+            if not line:
+                return
+            try:
+                self.events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+
+class TestPanelSubscribe(BridgeHarness):
+    def _subscribe(self) -> "_PanelSubscriber":
+        sub = _PanelSubscriber(self.panel_sock)
+        self.addCleanup(sub.close)
+        # Wait for the initial snapshot.
+        self.assertTrue(
+            _wait_until(
+                lambda: any(e.get("op") == "snapshot" for e in sub.events),
+                timeout=3,
+            )
+        )
+        return sub
+
+    def test_subscribe_initial_snapshot_carries_existing_pending(self) -> None:
+        _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "preexisting"},
+        )
+        sub = self._subscribe()
+        snapshot = [e for e in sub.events if e.get("op") == "snapshot"][0]
+        self.assertEqual(len(snapshot["pending"]), 1)
+        self.assertEqual(snapshot["pending"][0]["body"], "preexisting")
+
+    def test_subscribe_receives_added_when_new_enqueue_arrives(self) -> None:
+        sub = self._subscribe()
+        before = len(sub.events)
+        _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "live-add"},
+        )
+        self.assertTrue(
+            _wait_until(
+                lambda: any(
+                    e.get("op") == "added"
+                    and e.get("request", {}).get("body") == "live-add"
+                    for e in sub.events[before:]
+                ),
+                timeout=3,
+            )
+        )
+
+    def test_subscribe_receives_removed_on_approve(self) -> None:
+        sub = self._subscribe()
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "to-approve"},
+        )
+        token = resp["token"]
+        before = len(sub.events)
+        # Approve on a separate conn — the subscribe conn must still
+        # receive the broadcast.
+        _send_request(self.panel_sock, {"op": "approve", "token": token})
+        self.assertTrue(
+            _wait_until(
+                lambda: any(
+                    e.get("op") == "removed"
+                    and e.get("token") == token
+                    and e.get("state") == "sent"
+                    for e in sub.events[before:]
+                ),
+                timeout=3,
+            )
+        )
+
+    def test_subscribe_receives_removed_on_deny(self) -> None:
+        sub = self._subscribe()
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "to-deny"},
+        )
+        token = resp["token"]
+        before = len(sub.events)
+        _send_request(self.panel_sock, {"op": "deny", "token": token})
+        self.assertTrue(
+            _wait_until(
+                lambda: any(
+                    e.get("op") == "removed"
+                    and e.get("token") == token
+                    and e.get("state") == "denied"
+                    for e in sub.events[before:]
+                ),
+                timeout=3,
+            )
+        )
+
+    def test_subscribed_conn_can_also_approve(self) -> None:
+        sub = self._subscribe()
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "via-sub-approve"},
+        )
+        token = resp["token"]
+        before = len(sub.events)
+        # Send approve on the SAME socket the subscriber owns.
+        sub.send({"op": "approve", "token": token})
+        self.assertTrue(
+            _wait_until(
+                lambda: any(
+                    e.get("op") == "removed" and e.get("token") == token
+                    for e in sub.events[before:]
+                ),
+                timeout=3,
+            )
+        )
+        # Decision response also arrives back on the same conn.
+        self.assertTrue(
+            any(e.get("op") == "decision" and e.get("ok") for e in sub.events[before:])
+        )
+
+    def test_unsubscribe_stops_receiving_broadcasts(self) -> None:
+        sub = self._subscribe()
+        sub.close()
+        # Give the bridge a beat to notice the closed conn.
+        time.sleep(0.2)
+        # A subsequent enqueue must still complete (it just won't
+        # broadcast to anyone).
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "after-unsub"},
+        )
+        self.assertTrue(resp["ok"])
+
+
 # ── pure helpers (no harness) ───────────────────────────────────────
 
 

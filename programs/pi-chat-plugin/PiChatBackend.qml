@@ -88,6 +88,22 @@ Item {
   }
   readonly property string skillConfigSockPath: runtimeDir + "/distro-skill-config.sock"
   readonly property string openUrlSockPath: runtimeDir + "/distro-pi-open-url.sock"
+  readonly property string signalPanelSockPath: runtimeDir + "/distro-signal-panel.sock"
+
+  // Bridge between the distro-signal panel socket and the chat UI.
+  // The panel sits *outside* the pi-chat sandbox, so it (not the
+  // agent) is the only thing that can mint approvals on outbound
+  // Signal sends. `pending` and `approve(token)` / `deny(token)`
+  // are surfaced to Panel.qml through this object.
+  SignalConfirm {
+    id: signalConfirm
+    sockPath: root.signalPanelSockPath
+    active: true
+  }
+  readonly property var signalPendingSends: signalConfirm.pending
+  readonly property bool signalBridgeConnected: signalConfirm.connected
+  function signalApprove(token) { signalConfirm.approve(token); }
+  function signalDeny(token) { signalConfirm.deny(token); }
 
   // ── sessions index ──
   // Plain-JS array so QML bindings re-evaluate on assignment.

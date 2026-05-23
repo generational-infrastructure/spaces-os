@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Alle langetermijngeheugen wissen",
     "memory-wipe-confirm": "Alle opgeslagen geheugenitems in alle chats wissen? Dit kan niet ongedaan worden gemaakt.",
     "memory-wipe-yes": "Wissen",
-    "memory-wipe-no": "Annuleren"
+    "memory-wipe-no": "Annuleren",
+    "signal-pending-prefix": "Wachtend Signal-bericht voor {to}:",
+    "signal-approve": "Verzenden",
+    "signal-deny": "Annuleren"
   },
   "bubble": {
     "reply-tooltip": "Beantwoorden",

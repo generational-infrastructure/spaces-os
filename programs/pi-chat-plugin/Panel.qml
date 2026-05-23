@@ -374,13 +374,70 @@ Item {
       font.italic: true
     }
 
+    // ── Pending Signal-send approvals (out-of-band channel) ──────────
+    // The bridge runs outside the pi-chat sandbox; the agent can
+    // enqueue but only the human (here) can mint approvals. Cards
+    // sit ABOVE the history pane so the user can never miss one
+    // while looking at the chat.
+    Rectangle {
+      id: signalConfirmBanner
+      readonly property var items: (root.chat?.signalPendingSends) || []
+      Layout.fillWidth: true
+      visible: items.length > 0
+      implicitHeight: visible ? signalConfirmCol.implicitHeight + Style.marginS * 2 : 0
+      color: Color.mSurfaceVariant
+      radius: Style.radiusS
+      border.color: Color.mPrimary
+      border.width: 1
+
+      ColumnLayout {
+        id: signalConfirmCol
+        anchors.fill: parent
+        anchors.margins: Style.marginS
+        spacing: Style.marginS
+        Repeater {
+          model: signalConfirmBanner.items
+          delegate: RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.marginS
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 0
+              NText {
+                Layout.fillWidth: true
+                text: root.tr("panel.signal-pending-prefix", { to: (modelData.display_name || modelData.recipient || "?") })
+                pointSize: Style.fontSizeS
+                font.bold: true
+                wrapMode: Text.Wrap
+              }
+              NText {
+                Layout.fillWidth: true
+                text: modelData.body || ""
+                pointSize: Style.fontSizeXS
+                wrapMode: Text.Wrap
+                maximumLineCount: 4
+                elide: Text.ElideRight
+              }
+            }
+            NButton {
+              text: root.tr("panel.signal-approve")
+              onClicked: root.chat?.signalApprove(modelData.token)
+            }
+            NButton {
+              text: root.tr("panel.signal-deny")
+              onClicked: root.chat?.signalDeny(modelData.token)
+            }
+          }
+        }
+      }
+    }
+
     // ── History ───────────────────────────────────────────────────────
     // Wrapped so the "new messages" pill can float over the list
     // without joining the ColumnLayout flow.
     Item {
       Layout.fillWidth: true
       Layout.fillHeight: true
-
     NListView {
       id: history
       anchors.fill: parent

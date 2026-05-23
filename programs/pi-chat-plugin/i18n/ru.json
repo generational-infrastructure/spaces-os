@@ -22,7 +22,10 @@
     "memory-wipe-tooltip": "Стереть всю долговременную память",
     "memory-wipe-confirm": "Стереть все сохранённые элементы памяти из всех чатов? Это действие нельзя отменить.",
     "memory-wipe-yes": "Стереть",
-    "memory-wipe-no": "Отмена"
+    "memory-wipe-no": "Отмена",
+    "signal-pending-prefix": "Ожидающее сообщение Signal для {to}:",
+    "signal-approve": "Отправить",
+    "signal-deny": "Отмена"
   },
   "bubble": {
     "reply-tooltip": "Ответить",

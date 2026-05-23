@@ -216,6 +216,15 @@ class Bridge:
         self._threads: list[threading.Thread] = []
         self._sockets: list[socket.socket] = []
 
+        # Panel subscribers: long-lived conns that received an
+        # {op:"subscribe"} request and are now waiting for live
+        # `added`/`removed` events as pending sends mutate. The write
+        # lock serialises broadcasts so we don't interleave bytes
+        # from concurrent updates.
+        self._panel_subscribers: list[socket.socket] = []
+        self._panel_subs_lock = threading.Lock()
+        self._panel_write_lock = threading.Lock()
+
         # Two daemon clients: one long-lived for the receive
         # subscription (reads notifications via its own reader thread)
         # and one for short-lived RPC calls (send, listAccounts,
@@ -437,6 +446,10 @@ class Bridge:
                 display_name=display_name,
                 account_uuid=acct.get("uuid"),
             )
+        with self._db_lock:
+            row = dbmod.get_pending(self.db, token)
+        if row is not None:
+            self._broadcast_panel({"op": "added", "request": row})
         return {
             "ok": True,
             "pending": True,
@@ -504,34 +517,52 @@ class Bridge:
     def _handle_panel_conn(self, conn: socket.socket) -> None:
         try:
             for req in _ndjson_requests(conn):
-                resp = self._handle_panel_request(req)
-                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                resp = self._handle_panel_request(req, conn)
+                if resp is None:
+                    continue
+                self._panel_write(conn, resp)
         except Exception as exc:  # noqa: BLE001
             log.warning("panel conn errored: %s", exc)
         finally:
-            conn.close()
+            self._unsubscribe_panel(conn)
+            try:
+                conn.close()
+            except OSError:
+                pass
 
-    def _handle_panel_request(self, req: dict) -> dict:
+    def _handle_panel_request(self, req: dict, conn: socket.socket) -> dict | None:
         op = req.get("op")
         if op == "list":
             with self._db_lock:
                 pending = dbmod.list_pending(self.db, states=["pending"])
-            return {"ok": True, "pending": pending}
+            return {"op": "snapshot", "ok": True, "pending": pending}
+        if op == "subscribe":
+            # Register first, snapshot under the same lock so the
+            # subscriber can't miss an event that lands between the
+            # snapshot read and the registration. The initial snapshot
+            # is itself a response — return it to be written.
+            with self._db_lock:
+                pending = dbmod.list_pending(self.db, states=["pending"])
+            with self._panel_subs_lock:
+                if conn not in self._panel_subscribers:
+                    self._panel_subscribers.append(conn)
+            return {"op": "snapshot", "ok": True, "pending": pending}
         if op == "approve":
             return self._panel_decide(req.get("token"), approve=True)
         if op == "deny":
             return self._panel_decide(req.get("token"), approve=False)
-        return {"ok": False, "error": f"unknown op: {op!r}"}
+        return {"op": "error", "ok": False, "error": f"unknown op: {op!r}"}
 
     def _panel_decide(self, token: str | None, *, approve: bool) -> dict:
         if not token:
-            return {"ok": False, "error": "missing 'token'"}
+            return {"op": "decision", "ok": False, "error": "missing 'token'"}
         with self._db_lock:
             row = dbmod.get_pending(self.db, token)
         if row is None:
-            return {"ok": False, "error": "unknown token"}
+            return {"op": "decision", "ok": False, "error": "unknown token"}
         if row["state"] != "pending":
             return {
+                "op": "decision",
                 "ok": False,
                 "error": f"already {row['state']}",
                 "state": row["state"],
@@ -539,7 +570,8 @@ class Bridge:
         if not approve:
             with self._db_lock:
                 dbmod.mark_pending(self.db, token, state="denied")
-            return {"ok": True, "state": "denied"}
+            self._broadcast_panel({"op": "removed", "token": token, "state": "denied"})
+            return {"op": "decision", "ok": True, "state": "denied"}
 
         # Approved: dispatch through signal-cli, record outcome.
         accounts = self._accounts_snapshot()
@@ -552,16 +584,62 @@ class Bridge:
                 dbmod.mark_pending(
                     self.db, token, state="failed", error="no account available"
                 )
-            return {"ok": False, "error": "no account available"}
+            self._broadcast_panel(
+                {
+                    "op": "removed",
+                    "token": token,
+                    "state": "failed",
+                    "error": "no account available",
+                }
+            )
+            return {"op": "decision", "ok": False, "error": "no account available"}
         try:
             self._dispatch_send(acct, row["recipient"], row["body"])
         except (JsonRpcError, OSError, TimeoutError) as exc:
             with self._db_lock:
                 dbmod.mark_pending(self.db, token, state="failed", error=str(exc))
-            return {"ok": False, "error": f"send failed: {exc}"}
+            self._broadcast_panel(
+                {
+                    "op": "removed",
+                    "token": token,
+                    "state": "failed",
+                    "error": str(exc),
+                }
+            )
+            return {"op": "decision", "ok": False, "error": f"send failed: {exc}"}
         with self._db_lock:
             dbmod.mark_pending(self.db, token, state="sent")
-        return {"ok": True, "state": "sent"}
+        self._broadcast_panel({"op": "removed", "token": token, "state": "sent"})
+        return {"op": "decision", "ok": True, "state": "sent"}
+
+    # ── panel subscriber broadcast ──────────────────────────────────
+
+    def _panel_write(self, conn: socket.socket, payload: dict) -> bool:
+        line = (json.dumps(payload) + "\n").encode("utf-8")
+        with self._panel_write_lock:
+            try:
+                conn.sendall(line)
+                return True
+            except OSError:
+                return False
+
+    def _broadcast_panel(self, payload: dict) -> None:
+        with self._panel_subs_lock:
+            subs = list(self._panel_subscribers)
+        stale: list[socket.socket] = []
+        for conn in subs:
+            if not self._panel_write(conn, payload):
+                stale.append(conn)
+        if stale:
+            with self._panel_subs_lock:
+                for c in stale:
+                    if c in self._panel_subscribers:
+                        self._panel_subscribers.remove(c)
+
+    def _unsubscribe_panel(self, conn: socket.socket) -> None:
+        with self._panel_subs_lock:
+            if conn in self._panel_subscribers:
+                self._panel_subscribers.remove(conn)
 
     # ── socket plumbing ─────────────────────────────────────────────
 
