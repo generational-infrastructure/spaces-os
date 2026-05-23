@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import secrets
+import select
 import socket
 import threading
 from dataclasses import dataclass
@@ -48,6 +49,43 @@ log = logging.getLogger("distro_signal.bridge")
 DEFAULT_DAEMON_SOCKET_ENV = "DISTRO_SIGNAL_DAEMON_SOCKET"
 DEFAULT_ENQUEUE_SOCKET_ENV = "DISTRO_SIGNAL_ENQUEUE_SOCKET"
 DEFAULT_PANEL_SOCKET_ENV = "DISTRO_SIGNAL_PANEL_SOCKET"
+
+
+class _SelectWake:
+    """Wake-up primitive that interrupts a blocking select() instantly.
+
+    Two socketpair endpoints: select on `read_end`, call `wake()` from
+    any other thread to make that select return immediately. Cheaper
+    than poll-the-accept-timeout — zero CPU while idle, microsecond
+    wake latency on stop. Spurious wake-ups are harmless: the caller
+    drains the read end and loops back to check its real stop flag.
+    """
+
+    def __init__(self) -> None:
+        r, w = socket.socketpair()
+        r.setblocking(False)
+        self.read_end = r
+        self._write_end = w
+
+    def wake(self) -> None:
+        try:
+            self._write_end.send(b"\x01")
+        except OSError:
+            pass
+
+    def drain(self) -> None:
+        try:
+            while self.read_end.recv(64):
+                pass
+        except (BlockingIOError, OSError):
+            pass
+
+    def close(self) -> None:
+        for s in (self._write_end, self.read_end):
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 def _default_daemon_socket() -> str:
@@ -213,6 +251,7 @@ class Bridge:
         self._accounts_lock = threading.Lock()
 
         self._stop = threading.Event()
+        self._wake = _SelectWake()
         self._threads: list[threading.Thread] = []
         self._sockets: list[socket.socket] = []
 
@@ -251,6 +290,11 @@ class Bridge:
 
     def stop(self) -> None:
         self._stop.set()
+        # Wake every select() loop so listeners exit before we yank
+        # their sockets out from under them. Without this they'd sit
+        # in select() for the next timeout (or forever if it's
+        # blocking) and the join() below would stall.
+        self._wake.wake()
         for s in self._sockets:
             try:
                 s.close()
@@ -262,6 +306,7 @@ class Bridge:
             self._rpc_client.close()
         for t in self._threads:
             t.join(timeout=5.0)
+        self._wake.close()
         with self._db_lock:
             self.db.close()
 
@@ -659,17 +704,26 @@ class Bridge:
             srv.bind(path)
             os.chmod(path, 0o600)
             srv.listen(8)
-            srv.settimeout(1.0)
         except OSError as exc:
             log.error("failed to bind %s: %s", path, exc)
             srv.close()
             return
         self._sockets.append(srv)
+        # Blocking accept() interleaved with the shared wake fd:
+        # select() returns instantly when either a client connects or
+        # stop() pings the wake. No accept-timeout polling means zero
+        # idle CPU and microsecond shutdown.
+        wake_fd = self._wake.read_end
         while not self._stop.is_set():
             try:
-                conn, _ = srv.accept()
-            except socket.timeout:
+                rlist, _, _ = select.select([srv, wake_fd], [], [])
+            except (OSError, ValueError):
+                break
+            if wake_fd in rlist:
+                self._wake.drain()
                 continue
+            try:
+                conn, _ = srv.accept()
             except OSError:
                 break
             self._spawn(lambda c=conn: handler(c), name=f"conn-{path}")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import select
 import socket
 import tempfile
 import threading
@@ -18,6 +19,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from distro_signal import bridge as bridge_mod
 from distro_signal import cli as cli_mod
 from distro_signal import db as dbmod
 from test_bridge import FakeSignalDaemon, _wait_until
@@ -91,6 +93,7 @@ class _EnqueueStub:
         self.requests: list[dict] = []
         self._response_for = response_for
         self._stop = threading.Event()
+        self._wake = bridge_mod._SelectWake()
         try:
             os.unlink(sock_path)
         except FileNotFoundError:
@@ -98,24 +101,36 @@ class _EnqueueStub:
         self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._srv.bind(sock_path)
         self._srv.listen(8)
-        self._srv.settimeout(0.5)
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        # Same shutdown idiom as the production bridge: poke the
+        # select() so the accept loop exits instantly instead of
+        # waiting out the next timeout.
+        self._wake.wake()
         try:
             self._srv.close()
         except OSError:
             pass
         self._thread.join(timeout=2.0)
+        self._wake.close()
 
     def _serve(self) -> None:
+        wake_fd = self._wake.read_end
         while not self._stop.is_set():
             try:
-                conn, _ = self._srv.accept()
-            except (socket.timeout, OSError):
+                rlist, _, _ = select.select([self._srv, wake_fd], [], [])
+            except (OSError, ValueError):
+                return
+            if wake_fd in rlist:
+                self._wake.drain()
                 continue
+            try:
+                conn, _ = self._srv.accept()
+            except OSError:
+                return
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     def _handle(self, conn: socket.socket) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import tempfile
 import threading
@@ -45,14 +46,19 @@ class FakeSignalDaemon:
         self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._srv.bind(sock_path)
         self._srv.listen(8)
-        self._srv.settimeout(0.5)
 
         self._stop = threading.Event()
+        self._wake = bridge_mod._SelectWake()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        # Interrupt the select() so the accept loop exits before we
+        # close its listening socket — same shutdown trick the
+        # production bridge uses, so tests don't pay an accept-timeout
+        # per teardown.
+        self._wake.wake()
         try:
             self._srv.close()
         except OSError:
@@ -65,6 +71,7 @@ class FakeSignalDaemon:
                     pass
             self.subscribed_conns.clear()
         self._thread.join(timeout=2.0)
+        self._wake.close()
 
     def push_receive(self, params: dict) -> None:
         """Emit a `receive` JSON-RPC notification to every subscribed conn."""
@@ -82,11 +89,19 @@ class FakeSignalDaemon:
                 self.subscribed_conns.remove(c)
 
     def _serve(self) -> None:
+        wake_fd = self._wake.read_end
         while not self._stop.is_set():
             try:
-                conn, _ = self._srv.accept()
-            except (socket.timeout, OSError):
+                rlist, _, _ = select.select([self._srv, wake_fd], [], [])
+            except (OSError, ValueError):
+                return
+            if wake_fd in rlist:
+                self._wake.drain()
                 continue
+            try:
+                conn, _ = self._srv.accept()
+            except OSError:
+                return
             t = threading.Thread(target=self._handle_conn, args=(conn,), daemon=True)
             t.start()
 
