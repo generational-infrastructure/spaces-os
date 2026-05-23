@@ -6,6 +6,7 @@ _: {
   programs.deadnix.enable = true;
   programs.deadnix.no-lambda-pattern-names = true;
   programs.statix.enable = true;
+  programs.flake-edit.enable = true;
 
   # Bash
   programs.shfmt.enable = true;

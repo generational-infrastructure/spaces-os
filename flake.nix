@@ -5,17 +5,19 @@
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
     blueprint.url = "github:numtide/blueprint";
     blueprint.inputs.nixpkgs.follows = "nixpkgs";
+    blueprint.inputs.systems.follows = "systems";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     noctalia-shell.url = "github:noctalia-dev/noctalia-shell/v4.7.7";
     noctalia-shell.inputs.nixpkgs.follows = "nixpkgs";
-    noctalia-shell.inputs.noctalia-qs.inputs.treefmt-nix.follows = "treefmt-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     llm-agents.inputs.blueprint.follows = "blueprint";
+    llm-agents.inputs.systems.follows = "systems";
     voxtype.url = "github:peteonrails/voxtype";
     voxtype.inputs.nixpkgs.follows = "nixpkgs";
+    systems.url = "github:nix-systems/default";
   };
 
   outputs =
