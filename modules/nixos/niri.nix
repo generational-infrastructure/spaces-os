@@ -59,6 +59,13 @@ let
         # rebuilt config / patched build lands without a full session
         # logout.
         sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "systemctl" "--user" "restart" "noctalia-shell.service"; }' $out
+        # Mod+L and Ctrl+Alt+L lock the screen with swaylock. Mod+L
+        # overrides upstream's focus-column-right (Mod+Right / Mod+L
+        # both did that — Mod+Right still works).
+        grep -q '^    Mod+L     { focus-column-right; }$' $out  # fail loudly if upstream renamed it
+        sed -i '/^    Mod+L     { focus-column-right; }$/d' $out
+        sed -i '/^binds {$/a\    Mod+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' $out
+        sed -i '/^binds {$/a\    Ctrl+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' $out
   '';
 in
 {

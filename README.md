@@ -60,7 +60,11 @@ This gives you:
 - **Mod+D** — app launcher (fuzzel)
 - **Mod+A** — toggle the chat panel
 - **Mod+S** — toggle voice-to-text recording
+- **Mod+L** / **Ctrl+Alt+L** — lock the screen (swaylock)
 - Noctalia bar with system tray, workspaces, and chat widget
+
+See [docs/keybindings.md](docs/keybindings.md) for the full list of
+keyboard shortcuts (distro additions plus the inherited niri defaults).
 
 #### Voice-to-text
 
