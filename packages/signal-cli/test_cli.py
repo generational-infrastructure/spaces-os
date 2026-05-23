@@ -1,9 +1,9 @@
 """Tests for the `signal` CLI.
 
 Exercises each subcommand in-process: DB-backed commands run against
-a temp SQLite, daemon-backed commands against the FakeSignalDaemon
-defined in test_bridge, and `send` against an in-process enqueue
-listener that records the request and replies with canned shapes.
+a temp SQLite, bridge-proxied commands (`contacts` / `groups` / `send`)
+against an in-process enqueue listener that records the request and
+replies with canned shapes.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from pathlib import Path
 from distro_signal import bridge as bridge_mod
 from distro_signal import cli as cli_mod
 from distro_signal import db as dbmod
-from test_bridge import FakeSignalDaemon, _wait_until
+from test_bridge import _wait_until
 
 # ── helpers ─────────────────────────────────────────────────────────
 
@@ -160,20 +160,16 @@ class CliBase(unittest.TestCase):
             for k in (
                 "DISTRO_SIGNAL_DB",
                 "DISTRO_SIGNAL_ENQUEUE_SOCKET",
-                "DISTRO_SIGNAL_DAEMON_SOCKET",
                 "XDG_RUNTIME_DIR",
             )
         }
         os.environ["DISTRO_SIGNAL_DB"] = str(self.db_path)
         os.environ["XDG_RUNTIME_DIR"] = str(self.runtime)
-        # Default-shape: a configured-and-running system has both
-        # sockets present (bind-mounted from outside the sandbox).
-        # Touch empty files so the CLI's "is the signal stack up?"
-        # check passes — tests that need to simulate an unconfigured
-        # host remove them explicitly.
-        self.daemon_sock_default = self.runtime / "signal-cli" / "socket"
-        self.daemon_sock_default.parent.mkdir(parents=True, exist_ok=True)
-        self.daemon_sock_default.touch()
+        # Default-shape: a configured-and-running system has the bridge
+        # enqueue socket present (bind-mounted from outside the
+        # sandbox). Touch an empty file so the CLI's "is the signal
+        # stack up?" check passes — tests that need to simulate an
+        # unconfigured host remove it explicitly.
         self.enqueue_sock_default = self.runtime / "distro-signal-enqueue.sock"
         self.enqueue_sock_default.touch()
 
@@ -215,8 +211,12 @@ class TestThreads(CliBase):
         self.assertEqual(thread_ids, ["uuid-carol", "GROUP=1", "uuid-alice"])
 
     def test_threads_empty_when_db_empty(self) -> None:
-        # Wipe seed.
-        Path(self.db_path).unlink()
+        # Drop the seeded rows but keep the file — production has the
+        # bridge always present to create/maintain messages.db, so the
+        # sandbox-side CLI is never asked to open a non-existent file.
+        writer = dbmod.connect(self.db_path)
+        writer.execute("DELETE FROM messages")
+        writer.close()
         rc, out, _ = _run(["threads"])
         self.assertEqual(rc, 0)
         self.assertIn("no threads", out)
@@ -278,28 +278,48 @@ class TestSearch(CliBase):
         self.assertTrue(all("alice" in (r.get("body") or "").lower() for r in parsed))
 
 
-# ── daemon-backed reads ─────────────────────────────────────────────
+# ── bridge-proxied daemon reads ─────────────────────────────────────
 
 
 class TestContactsGroups(CliBase):
+    """`signal contacts` / `signal groups` now talk to the bridge's
+    enqueue socket — the daemon socket is no longer in the sandbox."""
+
     def setUp(self) -> None:
         super().setUp()
-        sock_path = str(Path(self.tmp.name) / "signal.sock")
-        self.daemon = FakeSignalDaemon(sock_path)
-        self.addCleanup(self.daemon.stop)
-        self.daemon.accounts = [{"uuid": "acct-uuid", "number": "+15550000001"}]
-        self.daemon.contacts = [
-            {
-                "uuid": "uuid-bob",
-                "number": "+15559998888",
-                "name": "Bob the Builder",
+        # Replace the empty placeholder with a real listener.
+        self.enqueue_sock_default.unlink()
+        self._responses: dict[str, dict] = {
+            "contacts": {
+                "ok": True,
+                "contacts": [
+                    {
+                        "uuid": "uuid-bob",
+                        "number": "+15559998888",
+                        "name": "Bob the Builder",
+                    },
+                    {
+                        "uuid": "uuid-carol",
+                        "number": "+15557776666",
+                        "name": "Carol",
+                    },
+                ],
             },
-            {"uuid": "uuid-carol", "number": "+15557776666", "name": "Carol"},
-        ]
-        self.daemon.groups = [
-            {"id": "GROUP=1", "name": "Team Crew", "members": [1, 2, 3]},
-        ]
-        os.environ["DISTRO_SIGNAL_DAEMON_SOCKET"] = sock_path
+            "groups": {
+                "ok": True,
+                "groups": [
+                    {"id": "GROUP=1", "name": "Team Crew", "members": [1, 2, 3]},
+                ],
+            },
+        }
+        self.stub = _EnqueueStub(
+            str(self.enqueue_sock_default),
+            lambda req: self._responses.get(
+                req.get("op", ""),
+                {"ok": False, "error": f"unknown op: {req.get('op')!r}"},
+            ),
+        )
+        self.addCleanup(self.stub.stop)
 
     def test_contacts_text(self) -> None:
         rc, out, _ = _run(["contacts"])
@@ -320,20 +340,29 @@ class TestContactsGroups(CliBase):
         self.assertIn("members=  3", out)
         self.assertIn("GROUP=1", out)
 
-    def test_no_accounts_returns_error(self) -> None:
-        self.daemon.accounts = []
-        rc, out, err = _run(["contacts"])
+    def test_no_accounts_propagates_bridge_error(self) -> None:
+        self._responses["contacts"] = {
+            "ok": False,
+            "error": "no linked Signal account",
+        }
+        rc, _, err = _run(["contacts"])
         self.assertNotEqual(rc, 0)
         self.assertIn("no linked Signal account", err)
 
-    def test_daemon_unreachable_returns_error(self) -> None:
-        os.environ["DISTRO_SIGNAL_DAEMON_SOCKET"] = "/nonexistent.sock"
+    def test_bridge_socket_missing_returns_friendly_error(self) -> None:
+        # Tear the stub down so the socket disappears entirely.
+        self.stub.stop()
+        os.unlink(self.stub.sock_path)
         rc, _, err = _run(["contacts"])
         self.assertNotEqual(rc, 0)
-        # When the socket *file* is missing (vs. ECONNREFUSED on a
-        # half-up daemon), the CLI prints an onboarding hint pointing
-        # at `signal-cli link` instead of a bare connect-failure trace.
         self.assertIn("signal-cli link", err)
+
+    def test_bridge_socket_present_but_not_listening(self) -> None:
+        # Stub down but file remains → connect() returns ECONNREFUSED.
+        self.stub.stop()
+        rc, _, err = _run(["contacts"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("bridge unreachable", err)
 
 
 # ── send / enqueue ──────────────────────────────────────────────────
@@ -368,6 +397,43 @@ class TestSend(CliBase):
         self.assertEqual(stub.requests[0]["op"], "send")
         self.assertEqual(stub.requests[0]["to"], "+15559998888")
         self.assertEqual(stub.requests[0]["body"], "hi alice")
+
+    def test_pending_card_surfaces_raw_recipient(self) -> None:
+        # Bridge returns a display_name AND the verbatim recipient.
+        # The CLI's pending card must include both so the user can
+        # verify the actual destination — display_name alone is
+        # spoofable by anyone who controls a Signal profile.
+        self._start_stub(
+            lambda req: {
+                "ok": True,
+                "pending": True,
+                "token": "tk",
+                "display_name": "Alice",
+                "recipient": "+15559998888",
+            }
+        )
+        rc, out, _ = _run(["send", "+15559998888", "hi"])
+        self.assertEqual(rc, 0)
+        self.assertIn("Alice", out)
+        self.assertIn("+15559998888", out)
+
+    def test_pending_card_omits_redundant_label_when_no_display_name(self) -> None:
+        # Bridge didn't resolve a friendly name; print the recipient
+        # alone without the awkward "+1555…  <+1555…>" doubling.
+        self._start_stub(
+            lambda req: {
+                "ok": True,
+                "pending": True,
+                "token": "tk",
+                "display_name": "+15559998888",
+                "recipient": "+15559998888",
+            }
+        )
+        rc, out, _ = _run(["send", "+15559998888", "hi"])
+        self.assertEqual(rc, 0)
+        # "to:" line should appear exactly once for the recipient,
+        # not as "+15559998888  <+15559998888>".
+        self.assertNotIn("+15559998888  <+15559998888>", out)
 
     def test_self_send_prints_sent(self) -> None:
         self._start_stub(lambda req: {"ok": True, "to_self": True})
@@ -427,9 +493,10 @@ class TestUnconfigured(CliBase):
 
     def setUp(self) -> None:
         super().setUp()
-        # Strip the dummy sockets CliBase touches by default — this
-        # class simulates the unlinked-host case from the bug report.
-        self.daemon_sock_default.unlink()
+        # Strip the dummy enqueue socket CliBase touches by default —
+        # this class simulates the unlinked-host case from the bug
+        # report (bridge has never started, so its socket file does
+        # not exist).
         self.enqueue_sock_default.unlink()
 
     def _assert_unconfigured(self, rc: int, out: str, err: str) -> None:
@@ -459,16 +526,19 @@ class TestUnconfigured(CliBase):
         self._assert_unconfigured(rc, out, err)
         self.assertNotIn("no matches", out + err)
 
-    def test_one_socket_present_is_enough(self) -> None:
-        # If only one of the two sockets exists (e.g. the daemon is
-        # up but the bridge is transiently down, or vice versa),
-        # DB-backed reads should still proceed against whatever the
-        # bridge has already written. Half-up is still "configured".
-        self.daemon_sock_default.parent.mkdir(parents=True, exist_ok=True)
-        self.daemon_sock_default.touch()
-        rc, out, _ = _run(["threads"])
-        self.assertEqual(rc, 0)
-        self.assertIn("no threads", out)
+    def test_signal_running_is_only_enqueue_socket(self) -> None:
+        # Belt-and-braces for the bridge-only architecture: even if
+        # a stray signal-cli/socket file were present under runtime
+        # (left over from before the daemon-bind was removed, say),
+        # the CLI must still report unconfigured when the bridge
+        # enqueue socket is missing. The daemon socket is no longer
+        # reachable from the sandbox so it must not influence the
+        # readiness check.
+        stray = self.runtime / "signal-cli" / "socket"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.touch()
+        rc, out, err = _run(["threads"])
+        self._assert_unconfigured(rc, out, err)
 
 
 # ── argparse plumbing ───────────────────────────────────────────────

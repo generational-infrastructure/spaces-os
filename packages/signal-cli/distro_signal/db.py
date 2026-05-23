@@ -90,6 +90,29 @@ def connect(path: Path) -> sqlite3.Connection:
     return db
 
 
+def connect_readonly(path: Path) -> sqlite3.Connection:
+    """Open the message DB read-only via SQLite's URI `mode=ro`.
+
+    Used by the sandbox-side `signal` CLI: the bind-mount that
+    surfaces messages.db into the sandbox is also `mode = "ro"` in
+    NixOS, so the kernel enforces this at the filesystem layer
+    too. The URI mode is belt-and-braces, but it also produces
+    clean OperationalError on attempted writes rather than IOError
+    from the filesystem.
+
+    Does not run schema migrations and does not flip journal mode
+    — either would itself be a write. Caller is responsible for
+    the file already existing; on a fresh, unlinked host the
+    bridge has not produced one yet and the CLI's
+    `_signal_running()` check should already have short-circuited
+    before we get here.
+    """
+    uri = f"file:{path}?mode=ro"
+    db = sqlite3.connect(uri, uri=True, isolation_level=None, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    return db
+
+
 def init_schema(db: sqlite3.Connection) -> None:
     db.executescript(SCHEMA)
 

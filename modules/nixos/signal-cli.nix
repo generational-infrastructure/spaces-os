@@ -44,7 +44,6 @@ let
 
   signalCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.signal-cli;
 
-  socketRel = "signal-cli/socket"; # relative to $XDG_RUNTIME_DIR
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/distro/signal";
   enqueueSockName = "distro-signal-enqueue.sock";
@@ -204,22 +203,21 @@ in
       };
     };
 
-    # Sandbox-facing surface. Daemon socket + distro-side store +
-    # signal-cli's attachment cache + bridge enqueue socket. The
-    # bridge's panel socket is deliberately absent: only the chat
-    # panel running outside the sandbox may approve outbound sends.
+    # Sandbox-facing surface. **Daemon socket is deliberately absent.**
+    # The bridge owns the only JSON-RPC client to signal-cli; routing
+    # contacts/groups/send through the bridge keeps the human approval
+    # gate as the single chokepoint. Exposing the daemon socket into
+    # the sandbox would let a prompt-injected agent call `send`
+    # directly and bypass the gate entirely.
+    #
+    # The message store is `ro`: the bridge writes from outside the
+    # sandbox via direct filesystem access, the sandbox can only read.
+    # That stops a compromised agent from forging inbound messages or
+    # rewriting `pending_sends.state = 'sent'` to fake approval.
     services.pi-chat.sandboxBinds = [
       {
-        source = "%t/${socketRel}";
-        # Daemon may not have come up yet when the panel spawns the
-        # first session — `optional` keeps the sandbox starting and
-        # the read CLI will surface a clear error instead.
-        optional = true;
-        mode = "rw";
-      }
-      {
         source = "%h/${storeRel}";
-        mode = "rw";
+        mode = "ro";
       }
       {
         source = "%h/${identityRel}/attachments";

@@ -255,5 +255,73 @@ class TestPendingSends(DbBase):
         self.assertEqual(approved, {"b"})
 
 
+class TestConnectReadonly(unittest.TestCase):
+    """The sandbox-side `signal` CLI MUST open the DB read-only.
+    Any write attempt — INSERT, UPDATE, DELETE, CREATE — must be
+    rejected at the SQLite layer, so a prompt-injected agent
+    cannot forge inbound messages or flip pending_sends to 'sent'
+    without panel approval.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "messages.db"
+        # Bridge-side connect to materialise the schema and one row.
+        writer = dbmod.connect(self.path)
+        dbmod.store_message(
+            writer,
+            {
+                "uid": "u1",
+                "ts_ms": 1_700_000_000_000,
+                "thread_id": "t1",
+                "thread_kind": "dm",
+                "body": "hi",
+            },
+        )
+        writer.close()
+
+    def test_reads_work(self) -> None:
+        ro = dbmod.connect_readonly(self.path)
+        self.addCleanup(ro.close)
+        rows = dbmod.query_messages(ro)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["body"], "hi")
+
+    def test_insert_rejected(self) -> None:
+        ro = dbmod.connect_readonly(self.path)
+        self.addCleanup(ro.close)
+        import sqlite3
+
+        with self.assertRaises(sqlite3.OperationalError):
+            ro.execute(
+                "INSERT INTO messages (uid, ts_ms, received_at_ms, thread_id, thread_kind)"
+                " VALUES ('forged', 0, 0, 't', 'dm')"
+            )
+
+    def test_update_rejected(self) -> None:
+        ro = dbmod.connect_readonly(self.path)
+        self.addCleanup(ro.close)
+        import sqlite3
+
+        with self.assertRaises(sqlite3.OperationalError):
+            ro.execute("UPDATE messages SET body = 'tampered' WHERE uid = 'u1'")
+
+    def test_create_table_rejected(self) -> None:
+        ro = dbmod.connect_readonly(self.path)
+        self.addCleanup(ro.close)
+        import sqlite3
+
+        with self.assertRaises(sqlite3.OperationalError):
+            ro.execute("CREATE TABLE evil (x INTEGER)")
+
+    def test_missing_file_raises(self) -> None:
+        missing = Path(self.tmp.name) / "nope.db"
+        import sqlite3
+
+        with self.assertRaises(sqlite3.OperationalError):
+            dbmod.connect_readonly(missing)
+
+
 if __name__ == "__main__":
     unittest.main()

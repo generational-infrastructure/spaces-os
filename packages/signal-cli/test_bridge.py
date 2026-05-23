@@ -413,6 +413,98 @@ class TestEnqueueOtherRecipient(BridgeHarness):
         self.assertFalse(resp["ok"])
 
 
+class TestEnqueueDisplayName(BridgeHarness):
+    """Display-name handling is panel-visible: an attacker who
+    controls their Signal display name (BIDI override, zero-width
+    chars, terminal control codes) could otherwise spoof the
+    visible recipient on the approval card. The bridge must:
+      1. strip Unicode control / format chars before storing or
+         echoing the name back, and
+      2. always return the raw `recipient` alongside the friendly
+         name so the CLI can show both."""
+
+    def test_response_carries_recipient_verbatim(self) -> None:
+        self.daemon.contacts = [
+            {"uuid": "u-bob", "number": "+15559998888", "name": "Bob"}
+        ]
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "hi"},
+        )
+        self.assertEqual(resp["recipient"], "+15559998888")
+
+    def test_display_name_strips_bidi_override(self) -> None:
+        # U+202E RIGHT-TO-LEFT OVERRIDE inserted mid-name.
+        self.daemon.contacts = [
+            {"uuid": "u-evil", "number": "+1666", "name": "Al\u202eice"}
+        ]
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+1666", "body": "x"},
+        )
+        self.assertEqual(resp["display_name"], "Alice")
+
+    def test_display_name_strips_zero_width(self) -> None:
+        # U+200B ZERO WIDTH SPACE and U+200D ZERO WIDTH JOINER.
+        self.daemon.contacts = [
+            {"uuid": "u-eve", "number": "+1777", "name": "Ev\u200be\u200d"}
+        ]
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+1777", "body": "x"},
+        )
+        self.assertEqual(resp["display_name"], "Eve")
+
+    def test_display_name_falls_back_when_all_chars_stripped(self) -> None:
+        # Pathological name made entirely of control chars: fall back
+        # to the recipient so the panel doesn't render an empty card.
+        self.daemon.contacts = [
+            {"uuid": "u-x", "number": "+1888", "name": "\u200b\u200d\u202e"}
+        ]
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+1888", "body": "x"},
+        )
+        self.assertEqual(resp["display_name"], "+1888")
+
+
+class TestEnqueueDaemonProxy(BridgeHarness):
+    """Bridge proxies listContacts/listGroups so the sandbox never
+    touches the daemon socket directly."""
+
+    def test_contacts_op_returns_aggregated_list(self) -> None:
+        self.daemon.contacts = [
+            {"uuid": "u-bob", "number": "+1888", "name": "Bob"},
+            {"uuid": "u-carol", "number": "+1777", "name": "Carol"},
+        ]
+        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
+        self.assertTrue(resp["ok"])
+        names = sorted(c.get("name") for c in resp["contacts"])
+        self.assertEqual(names, ["Bob", "Carol"])
+
+    def test_groups_op_returns_aggregated_list(self) -> None:
+        self.daemon.groups = [
+            {"id": "GROUP=1", "name": "Crew", "members": [1, 2]},
+        ]
+        resp = _send_request(self.enqueue_sock, {"op": "groups"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["groups"]), 1)
+        self.assertEqual(resp["groups"][0]["name"], "Crew")
+
+    def test_contacts_op_empty_when_daemon_empty(self) -> None:
+        self.daemon.contacts = []
+        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["contacts"], [])
+
+    def test_contacts_op_errors_when_no_account(self) -> None:
+        self.daemon.accounts = []
+        self.bridge._refresh_accounts()
+        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
+        self.assertFalse(resp["ok"])
+        self.assertIn("no linked Signal account", resp["error"])
+
+
 class TestPanelDecision(BridgeHarness):
     def _enqueue(self, to: str = "+15559998888", body: str = "x") -> str:
         resp = _send_request(self.enqueue_sock, {"op": "send", "to": to, "body": body})
@@ -473,6 +565,97 @@ class TestPanelDecision(BridgeHarness):
         self.assertFalse(second["ok"])
         # Should mention current state for the panel to render usefully.
         self.assertIn("already", second["error"])
+
+
+class TestPanelDecisionRace(BridgeHarness):
+    """Two concurrent approvals on the same token must dispatch the
+    underlying `send` exactly once. The pre-fix flow read the row,
+    checked state, dispatched, then wrote — a classic TOCTOU. Two
+    parallel approvers could both pass the state check and both
+    dispatch, double-sending the message."""
+
+    def test_concurrent_approve_dispatches_once(self) -> None:
+        # Queue one pending send.
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "race-msg"},
+        )
+        token = resp["token"]
+
+        # Fire N parallel approvals.
+        N = 8
+        results: list[dict] = []
+        results_lock = threading.Lock()
+
+        def approve() -> None:
+            r = _send_request(
+                self.panel_sock, {"op": "approve", "token": token}, timeout=10.0
+            )
+            with results_lock:
+                results.append(r)
+
+        threads = [threading.Thread(target=approve) for _ in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        winners = [r for r in results if r.get("ok")]
+        losers = [r for r in results if not r.get("ok")]
+        self.assertEqual(
+            len(winners), 1, f"expected exactly one approver to win, got {results!r}"
+        )
+        self.assertEqual(len(losers), N - 1)
+
+        # signal-cli `send` invoked exactly once.
+        sends = [c for c in self.daemon.send_calls if c.get("message") == "race-msg"]
+        self.assertEqual(len(sends), 1, f"send must be dispatched once, got {sends!r}")
+
+        # Row ends up in `sent` state.
+        check_db = dbmod.connect(self.db_path)
+        try:
+            row = dbmod.get_pending(check_db, token)
+        finally:
+            check_db.close()
+        self.assertEqual(row["state"], "sent")
+
+
+class TestEnqueueResourceLimits(BridgeHarness):
+    """Cheap DoS guards: a malicious sandbox or bug-pinned client
+    must not be able to OOM the bridge by streaming a single
+    unbounded line, nor stash a giant body that signal-cli would
+    reject downstream after we've already paid the storage cost."""
+
+    def test_oversize_line_drops_connection_bridge_stays_up(self) -> None:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        s.connect(self.enqueue_sock)
+        big = b"x" * (2 * 1024 * 1024)  # 2 MiB, no newline
+        try:
+            s.sendall(big)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # bridge closed us, that's the desired outcome
+        finally:
+            s.close()
+        # Bridge stayed alive — fresh conn works.
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15550000001", "body": "still alive"},
+        )
+        self.assertTrue(resp["ok"])
+
+    def test_oversize_body_rejected_before_enqueue(self) -> None:
+        body = "x" * (65 * 1024)  # 65 KiB
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": body},
+        )
+        self.assertFalse(resp["ok"])
+        self.assertIn("body too large", resp["error"])
+        # No pending row created.
+        with self.bridge._db_lock:
+            pending = dbmod.list_pending(self.bridge.db)
+        self.assertEqual(pending, [])
 
 
 class _PanelSubscriber:

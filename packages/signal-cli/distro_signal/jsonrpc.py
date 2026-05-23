@@ -48,9 +48,18 @@ class JsonRpcClient:
         *,
         on_notification: NotificationHandler | None = None,
         on_close: Callable[[], None] | None = None,
+        connect_timeout: float = 10.0,
     ) -> None:
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # Cap connect(): a daemon socket whose listen backlog is wedged
+        # would otherwise hang the caller indefinitely. We don't carry
+        # the timeout into steady-state I/O — the reader thread is
+        # supposed to block on readline() until a response arrives or
+        # the daemon hangs up, and write_lock-serialised sendall is
+        # bounded by the kernel send buffer rather than time.
+        self._sock.settimeout(connect_timeout)
         self._sock.connect(sock_path)
+        self._sock.settimeout(None)
         self._reader = self._sock.makefile("r", encoding="utf-8", newline="\n")
         self._write_lock = threading.Lock()
 

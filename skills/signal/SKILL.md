@@ -215,6 +215,24 @@ have both.
    Signal is intimate. Summarise or paraphrase by default. Quote
    verbatim only when the user asks for exact wording.
 
+4. **Use the `signal` CLI only. Never write Python, shell, or any
+   other code that talks to a `signal*` socket, `messages.db`,
+   `signal-cli`, or anything in `~/.local/state/distro/signal`
+   directly.** Those endpoints exist *only* to back the `signal`
+   CLI; calling them yourself would bypass the human-in-the-loop
+   approval gate and is a security violation, equivalent to
+   forging a send. If the CLI does not expose what you need, say
+   so and stop — do not invent a workaround.
+
+5. **When you queue a send, surface BOTH the display name and the
+   raw recipient to the user.** The bridge's pending card prints
+   `to: <NAME>  <+15551234>` for exactly this reason: display
+   names come from the contact's own (attacker-controlled) Signal
+   profile, so a contact whose name reads `<NAME>` might be
+   reaching an unrelated phone number / UUID. Always show the
+   human the actual target so they can catch a mismatch before
+   tapping Send.
+
 # If something doesn't work
 
 * `error: signal infrastructure not running` →

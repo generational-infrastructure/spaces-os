@@ -37,6 +37,7 @@ import secrets
 import select
 import socket
 import threading
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -49,6 +50,13 @@ log = logging.getLogger("distro_signal.bridge")
 DEFAULT_DAEMON_SOCKET_ENV = "DISTRO_SIGNAL_DAEMON_SOCKET"
 DEFAULT_ENQUEUE_SOCKET_ENV = "DISTRO_SIGNAL_ENQUEUE_SOCKET"
 DEFAULT_PANEL_SOCKET_ENV = "DISTRO_SIGNAL_PANEL_SOCKET"
+
+# Resource caps on the sandbox-facing enqueue socket. The sandbox is
+# the lower-trust side of the bridge — these prevent a buggy or
+# prompt-injected agent from OOMing the bridge (line cap) or stashing
+# a huge body the daemon will reject anyway (body cap).
+MAX_ENQUEUE_LINE_BYTES = 1 << 20  # 1 MiB
+MAX_SEND_BODY_BYTES = 64 * 1024  # 64 KiB
 
 
 class _SelectWake:
@@ -184,6 +192,27 @@ def classify_recipient(value: str) -> str:
     if "." in value and len(value) < 40:
         return "username"
     return "group"
+
+
+def sanitize_display(name: str | None, fallback: str) -> str:
+    """Strip Unicode control / format characters from a contact's
+    display name before showing it to the human.
+
+    Signal display names are attacker-controlled (anyone can pick
+    their own profile name). Left raw, a U+202E RIGHT-TO-LEFT
+    OVERRIDE would let an attacker make the approval card render
+    "alice" while the message actually goes to "bob"; zero-width
+    joiners and BIDI marks are similar. We drop every character in
+    Unicode category C* (control, format, surrogate, private-use,
+    unassigned), then fall back to `fallback` if nothing readable
+    survives.
+    """
+    if not name:
+        return fallback
+    cleaned = "".join(
+        c for c in name if unicodedata.category(c)[0] != "C" or c == " "
+    ).strip()
+    return cleaned or fallback
 
 
 def is_self_recipient(recipient: str, accounts: Iterable[dict]) -> bool:
@@ -475,12 +504,28 @@ class Bridge:
 
     def _handle_enqueue_request(self, req: dict) -> dict:
         op = req.get("op")
-        if op != "send":
-            return {"ok": False, "error": f"unknown op: {op!r}"}
+        if op == "send":
+            return self._handle_send_request(req)
+        if op == "contacts":
+            return self._handle_daemon_list_request("listContacts", "contacts")
+        if op == "groups":
+            return self._handle_daemon_list_request("listGroups", "groups")
+        return {"ok": False, "error": f"unknown op: {op!r}"}
+
+    def _handle_send_request(self, req: dict) -> dict:
         recipient = (req.get("to") or "").strip()
         body = req.get("body") or ""
         if not recipient or not body:
             return {"ok": False, "error": "missing 'to' or 'body'"}
+        body_bytes = body.encode("utf-8", errors="replace")
+        if len(body_bytes) > MAX_SEND_BODY_BYTES:
+            return {
+                "ok": False,
+                "error": (
+                    f"body too large ({len(body_bytes)} bytes); "
+                    f"maximum is {MAX_SEND_BODY_BYTES}"
+                ),
+            }
 
         accounts = self._accounts_snapshot()
         if not accounts:
@@ -530,7 +575,37 @@ class Bridge:
             "pending": True,
             "token": token,
             "display_name": display_name,
+            "recipient": recipient,
         }
+
+    def _handle_daemon_list_request(self, method: str, key: str) -> dict:
+        """Aggregate `listContacts` or `listGroups` across every linked
+        account and return a flat list. The CLI used to hit the daemon
+        socket directly for this; proxying through the bridge keeps the
+        daemon socket OFF the sandbox's bind-mount set, so a
+        prompt-injected agent cannot bypass the approval gate by
+        speaking JSON-RPC `send` to the daemon itself.
+        """
+        if self._rpc_client is None:
+            return {"ok": False, "error": "daemon connection not available"}
+        accounts = self._accounts_snapshot()
+        if not accounts:
+            return {"ok": False, "error": "no linked Signal account"}
+        combined: list = []
+        errors: list[str] = []
+        for acct in accounts:
+            account_id = acct.get("number") or acct.get("uuid")
+            try:
+                result = self._rpc_client.call(method, {"account": account_id})
+            except (JsonRpcError, OSError, TimeoutError) as exc:
+                errors.append(f"{method}({account_id}): {exc}")
+                continue
+            if isinstance(result, list):
+                combined.extend(result)
+        resp: dict = {"ok": True, key: combined}
+        if errors:
+            resp["warnings"] = errors
+        return resp
 
     def _dispatch_send(self, account: dict, recipient: str, body: str) -> None:
         kind = classify_recipient(recipient)
@@ -562,7 +637,7 @@ class Bridge:
                 if isinstance(groups, list):
                     for g in groups:
                         if isinstance(g, dict) and g.get("id") == recipient:
-                            return str(g.get("name") or recipient)
+                            return sanitize_display(g.get("name"), recipient)
             elif kind in ("number", "uuid"):
                 contacts = self._rpc_client.call(
                     "listContacts",
@@ -579,7 +654,7 @@ class Bridge:
                                 given = profile.get("givenName") or ""
                                 family = profile.get("familyName") or ""
                                 name = (given + " " + family).strip()
-                            return str(name or c.get("number") or recipient)
+                            return sanitize_display(name or c.get("number"), recipient)
         except (JsonRpcError, OSError, TimeoutError) as exc:
             log.debug("display-name lookup failed: %s", exc)
         return recipient
@@ -643,12 +718,46 @@ class Bridge:
                 "state": row["state"],
             }
         if not approve:
+            # Atomically transition pending → denied. If the row was
+            # already decided between our read and write, mark_pending
+            # returns False; surface "already <state>" rather than
+            # claiming success.
             with self._db_lock:
-                dbmod.mark_pending(self.db, token, state="denied")
+                claimed = dbmod.mark_pending(self.db, token, state="denied")
+                if not claimed:
+                    current = dbmod.get_pending(self.db, token)
+            if not claimed:
+                state = current["state"] if current else "unknown"
+                return {
+                    "op": "decision",
+                    "ok": False,
+                    "error": f"already {state}",
+                    "state": state,
+                }
             self._broadcast_panel({"op": "removed", "token": token, "state": "denied"})
             return {"op": "decision", "ok": True, "state": "denied"}
 
-        # Approved: dispatch through signal-cli, record outcome.
+        # Approve: claim the row by atomically transitioning
+        # pending → approved. Only the thread whose UPDATE actually
+        # changes a row may dispatch — every other concurrent approver
+        # gets `claimed = False` and bails. This closes the
+        # double-send TOCTOU between get_pending() and the dispatch.
+        with self._db_lock:
+            claimed = dbmod.mark_pending(self.db, token, state="approved")
+            if not claimed:
+                current = dbmod.get_pending(self.db, token)
+        if not claimed:
+            state = current["state"] if current else "unknown"
+            return {
+                "op": "decision",
+                "ok": False,
+                "error": f"already {state}",
+                "state": state,
+            }
+
+        # We own the dispatch. From here on we MUST move the row off
+        # the 'approved' intermediate state (to 'sent' or 'failed')
+        # before returning, otherwise the panel sees a stuck row.
         accounts = self._accounts_snapshot()
         acct = next(
             (a for a in accounts if a.get("uuid") == row.get("account_uuid")),
@@ -759,8 +868,13 @@ class Bridge:
             self._spawn(lambda c=conn: handler(c), name=f"conn-{path}")
 
 
-def _ndjson_requests(conn: socket.socket):
-    """Yield one parsed JSON dict per newline-delimited line read from conn."""
+def _ndjson_requests(conn: socket.socket, max_line_bytes: int = MAX_ENQUEUE_LINE_BYTES):
+    """Yield one parsed JSON dict per newline-delimited line read from conn.
+
+    Caps the unfinished-line buffer at `max_line_bytes`. A client that
+    streams data without a newline (accidentally or maliciously) gets
+    its connection closed instead of OOM-ing the bridge.
+    """
     buf = b""
     while True:
         try:
@@ -770,8 +884,20 @@ def _ndjson_requests(conn: socket.socket):
         if not chunk:
             return
         buf += chunk
+        if b"\n" not in buf and len(buf) > max_line_bytes:
+            log.warning(
+                "enqueue conn flooded %d bytes without newline; dropping", len(buf)
+            )
+            return
         while b"\n" in buf:
             line, _, buf = buf.partition(b"\n")
+            if len(line) > max_line_bytes:
+                log.warning(
+                    "enqueue conn line %d bytes exceeds %d; skipping",
+                    len(line),
+                    max_line_bytes,
+                )
+                continue
             line = line.strip()
             if not line:
                 continue

@@ -190,15 +190,15 @@ pkgs.runCommand "distro-signal-nix-eval-test"
 
     jq -e '
       .sandboxBinds
-      | any(.source == "%t/signal-cli/socket" and .mode == "rw" and .optional == true)
+      | all(.source != "%t/signal-cli/socket")
     ' "$pichatConfig" >/dev/null \
-      || fail "signal-cli socket not in sandboxBinds: $binds"
+      || fail "signal-cli daemon socket MUST NOT be in sandboxBinds (security regression — agent would bypass the approval gate): $binds"
 
     jq -e '
       .sandboxBinds
-      | any(.source == "%h/.local/state/distro/signal" and .mode == "rw" and .optional == false)
+      | any(.source == "%h/.local/state/distro/signal" and .mode == "ro" and .optional == false)
     ' "$pichatConfig" >/dev/null \
-      || fail "signal store dir not in sandboxBinds: $binds"
+      || fail "signal store dir must be RO in sandboxBinds (sandbox writes would forge messages / fake approvals): $binds"
 
     jq -e '
       .sandboxBinds

@@ -32,10 +32,8 @@ from pathlib import Path
 from typing import Sequence
 
 from . import db as dbmod
-from .jsonrpc import JsonRpcClient, JsonRpcError
 
 DEFAULT_ENQUEUE_SOCKET_ENV = "DISTRO_SIGNAL_ENQUEUE_SOCKET"
-DEFAULT_DAEMON_SOCKET_ENV = "DISTRO_SIGNAL_DAEMON_SOCKET"
 
 
 # ── socket-path helpers ─────────────────────────────────────────────
@@ -48,11 +46,6 @@ def _runtime_dir() -> str:
 def _enqueue_socket_path() -> str:
     env = os.environ.get(DEFAULT_ENQUEUE_SOCKET_ENV)
     return env or f"{_runtime_dir()}/distro-signal-enqueue.sock"
-
-
-def _daemon_socket_path() -> str:
-    env = os.environ.get(DEFAULT_DAEMON_SOCKET_ENV)
-    return env or f"{_runtime_dir()}/signal-cli/socket"
 
 
 _ONBOARDING_HINT = (
@@ -92,16 +85,16 @@ def _truncate(text: str | None, n: int = 80) -> str:
 
 
 def _signal_running() -> bool:
-    """True iff the signal stack appears installed on this host.
+    """True iff the bridge enqueue socket is present.
 
-    Probes socket-file existence rather than reachability: any signal
-    socket means the systemd units have run at least once, which only
-    happens after the user completes `signal-cli link`. Both sockets
-    are optional bind-mounts in the pi-chat sandbox, so a half-up
-    system (one socket only) still counts as "configured" — DB-backed
-    reads should proceed against the data the bridge already wrote.
+    The sandbox can only reach the bridge — the daemon JSON-RPC
+    socket is deliberately NOT bind-mounted, so the agent cannot
+    sidestep the human approval gate by speaking `send` to the
+    daemon directly. The enqueue socket file shows up the first
+    time the bridge runs, which only happens after the user has
+    completed `signal-cli link`.
     """
-    return Path(_daemon_socket_path()).exists() or Path(_enqueue_socket_path()).exists()
+    return Path(_enqueue_socket_path()).exists()
 
 
 def _emit_unconfigured_hint() -> None:
@@ -119,7 +112,7 @@ def cmd_threads(args: argparse.Namespace) -> int:
     if not _signal_running():
         _emit_unconfigured_hint()
         return 1
-    db = dbmod.connect(dbmod.default_db_path())
+    db = dbmod.connect_readonly(dbmod.default_db_path())
     rows = dbmod.list_threads(db, limit=args.limit)
     if args.json:
         json.dump(rows, sys.stdout, indent=2, default=str)
@@ -145,7 +138,7 @@ def cmd_read(args: argparse.Namespace) -> int:
     if not _signal_running():
         _emit_unconfigured_hint()
         return 1
-    db = dbmod.connect(dbmod.default_db_path())
+    db = dbmod.connect_readonly(dbmod.default_db_path())
     rows = dbmod.query_messages(
         db,
         thread_id=args.thread_id,
@@ -175,7 +168,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     if not _signal_running():
         _emit_unconfigured_hint()
         return 1
-    db = dbmod.connect(dbmod.default_db_path())
+    db = dbmod.connect_readonly(dbmod.default_db_path())
     rows = dbmod.query_messages(db, body_query=args.query, limit=args.limit)
     if args.json:
         json.dump(rows, sys.stdout, indent=2, default=str)
@@ -194,67 +187,44 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_contacts(args: argparse.Namespace) -> int:
-    return _daemon_list(args, "listContacts", _format_contacts)
+    return _bridge_daemon_list(args, "contacts", _format_contacts)
 
 
 def cmd_groups(args: argparse.Namespace) -> int:
-    return _daemon_list(args, "listGroups", _format_groups)
+    return _bridge_daemon_list(args, "groups", _format_groups)
 
 
-def _daemon_list(args, method: str, formatter) -> int:
-    daemon_sock = _daemon_socket_path()
+def _bridge_daemon_list(args, op: str, formatter) -> int:
+    """Read contacts/groups through the bridge enqueue socket.
+
+    The bridge owns the daemon connection; the sandbox never touches
+    the daemon JSON-RPC socket directly. That isolation is what keeps
+    a prompt-injected agent from calling `send` on the daemon and
+    sidestepping the human approval gate.
+    """
     try:
-        client = JsonRpcClient(daemon_sock)
+        resp = _enqueue_call({"op": op})
     except FileNotFoundError:
-        # Distinct from ECONNREFUSED: the socket file does not exist
-        # at all, which on a default distro install means the user
-        # has never linked a Signal account (and the path-activated
-        # daemon unit has therefore never started). Point at the
-        # link command instead of an opaque "no such file".
+        sock = _enqueue_socket_path()
         print(
-            f"error: signal-cli daemon socket missing ({daemon_sock}).\n"
-            f"{_ONBOARDING_HINT}",
+            f"error: signal bridge socket missing ({sock}).\n{_ONBOARDING_HINT}",
             file=sys.stderr,
         )
         return 1
-    except OSError as exc:
-        print(f"error: signal-cli daemon unreachable: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"error: bridge unreachable: {exc}", file=sys.stderr)
         return 1
-    try:
-        accounts = client.call("listAccounts")
-    except (JsonRpcError, OSError, TimeoutError) as exc:
-        client.close()
-        print(f"error: listAccounts failed: {exc}", file=sys.stderr)
+    if not resp.get("ok"):
+        print(f"error: {resp.get('error', 'unknown error')}", file=sys.stderr)
         return 1
-    if not accounts:
-        client.close()
-        print(
-            "error: no linked Signal account — run `signal-cli link` first",
-            file=sys.stderr,
-        )
-        return 1
-    # Multi-account: aggregate across all linked identities.
-    combined: list[dict] = []
-    try:
-        for acct in accounts:
-            account_id = acct.get("number") or acct.get("uuid")
-            try:
-                result = client.call(method, {"account": account_id})
-            except JsonRpcError as exc:
-                print(
-                    f"warning: {method} for {account_id} failed: {exc}",
-                    file=sys.stderr,
-                )
-                continue
-            if isinstance(result, list):
-                combined.extend(result)
-    finally:
-        client.close()
+    items = resp.get(op) or []
+    for warning in resp.get("warnings") or []:
+        print(f"warning: {warning}", file=sys.stderr)
     if args.json:
-        json.dump(combined, sys.stdout, indent=2, default=str)
+        json.dump(items, sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")
         return 0
-    formatter(combined)
+    formatter(items)
     return 0
 
 
@@ -314,7 +284,19 @@ def cmd_send(args: argparse.Namespace) -> int:
             "pending — show this card to the user and ask them to approve "
             "in the chat panel:"
         )
-        print(f"  to:    {resp.get('display_name') or args.recipient}")
+        # Always show BOTH the friendly display name AND the raw
+        # recipient. The display name comes from the contact's
+        # attacker-controlled Signal profile — even after we strip
+        # Unicode controls, a malicious contact could pick a
+        # display name like "Mom" while their actual UUID is
+        # someone unrelated. Surfacing the recipient gives the user
+        # (and the agent reporting to them) the unambiguous target.
+        recipient = resp.get("recipient") or args.recipient
+        display = resp.get("display_name") or recipient
+        if display == recipient:
+            print(f"  to:    {recipient}")
+        else:
+            print(f"  to:    {display}  <{recipient}>")
         print(f"  body:  {args.body}")
         print(f"  token: {resp.get('token')}")
         return 0
