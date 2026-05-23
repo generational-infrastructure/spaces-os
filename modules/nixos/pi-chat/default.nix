@@ -38,6 +38,8 @@ let
   skillConfigDaemonPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.skill-config-daemon;
   notificationsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.notifications-cli;
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
+  osmCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli;
+  caldavCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   piPkg = cfg.piPackage;
 
@@ -531,16 +533,25 @@ in
     # so a fresh install boots into a usable state.
     services.llama-swap.enable = lib.mkDefault true;
 
-    # Skill-config CLI on PATH so pi (running as the interactive user)
-    # can `bash` it without going through nix-shell. `sediment` is on
-    # PATH too so the operator can debug the same DB the chat sandbox
-    # writes to: `sediment stats`, `sediment list`,
-    # `sediment recall "<query>"`, `sediment forget <id>`. SEDIMENT_DB
-    # below points at the per-user DB so no `--db` flag is needed.
+    # Every built-in skill's CLI lands on the system PATH. Two
+    # reasons:
+    #   1. The pi-chat sandbox inherits the user's PATH, so the
+    #      agent can shell out by bare name (`osm-cli search …`,
+    #      `caldav list …`, etc.).
+    #   2. The user can run the exact same commands from a normal
+    #      terminal — debug a skill's behaviour, script around it,
+    #      or just use it without going through the chat panel.
+    # `sediment` is on PATH for the same reason: the operator can
+    # poke the same DB the chat sandbox writes to with `sediment
+    # stats`, `sediment list`, `sediment recall "<q>"`, etc.
+    # SEDIMENT_DB below points at the per-user DB so no `--db` flag
+    # is needed.
     environment.systemPackages = [
       skillConfigPkg
       notificationsCliPkg
       googleCliPkg
+      osmCliPkg
+      caldavCliPkg
       sedimentPkg
     ];
 
