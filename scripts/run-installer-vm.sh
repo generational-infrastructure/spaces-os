@@ -35,7 +35,7 @@ mkdir -p "$WORKDIR"
 # cached unless the flake source changed.
 if [[ -z ${ISO:-} ]]; then
   echo ">> Building installer ISO via nix..."
-  ISO_ROOT=$(nix build --print-out-paths --no-link .#installer-iso)
+  ISO_ROOT=$(nix build --print-out-paths --no-link .#iso.x86_64-linux.installer)
   ISO=$(echo "$ISO_ROOT"/iso/*.iso)
 fi
 
@@ -52,7 +52,7 @@ if [[ -f $DISK && -z ${KEEP_DISK:-} ]]; then
 fi
 if [[ ! -f $DISK ]]; then
   echo ">> Creating empty $DISK_SIZE qcow2 at $DISK"
-  qemu-img create -f qcow2 "$DISK" "$DISK_SIZE" >/dev/null
+  nix shell nixpkgs#qemu -c qemu-img create -f qcow2 "$DISK" "$DISK_SIZE" >/dev/null
 fi
 
 # UEFI firmware — Calamares writes EFI bootloader entries that won't
@@ -73,7 +73,7 @@ fi
 # (matches the host-debug VM setup in modules/nixos/vm-debug.nix).
 # `show-menubar=off` lets Alt+letter shortcuts reach the guest
 # compositor instead of being eaten by the GTK menu.
-exec qemu-system-x86_64 \
+exec nix shell nixpkgs#qemu -c qemu-system-x86_64 \
   -machine q35,accel=kvm \
   -cpu max \
   -m "$MEMORY" \
