@@ -8,8 +8,11 @@ import qs.Commons
 
 // Manage plugins discovered under `~/.config/noctalia/plugins-autoload/`.
 //
-// Owns the full lifecycle:
-//   - Auto-enable plugins newly appearing in the autoload dir.
+//   - Force-enable plugins present in the autoload dir on every scan.
+//     Distro owns these plugin slots: there is no UI affordance to keep
+//     a `disabled` state — if the user toggled it off in noctalia's
+//     plugin manager, the next launch flips it back on so the chat
+//     widget always appears in the bar.
 //   - Tag autoload-owned entries in plugins.json with `autoload: true`.
 //   - GC autoload entries whose on-disk manifest has been removed (e.g.
 //     when a distro generation drops a plugin). Without this noctalia
@@ -128,18 +131,24 @@ Singleton {
         changed = true;
       }
 
-      // Backfill the `autoload: true` flag on plugins currently in the
-      // autoload dir so future GC owns them too. Auto-enable newly
-      // discovered ones (initialKnownPlugins captured the pre-scan view).
+      // Force-enable every plugin currently in the autoload dir.
+      // Distro owns these slots, so any persisted `enabled: false`
+      // (manual toggle, partially-migrated plugins.json, etc.) is
+      // overwritten on every scan. Also backfill `autoload: true` so
+      // future GC owns the entry. Newly discovered ids additionally
+      // queue a `pendingAutoloads` hint so addAutoloadedWidgets knows
+      // which bar section to drop the widget into on first placement.
       for (var k = 0; k < ids.length; k++) {
         var pid = ids[k];
+        var prev = states[pid] || {};
+        var alreadyOwned = prev.enabled === true && prev.autoload === true;
+        states[pid] = Object.assign({}, prev, { enabled: true, autoload: true });
         if (!root.initialKnownPlugins[pid]) {
-          states[pid] = { enabled: true, autoload: true };
           root.pendingAutoloads[pid] = { barSection: "center" };
           Logger.i("PluginAutoload", "Auto-enabled plugin:", pid);
           changed = true;
-        } else if (!states[pid] || states[pid].autoload !== true) {
-          states[pid] = Object.assign({}, states[pid] || { enabled: true }, { autoload: true });
+        } else if (!alreadyOwned) {
+          Logger.i("PluginAutoload", "Re-enabled autoload plugin:", pid);
           changed = true;
         }
       }

@@ -340,6 +340,58 @@ let
                     f"saw placement={restored!r} widgets={settings_widget_ids()}"
                 )
 
+        with subtest("widget is re-placed when plugins.json marks pi-chat enabled=false"):
+            # Reproduction for the failure observed on a real host: an
+            # earlier run left plugins.json with
+            #   {"pi-chat": {"autoload": true, "enabled": false, ...}}
+            # (no widget in settings.json). Patched PluginAutoload must
+            # re-enable the autoload-owned plugin AND place its bar
+            # widget on the next noctalia start — otherwise the chat
+            # icon is missing from the bar with no way for the user to
+            # bring it back without hand-editing config.
+            machine.succeed(
+                "systemctl --user --machine=test@.host stop noctalia-shell.service"
+            )
+            machine.succeed(
+                "sudo -u test python3 /tmp/strip-pi-chat-widget.py"
+            )
+            machine.succeed(
+                "sudo -u test python3 -c \""
+                "import json; "
+                "p='/home/test/.config/noctalia/plugins.json'; "
+                "d=json.load(open(p)); "
+                "d.setdefault('states', {}).setdefault('pi-chat', {})"
+                ".update({'enabled': False, 'autoload': True}); "
+                "json.dump(d, open(p, 'w'))\""
+            )
+            machine.succeed(
+                "systemctl --user --machine=test@.host start noctalia-shell.service"
+            )
+            machine.wait_until_succeeds(
+                "systemctl --user --machine=test@.host is-active noctalia-shell.service",
+                timeout=30,
+            )
+            deadline = _time.monotonic() + 60
+            restored = None
+            while _time.monotonic() < deadline:
+                for section, wid in settings_widget_ids():
+                    if wid == "plugin:pi-chat":
+                        restored = section
+                        break
+                if restored:
+                    break
+                _time.sleep(0.5)
+            if restored != "center":
+                plugins_state = machine.succeed(
+                    "cat /home/test/.config/noctalia/plugins.json"
+                )
+                raise Exception(
+                    "patched noctalia did not re-place the pi-chat bar widget "
+                    "when plugins.json had enabled=false; "
+                    f"saw placement={restored!r} widgets={settings_widget_ids()} "
+                    f"plugins.json={plugins_state}"
+                )
+
         with subtest("plugin-sync wipes legacy entries from plugins-autoload"):
             # Mirrors the case where a previous distro
             # generation wrote `~/.config/noctalia/plugins-autoload/<old-id>`
