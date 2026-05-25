@@ -35,7 +35,7 @@ let
     modules = [
       inputs.self.nixosModules.noctalia-bar
       {
-        nixpkgs.hostPlatform = "x86_64-linux";
+        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "sandbox-binds-fixture";
         fileSystems."/" = {
           device = "none";
@@ -123,7 +123,7 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
         modules = [
           inputs.self.nixosModules.noctalia-bar
           {
-            nixpkgs.hostPlatform = "x86_64-linux";
+            nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
             networking.hostName = "sandbox-binds-default";
             fileSystems."/" = {
               device = "none";

@@ -30,7 +30,7 @@ let
     # graph distro users get.
     inputs.self.nixosModules.noctalia-bar
     {
-      nixpkgs.hostPlatform = "x86_64-linux";
+      nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
       fileSystems."/" = {
         device = "none";
         fsType = "tmpfs";
@@ -83,7 +83,7 @@ let
     modules = [
       inputs.self.nixosModules.signal-cli
       {
-        nixpkgs.hostPlatform = "x86_64-linux";
+        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "signal-no-pichat";
         fileSystems."/" = {
           device = "none";
