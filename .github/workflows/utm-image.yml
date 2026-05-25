@@ -1,0 +1,59 @@
+name: utm-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'hosts/utm-aarch64/**'
+      - 'modules/**'
+      - 'packages/**'
+      - 'overlays/**'
+      - '.github/workflows/utm-image.yml'
+  pull_request:
+    paths:
+      - 'hosts/utm-aarch64/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/utm-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main 2026-05-25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      - run: nix build .#image.aarch64-linux.utm --print-build-logs
+
+      - id: locate
+        run: |
+          set -euo pipefail
+          qcow=$(find -L result -maxdepth 3 -type f -name '*.qcow2' | head -n1)
+          if [ -z "$qcow" ]; then
+            echo "no qcow2 under result/" >&2
+            find -L result -maxdepth 3 >&2
+            exit 1
+          fi
+          echo "path=$qcow" >>"$GITHUB_OUTPUT"
+          ls -lh "$qcow"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distro-utm-aarch64-${{ github.sha }}
+          path: ${{ steps.locate.outputs.path }}
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
