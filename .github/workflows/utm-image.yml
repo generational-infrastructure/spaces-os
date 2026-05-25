@@ -1,0 +1,69 @@
+name: utm-image
+
+# Builds the aarch64 UTM qcow2 image and attaches it to the workflow
+# run as an artifact. No release, no bucket — drop-in for "grab the
+# latest from main and try it in UTM" without paying for storage we
+# already get free with Actions artifacts.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'hosts/utm-aarch64/**'
+      - 'modules/**'
+      - 'packages/**'
+      - 'overlays/**'
+      - '.github/workflows/utm-image.yml'
+  pull_request:
+    paths:
+      - 'hosts/utm-aarch64/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/utm-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@4a754ab0c192f4d12cf88b5954b9dd13fd2d612e # main 2026-05-08
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
+
+      - name: Build UTM image
+        run: nix build .#image.aarch64-linux.utm --print-build-logs
+
+      - name: Locate qcow2
+        id: locate
+        run: |
+          set -euo pipefail
+          qcow=$(find -L result -maxdepth 3 -type f -name '*.qcow2' | head -n1)
+          if [ -z "$qcow" ]; then
+            echo "no qcow2 found under result/" >&2
+            find -L result -maxdepth 3 >&2
+            exit 1
+          fi
+          echo "path=$qcow" >>"$GITHUB_OUTPUT"
+          ls -lh "$qcow"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distro-utm-aarch64-${{ github.sha }}
+          path: ${{ steps.locate.outputs.path }}
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error

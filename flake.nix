@@ -61,6 +61,11 @@
 
       installerHostFor = system: if system == "aarch64-linux" then "installer-aarch64" else "installer";
 
+      # Pre-baked qcow2 images, exposed per-arch. Currently only the
+      # UTM-on-Apple-Silicon target (aarch64) lives here; add more by
+      # appending to the genAttrs list.
+      imageSystems = [ "aarch64-linux" ];
+
       mkDebug =
         system:
         let
@@ -111,6 +116,12 @@
       #   nix build .#iso.aarch64-linux.installer
       iso = lib.genAttrs isoSystems (system: {
         installer = base.nixosConfigurations.${installerHostFor system}.config.system.build.isoImage;
+      });
+      # Pre-baked qcow2 disk images. Built outside `packages` so they
+      # stay out of `nix flake check`.
+      #   nix build .#image.aarch64-linux.utm
+      image = lib.genAttrs imageSystems (_system: {
+        utm = base.nixosConfigurations.utm-aarch64.config.system.build.qcowImage;
       });
       overlays = {
         noctalia = import ./overlays/noctalia.nix { flake = base; };
