@@ -83,13 +83,23 @@
 
   system.stateVersion = "25.05";
 
-  system.build.qcowImage = import (modulesPath + "/../lib/make-disk-image.nix") {
-    inherit lib config pkgs;
-    name = "distro-utm-aarch64";
-    format = "qcow2-compressed";
-    partitionTableType = "efi";
-    diskSize = "auto";
-    additionalSpace = "2048M";
-    copyChannel = false;
-  };
+  # The image build runs grub-install + mkfs inside a tiny QEMU VM
+  # (vmTools.runInLinuxVM), which hardcodes a `kvm` system feature so
+  # Hydra schedules it on a KVM-capable builder. GitHub-hosted ARM
+  # runners don't expose /dev/kvm, so we drop the requirement and
+  # let QEMU's `accel=kvm:tcg` fall back to TCG. Slower, but it runs.
+  system.build.qcowImage =
+    lib.overrideDerivation
+      (import (modulesPath + "/../lib/make-disk-image.nix") {
+        inherit lib config pkgs;
+        name = "distro-utm-aarch64";
+        format = "qcow2-compressed";
+        partitionTableType = "efi";
+        diskSize = "auto";
+        additionalSpace = "2048M";
+        copyChannel = false;
+      })
+      (old: {
+        requiredSystemFeatures = builtins.filter (f: f != "kvm") (old.requiredSystemFeatures or [ ]);
+      });
 }
