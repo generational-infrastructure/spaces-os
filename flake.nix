@@ -27,7 +27,10 @@
 
       base = inputs.blueprint {
         inherit inputs;
-        systems = [ "x86_64-linux" ];
+        systems = [
+          "x86_64-linux"
+          "aarch64-linux"
+        ];
         nixpkgs.config.allowUnfree = true;
       };
 
@@ -42,7 +45,21 @@
         "installer-target-session"
       ];
 
+      # Debug tests are x86_64-only: the GUI-end-to-end test spawns
+      # qemu-system-x86_64 and the loadmodule probes assume the x86
+      # toplevel from `nixosConfigurations.installer-target`. Per-arch
+      # variants can come later if/when there's demand.
       debugSystems = [ "x86_64-linux" ];
+
+      # ISO outputs are per-architecture: each system points at the
+      # matching installer host. Keep this list in sync with the
+      # `installer-<arch>` host dirs under ./hosts.
+      isoSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+
+      installerHostFor = system: if system == "aarch64-linux" then "installer-aarch64" else "installer";
 
       mkDebug =
         system:
@@ -88,10 +105,12 @@
     // {
       debug = lib.genAttrs debugSystems mkDebug;
       # Bootable ISO image, exposed outside `packages` so it doesn't
-      # get pulled into `nix flake check`. Build with
+      # get pulled into `nix flake check`. Per-system: each entry
+      # picks the installer host whose hostPlatform matches.
       #   nix build .#iso.x86_64-linux.installer
-      iso = lib.genAttrs debugSystems (_system: {
-        installer = base.nixosConfigurations.installer.config.system.build.isoImage;
+      #   nix build .#iso.aarch64-linux.installer
+      iso = lib.genAttrs isoSystems (system: {
+        installer = base.nixosConfigurations.${installerHostFor system}.config.system.build.isoImage;
       });
       overlays = {
         noctalia = import ./overlays/noctalia.nix { flake = base; };

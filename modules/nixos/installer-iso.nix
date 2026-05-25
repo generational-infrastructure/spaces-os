@@ -19,11 +19,22 @@
 {
   inputs,
   flake,
+  pkgs,
   ...
 }:
 let
   inherit (inputs.nixpkgs) lib;
   inherit (flake.lib) distroSrc;
+
+  # Pre-stage the installed-system closure that matches the live
+  # medium's arch. Keep this map in sync with the `installer-<arch>`
+  # host dirs.
+  installerTargetFor =
+    {
+      "x86_64-linux" = "installer-target";
+      "aarch64-linux" = "installer-target-aarch64";
+    }
+    .${pkgs.stdenv.hostPlatform.system};
 
   # Direct input names declared by distro's flake.lock. Source of truth
   # for which inputs need an `--override-input distro/<name>` at install
@@ -89,6 +100,6 @@ in
   #     noctalia-shell, etc.
   isoImage.storeContents = [
     distroSrc
-    flake.nixosConfigurations.installer-target.config.system.build.toplevel
+    flake.nixosConfigurations.${installerTargetFor}.config.system.build.toplevel
   ];
 }

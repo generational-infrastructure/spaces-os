@@ -22,7 +22,7 @@ let
       modules = [
         inputs.self.nixosModules.noctalia-bar
         {
-          nixpkgs.hostPlatform = "x86_64-linux";
+          nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = "signal-flags";
           fileSystems."/" = {
             device = "none";

@@ -6,8 +6,11 @@
 # Usage: upload-artifacts.sh <tag>
 #
 # Reads the ISO from ./result/iso/*.iso (the symlink left by
-# `nix build .#iso.x86_64-linux.installer`). Uploaded keys are
-# `<tag>-x86_64-linux.iso` and `<tag>-x86_64-linux.iso.sha256`.
+# `nix build .#iso.<arch>.installer`). Uploaded keys are
+# `<tag>-<arch>.iso` and `<tag>-<arch>.iso.sha256`.
+#
+# Architecture defaults to x86_64-linux; override with $ARCH to
+# upload an aarch64 build (paired with build-iso.sh ARCH=…).
 #
 # Requires: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY in env.
 # `aws` is provided via `nix shell nixpkgs#awscli2`, so the only host
@@ -32,7 +35,8 @@ if [ -z "$iso" ]; then
   exit 1
 fi
 
-iso_key="${tag}-x86_64-linux.iso"
+arch=${ARCH:-x86_64-linux}
+iso_key="${tag}-${arch}.iso"
 sha_key="${iso_key}.sha256"
 
 tmp=$(mktemp -d)

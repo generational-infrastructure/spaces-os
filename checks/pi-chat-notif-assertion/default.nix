@@ -24,7 +24,7 @@ let
     modules = [
       inputs.self.nixosModules.noctalia-plugin
       {
-        nixpkgs.hostPlatform = "x86_64-linux";
+        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "broken";
         fileSystems."/" = {
           device = "none";
@@ -44,7 +44,7 @@ let
     modules = [
       inputs.self.nixosModules.noctalia-bar
       {
-        nixpkgs.hostPlatform = "x86_64-linux";
+        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "fixed";
         fileSystems."/" = {
           device = "none";
