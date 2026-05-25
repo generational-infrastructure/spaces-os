@@ -97,6 +97,11 @@ QtObject {
   property string _thinkingId: ""    // id of the bubble currently receiving thinking deltas
   property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
+  // Request/response correlation. Each entry is { resolve, reject }; pi
+  // echoes the `id` we attach to outgoing commands on the matching
+  // response, which _handleResponse uses to fulfill the promise.
+  property var _inflight: ({})
+  property int _nextReqId: 0
   // Cache of unanswered extension_ui_request ids so we can decline them
   // on shutdown. Confirm bubbles are stored in `messages` for the UI.
   property var _pendingExtensionUI: ({})
@@ -198,6 +203,12 @@ QtObject {
   // against an empty history. Cold sessions get spawn()ed first so the
   // new_session command has a process to land in; the next user
   // message proceeds against that fresh session.
+  //
+  // pi's RPC pump dispatches stdin lines as fire-and-forget async tasks,
+  // so we cannot fire set_model immediately after new_session — they'd
+  // race and set_model would land on the dying session. _request awaits
+  // the new_session response (which pi emits *after* rebindSession), so
+  // the follow-up set_model is guaranteed to land on the fresh session.
   function restart() {
     messages = [];
     replyTarget = null;
@@ -206,7 +217,18 @@ QtObject {
     _streamingId = "";
     _thinkingId = "";
     spawn();
-    _send({ type: "new_session" });
+    _request({ type: "new_session" })
+      .then(() => {
+        if (!modelPref) return;
+        const slash = modelPref.indexOf("/");
+        if (slash <= 0) return;
+        _send({
+          type: "set_model",
+          provider: modelPref.slice(0, slash),
+          modelId: modelPref.slice(slash + 1),
+        });
+      })
+      .catch(e => Logger.w("PiSession", sessionId, "restart aborted", e));
   }
 
   function listModels() {
@@ -289,6 +311,33 @@ QtObject {
       _process.write(JSON.stringify(cmd) + "\n");
     } catch (e) {
       Logger.w("PiSession", sessionId, "write failed", e);
+    }
+  }
+
+  // Send a command and resolve when pi emits the matching response.
+  // We attach a unique `id`; pi echoes it back on the success/error
+  // response, which _handleResponse uses to fulfill this promise.
+  // Rejects immediately when the process is not running.
+  function _request(cmd) {
+    return new Promise((resolve, reject) => {
+      if (!_process || !_process.running) {
+        reject("process not running");
+        return;
+      }
+      _nextReqId += 1;
+      const id = "q" + _nextReqId;
+      _inflight[id] = { resolve: resolve, reject: reject };
+      _send(Object.assign({}, cmd, { id: id }));
+    });
+  }
+
+  // Drain pending requests when the process disappears (graceful stop or
+  // crash). Without this, callers awaiting _request hang forever.
+  function _rejectInflight(reason) {
+    const pending = _inflight;
+    _inflight = ({});
+    for (const id in pending) {
+      try { pending[id].reject(reason); } catch (e) { /* swallow */ }
     }
   }
 
@@ -660,6 +709,16 @@ QtObject {
   }
 
   function _handleResponse(ev) {
+    // Correlated reply from _request → fulfill the promise and stop;
+    // by-command branches below handle responses for fire-and-forget
+    // _send calls that didn't attach an id.
+    if (ev.id && _inflight[ev.id]) {
+      const slot = _inflight[ev.id];
+      delete _inflight[ev.id];
+      if (ev.success) slot.resolve(ev.data);
+      else slot.reject(ev.error || ev.command + " failed");
+      return;
+    }
     if (!ev.success) {
       if (ev.error) lastError = ev.error;
       Logger.w("PiSession", sessionId, "response error", ev.command, ev.error);
@@ -770,6 +829,7 @@ QtObject {
           session.patch(id, { confirmState: "denied" });
         }
         session._pendingExtensionUI = ({});
+        session._rejectInflight("process exited (" + code + ")");
         session._process = null;
         if (code !== 0 && code !== 143 /* SIGTERM */ ) {
           session.lastError = "pi exited (" + code + ")";
