@@ -26,7 +26,13 @@ import time
 def call(quickshell_bin, config, target, fn, *args, timeout=10):
     """Invoke a shell IPC function and return its stdout-stripped text."""
     cmd = [
-        quickshell_bin, "ipc", "-c", config, "call", target, fn,
+        quickshell_bin,
+        "ipc",
+        "-c",
+        config,
+        "call",
+        target,
+        fn,
         *(str(a) for a in args),
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -38,7 +44,9 @@ def call(quickshell_bin, config, target, fn, *args, timeout=10):
     return res.stdout.strip()
 
 
-def poll_reply(quickshell_bin, config, target, session_id, baseline, predicate, timeout=30):
+def poll_reply(
+    quickshell_bin, config, target, session_id, baseline, predicate, timeout=30
+):
     """Poll lastAssistantText until predicate(text) and text != baseline."""
     deadline = time.monotonic() + timeout
     last = baseline
@@ -53,7 +61,9 @@ def poll_reply(quickshell_bin, config, target, session_id, baseline, predicate, 
 
 def main():
     if len(sys.argv) < 4:
-        sys.exit("usage: test-pi-chat.py <quickshell_bin> <shell_config> <target> [mode]")
+        sys.exit(
+            "usage: test-pi-chat.py <quickshell_bin> <shell_config> <target> [mode]"
+        )
     quickshell_bin = sys.argv[1]
     config = sys.argv[2]
     target = sys.argv[3]
@@ -74,7 +84,11 @@ def main():
     baseline = call(quickshell_bin, config, target, "lastAssistantText", session_id)
     call(quickshell_bin, config, target, "send", "Hello bot")
     reply1 = poll_reply(
-        quickshell_bin, config, target, session_id, baseline,
+        quickshell_bin,
+        config,
+        target,
+        session_id,
+        baseline,
         predicate=lambda t: bool(t.strip()),
     )
     print(f"TURN 1 OK: {reply1[:80]!r}")
@@ -83,11 +97,18 @@ def main():
     # reliably says "blue" for the sky question.
     baseline = reply1
     call(
-        quickshell_bin, config, target, "send",
+        quickshell_bin,
+        config,
+        target,
+        "send",
         "What color is the sky? Answer in one word.",
     )
     reply2 = poll_reply(
-        quickshell_bin, config, target, session_id, baseline,
+        quickshell_bin,
+        config,
+        target,
+        session_id,
+        baseline,
         predicate=lambda t: "blue" in t.lower(),
     )
     print(f"TURN 2 OK: {reply2[:80]!r}")

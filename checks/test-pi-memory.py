@@ -49,7 +49,9 @@ def call(quickshell_bin, config, target, fn, *args, timeout=15):
     return res.stdout.strip()
 
 
-def poll_reply(quickshell_bin, config, target, session_id, baseline, predicate, timeout=60):
+def poll_reply(
+    quickshell_bin, config, target, session_id, baseline, predicate, timeout=60
+):
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
