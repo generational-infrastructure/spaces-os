@@ -103,12 +103,12 @@ google-cli auth <profile>
 This:
 
 1. Picks a free loopback port and starts a local HTTP server on it.
-2. **Asks the noctalia plugin to open the consent URL in the user's
+2. **Asks the pi-chat panel to open the consent URL in the user's
    browser.** google-cli runs inside pi's sandbox, so it can't launch
    Firefox directly — it sends the URL over a unix socket and the
-   plugin opens it in the real user session. The URL is also printed
+   panel opens it in the real user session. The URL is also printed
    to stdout, so if the browser open silently fails (no GUI session,
-   plugin not running) you can still surface the link to the user.
+   panel not running) you can still surface the link to the user.
 3. Waits up to 5 minutes for Google's redirect to hit the loopback
    listener, exchanges the authorization code for a refresh token, and
    stores it as `google.<profile>.refresh_token` automatically.

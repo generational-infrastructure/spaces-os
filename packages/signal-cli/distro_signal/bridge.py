@@ -14,7 +14,7 @@ Three concurrent jobs in one process:
    and returns a token the agent must hand back to the human.
 
 3. **Panel listener** — bound to `$XDG_RUNTIME_DIR/distro-signal-panel.sock`
-   and **NOT** bound into the sandbox. The noctalia chat panel reads
+   and **NOT** bound into the sandbox. The pi-chat Quickshell panel reads
    `{op:"list"}` to render pending approval cards and posts
    `{op:"approve"/"deny"}` to dispatch or cancel them. The split-socket
    shape is the security boundary: prompt injection through an

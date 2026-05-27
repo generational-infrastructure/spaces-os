@@ -60,7 +60,7 @@ in
 {
   options.services.distro-signal = {
     enable = lib.mkEnableOption "signal-cli daemon backing the distro AI agent's Signal skill" // {
-      # Default tracks pi-chat: anything pulling noctalia-plugin
+      # Default tracks pi-chat: anything pulling the distro bundle
       # gets the signal infrastructure for free, but the *units*
       # stay condition-gated below so a fresh system pays nothing
       # until the user runs `signal-cli link`. Standalone imports

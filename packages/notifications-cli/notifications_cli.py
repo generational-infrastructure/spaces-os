@@ -1,13 +1,17 @@
-"""Read-only CLI over noctalia's notification history.
+"""Read-only CLI over a desktop notification-history file.
 
 Pi-chat skills shell out to this via the `notifications` entry point.
-The CLI is deliberately tiny: noctalia owns the data, the file is
-already structured, and the LLM doesn't need a programmable API beyond
-"give me the recent entries, maybe filtered".
+The CLI is deliberately tiny: an external writer owns the data, the
+file is already structured, and the LLM doesn't need a programmable
+API beyond "give me the recent entries, maybe filtered".
 
-The default history path mirrors noctalia's: `~/.cache/noctalia/notifications.json`.
-Override with `DISTRO_NOTIFICATIONS_FILE` so pi's sandboxed scope can point at
-a bind-mounted copy without touching code.
+The schema this CLI reads is the one noctalia ships
+(`~/.cache/noctalia/notifications.json`); when noctalia is running
+the CLI auto-picks up its file, otherwise the user wires their own
+writer and points `DISTRO_NOTIFICATIONS_FILE` at the output path.
+Pi's sandboxed scope sets `DISTRO_NOTIFICATIONS_FILE` to a
+bind-mounted copy regardless, so the agent always sees the same data
+the user does.
 """
 
 from __future__ import annotations
@@ -27,12 +31,13 @@ URGENCY_VALUE = {label: value for value, label in URGENCY_LABEL.items()}
 
 def _default_history_path() -> Path:
     # Order of precedence — first hit wins:
-    #   1. DISTRO_NOTIFICATIONS_FILE — pi-chat sandbox export, pinned to the
-    #      bind-mounted path inside the scope.
-    #   2. NOCTALIA_NOTIF_HISTORY_FILE — honors a noctalia-side override so
-    #      desktop users can run the CLI in their normal shell and still hit
-    #      the same file noctalia is writing.
-    #   3. ~/.cache/noctalia/notifications.json — noctalia's hardcoded default.
+    #   1. DISTRO_NOTIFICATIONS_FILE — pi-chat sandbox export, pinned to
+    #      the bind-mounted path inside the scope. Also the right knob for
+    #      a user pointing at a non-noctalia writer.
+    #   2. NOCTALIA_NOTIF_HISTORY_FILE — honored when noctalia is the
+    #      writer and its history was redirected elsewhere.
+    #   3. ~/.cache/noctalia/notifications.json — noctalia's hardcoded
+    #      default; works out of the box when noctalia is running.
     for var in ("DISTRO_NOTIFICATIONS_FILE", "NOCTALIA_NOTIF_HISTORY_FILE"):
         value = os.environ.get(var)
         if value:
@@ -43,10 +48,10 @@ def _default_history_path() -> Path:
 
 @dataclass(frozen=True)
 class Notification:
-    """Minimal projection of noctalia's history schema.
+    """Minimal projection of the noctalia-compatible history schema.
 
     We keep the raw dict alongside the typed view so `--json` output round-trips
-    every field noctalia chose to persist, even ones we don't render in text.
+    every field the writer persisted, even ones we don't render in text.
     """
 
     raw: dict
@@ -150,7 +155,7 @@ def _resolve_urgency(value: str | None) -> int | None:
     label = value.strip().casefold()
     if label in URGENCY_VALUE:
         return URGENCY_VALUE[label]
-    # Tolerate numeric input too — noctalia stores 0/1/2 raw.
+    # Tolerate numeric input too — the schema stores 0/1/2 raw.
     try:
         n = int(label)
     except ValueError:
@@ -168,8 +173,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="notifications",
         description=(
-            "Read-only access to the desktop notification history "
-            "captured by noctalia. The default path can be overridden "
+            "Read-only access to a desktop notification history file in "
+            "the schema noctalia ships. The default path can be overridden "
             "with DISTRO_NOTIFICATIONS_FILE."
         ),
     )

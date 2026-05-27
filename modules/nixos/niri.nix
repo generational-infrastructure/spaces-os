@@ -6,7 +6,7 @@
 #
 # Also writes a deterministic /etc/niri/config.kdl derived from the
 # upstream default with two opinionated edits:
-#   1. drop spawn-at-startup "waybar" (noctalia starts via systemd)
+#   1. drop spawn-at-startup "waybar" (distro hosts pick their own bar)
 #   2. set the modifier key from `services.distro.niri.modKey`
 #      (default "Super"; VM-based test runners flip it to "Alt" so
 #      the guest doesn't fight the host's Super grab — see
@@ -51,14 +51,14 @@ let
         }\
 
     ' $out
-        # Mod+A toggles the pi-chat panel in noctalia.
-        sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "noctalia-shell" "ipc" "call" "plugin:pi-chat" "toggle"; }' $out
+        # Mod+A toggles the standalone pi-chat panel.
+        sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "pi-chat-toggle"; }' $out
         # Mod+S toggles voice-to-text recording.
         sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
-        # Mod+Shift+N restarts the noctalia user service so a freshly
+        # Mod+Shift+N restarts the pi-chat user service so a freshly
         # rebuilt config / patched build lands without a full session
         # logout.
-        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "systemctl" "--user" "restart" "noctalia-shell.service"; }' $out
+        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload pi-chat" { spawn "systemctl" "--user" "restart" "pi-chat.service"; }' $out
         # Mod+L and Ctrl+Alt+L lock the screen with swaylock. Mod+L
         # overrides upstream's focus-column-right (Mod+Right / Mod+L
         # both did that — Mod+Right still works).
@@ -86,7 +86,7 @@ in
   config = {
     programs.niri.enable = true;
 
-    # polkit authentication agent (required by noctalia and swaylock).
+    # polkit authentication agent (required by swaylock).
     security.polkit.enable = true;
 
     # Secret Service backend.

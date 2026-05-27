@@ -71,7 +71,10 @@ in
       in
       {
         listenAddress = "0.0.0.0";
-        port = lib.mkDefault 8012;
+        # Plain assignment (priority 100): beats upstream's option
+        # default of 8080 (priority 1500). Users override with
+        # `lib.mkForce <port>` if they need something other than 8012.
+        port = 8012;
         settings = {
           healthCheckTimeout = 3600;
           logToStdout = "both";

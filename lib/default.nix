@@ -54,7 +54,7 @@
   # supply hostName + host-specific modules; mkSystem injects:
   #   - nixosModules.distro
   #   - specialArgs.inputs = distro flake's own inputs (so distro modules
-  #     can resolve `inputs.noctalia-shell`, …)
+  #     can resolve their dependencies)
   #   - specialArgs.flake  = the distro flake itself
   #   - nixpkgs.hostPlatform
   #   - networking.hostName
@@ -78,38 +78,4 @@
       ]
       ++ modules;
     };
-
-  # Apply distro's plugins-autoload patch to an arbitrary noctalia-shell
-  # derivation. Consumers who already pin their own `noctalia-shell` input
-  # (e.g. via home-manager) can wrap it without taking distro's
-  # `nixosModules.noctalia` module wholesale:
-  #
-  #   noctalia-shell = inputs.distro.lib.patchNoctaliaShell
-  #     inputs.noctalia.packages.${system}.default;
-  patchNoctaliaShell =
-    pkg:
-    let
-      inherit (inputs.nixpkgs) lib;
-    in
-    # Idempotent: callers may layer the patch via both
-    # `nixpkgs.overlays = [ distro.overlays.noctalia ]` (system-wide) and
-    # via `pkgs.extend flake.overlays.noctalia` inside distro's
-    # noctalia.nix module (per-module shadowing). Without this guard the
-    # patch ends up in `patches` twice and patchPhase aborts with
-    # "Reversed (or previously applied) patch detected".
-    if pkg.passthru.patchedByDistro or false then
-      pkg
-    else
-      (pkg.overrideAttrs (old: {
-        patches = (old.patches or [ ]) ++ [
-          (lib.cleanSource ../patches/noctalia-shell-plugin-autoload.patch)
-        ];
-        postPatch = (old.postPatch or "") + ''
-          cp ${lib.cleanSource ../patches/PluginAutoload.qml} \
-             Services/Noctalia/PluginAutoload.qml
-        '';
-        passthru = (old.passthru or { }) // {
-          patchedByDistro = true;
-        };
-      }));
 }

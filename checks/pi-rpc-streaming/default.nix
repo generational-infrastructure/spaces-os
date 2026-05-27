@@ -3,7 +3,7 @@
 # Asserts that text_delta events arrive at the RPC client in real time
 # (not buffered into a single message_end). Used as a smoke test for
 # the streaming-decoder seam between pi and any RPC consumer — the
-# noctalia plugin, our own driver here, anything that reads pi's
+# pi-chat panel, our own driver here, anything that reads pi's
 # stdout JSONL.
 #
 # No VM. Pi runs as a normal sandbox process.

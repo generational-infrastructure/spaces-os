@@ -17,21 +17,21 @@ Two flavours of test live in `checks/`:
 - **Cheap focused tests** (`checks/pi-session-*`, `checks/pi-rpc-*`,
   …): headless quickshell against a small `shell.qml`. ~3–10s.
 - **The full-system VM test** (`checks/test-machine.nix`): boots
-  greetd → niri → noctalia → pi-chat. ~60–120s plus QEMU overhead.
+  greetd → niri → pi-chat panel. ~60–120s plus QEMU overhead.
 
 You **SHOULD** add per-feature behaviour coverage as a cheap focused
 test. Look at the existing siblings for the pattern — blueprint
 auto-discovers anything under `checks/`.
 
 You **MUST NOT** bolt new subtests onto `checks/test-machine.nix`
-just because it already runs the plugin. The VM test is for
+just because it already runs the chat shell. The VM test is for
 cross-subsystem wiring; extend it only when the behaviour genuinely
 depends on the full boot path.
 
 ## Translations
 
 The chat panel's user-visible strings live in
-`programs/pi-chat-plugin/i18n/<lang>.json`. `en.json` is the source
+`programs/pi-chat/i18n/<lang>.json`. `en.json` is the source
 of truth; every other locale must carry the same keys.
 
 When you add or rename a panel string you **MUST** update every

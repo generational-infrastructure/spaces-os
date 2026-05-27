@@ -10,7 +10,7 @@
 #      (the mock LLM echoes the tool result back to prove pi actually
 #      ran the CLI and not a stub).
 #
-# No VM. The full noctalia ⇄ pi wiring still rides the system test
+# No VM. The full notification-history writer ⇄ pi wiring still rides
 # (checks/test-machine.nix) — this check covers the skill + sandbox
 # bind/env story in isolation, in ~seconds.
 { pkgs, inputs, ... }:

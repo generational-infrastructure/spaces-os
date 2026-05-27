@@ -5,7 +5,7 @@ Run as a stand-alone unittest module (no pytest dep in the closure):
 
 Behaviour under test:
   * `list` defaults to human-readable text, newest first, with ISO-8601 UTC
-    timestamps (the noctalia file stores ms-since-epoch).
+    timestamps (the underlying file stores ms-since-epoch).
   * `--limit`, `--app`, `--since`, `--urgency` filter the same way they read.
   * `--json` emits raw entries unchanged (apart from the filters above).
   * `get <id>` echoes one full entry.

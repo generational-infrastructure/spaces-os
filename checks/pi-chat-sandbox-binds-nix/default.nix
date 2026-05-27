@@ -33,7 +33,7 @@ let
       flake = inputs.self;
     };
     modules = [
-      inputs.self.nixosModules.noctalia-bar
+      inputs.self.nixosModules.distro
       {
         nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "sandbox-binds-fixture";
@@ -121,7 +121,7 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
           flake = inputs.self;
         };
         modules = [
-          inputs.self.nixosModules.noctalia-bar
+          inputs.self.nixosModules.distro
           {
             nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
             networking.hostName = "sandbox-binds-default";

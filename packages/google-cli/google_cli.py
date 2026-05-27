@@ -270,8 +270,8 @@ def _open_url(url: str) -> None:
     pi-chat runs each agent under a systemd-run sandbox (ProtectHome=
     tmpfs + private namespaces), so a direct `webbrowser.open` spawns
     Firefox/Chromium inside the sandbox where it cannot see the real
-    user profile (Firefox: "Profile Missing"). The noctalia pi-chat
-    plugin runs in the user's session and listens on a unix socket
+    user profile (Firefox: "Profile Missing"). The pi-chat Quickshell
+    panel runs in the user's session and listens on a unix socket
     bind-mounted into the sandbox at $DISTRO_OPEN_URL_SOCKET; writing a
     single JSON line there delegates the open to the real session via
     `Qt.openUrlExternally`.

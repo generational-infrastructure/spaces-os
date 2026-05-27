@@ -10,7 +10,7 @@
 #      sandbox.
 #   3. Enabling distro-signal without pi-chat trips the module's own
 #      assertion (the integration is meaningless without the agent).
-#   4. Default-on follows pi-chat: an unconfigured noctalia-bar host
+#   4. Default-on follows pi-chat: an unconfigured distro host
 #      (which auto-enables pi-chat) ships the signal-cli infra by
 #      default; an explicit `services.distro-signal.enable = false`
 #      strips it back out.
@@ -25,10 +25,10 @@
 let
   inherit (inputs.nixpkgs) lib;
   baseModules = [
-    # noctalia-bar -> noctalia-plugin imports the signal-cli module
+    # distro -> pi-chat imports the signal-cli module
     # transitively, so the eval here exercises the same import
     # graph distro users get.
-    inputs.self.nixosModules.noctalia-bar
+    inputs.self.nixosModules.distro
     {
       nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
       fileSystems."/" = {
@@ -40,7 +40,7 @@ let
     }
   ];
 
-  # Default deployment shape: noctalia-bar (which auto-enables
+  # Default deployment shape: distro module (which auto-enables
   # pi-chat) plus an explicit `enable = true` on distro-signal. The
   # explicit set is redundant with the new pi-chat-tracking default
   # but keeps the intent obvious next to the assertions below.
@@ -73,7 +73,7 @@ let
     ];
   };
 
-  # No noctalia-bar / pi-chat in the import chain — distro-signal
+  # No distro / pi-chat in the import chain — distro-signal
   # alone should trip its own assertion.
   brokenSystem = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {

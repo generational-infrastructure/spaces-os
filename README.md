@@ -1,21 +1,33 @@
 # distro
 
 AI agent desktop integration for NixOS. Chat with a local AI agent
-directly from your desktop bar.
+from a layer-shell panel summoned by a global keybind, with full
+sandboxing and an extensible skill system.
 
-The stack: [niri](https://github.com/YaLTeR/niri) (Wayland compositor) +
-[noctalia](https://github.com/noctalia-dev/noctalia-shell) (desktop shell) +
+The stack: [niri](https://github.com/YaLTeR/niri) (Wayland compositor,
+optional) + [Quickshell](https://quickshell.org) (panel surface) +
 [pi](https://github.com/mariozechner/pi-mono) (coding agent) +
-[llama-swap](https://github.com/mostlygeek/llama-swap) (local LLM server) +
-voice-to-text.
+[llama-swap](https://github.com/mostlygeek/llama-swap) (local LLM
+server) + voice-to-text.
 
-## Three ways to use it
+## Supported compositors
+
+The chat panel uses [`wlr-layer-shell`](https://wayland.app/protocols/wlr-layer-shell-unstable-v1)
+so the surface is anchored to the screen edge and **does not appear in
+alt-tab**. That rules out GNOME (Mutter has no `wlr-layer-shell`).
+Tested compositors: **niri, sway, Hyprland, river, KDE Plasma 6
+(Wayland)**.
+
+The panel coexists with any Wayland desktop shell — including noctalia
+if you happen to run one — because it ships as its own `quickshell -c
+pi-chat` instance with its own IPC namespace.
+
+## Two ways to use it
 
 | Integration | What you get | You provide |
 |---|---|---|
-| **Full desktop** | Niri compositor, noctalia bar with chat widget, AI agent, local LLM | A NixOS machine |
-| **Noctalia bar** | Noctalia bar with chat widget + agent backend + voice-to-text | Your own compositor (GNOME, Sway, Hyprland, …) |
-| **Noctalia plugin** | Chat widget + agent backend (enabled by default) | An existing noctalia install |
+| **Full desktop** | Niri compositor + pi-chat panel + AI agent + local LLM | A NixOS machine |
+| **Panel only** | pi-chat panel + AI agent + local LLM | Your own Wayland compositor (sway/Hyprland/KDE/…) |
 
 ## Binary Cache
 
@@ -24,14 +36,12 @@ avoid building dependencies from source.
 
 ## Setup
 
-All three integration levels consume this flake as a NixOS module.
-
 ### 1. Full desktop
 
-Import `nixosModules.distro` for the complete experience: niri compositor,
-noctalia shell bar with chat widget, pi-chat agent, and local LLM server.
-The module enables the AI agent, chat widget, and greetd auto-login into niri
-by default.
+Import `nixosModules.distro` for the complete experience: niri
+compositor, pi-chat Quickshell panel, AI agent, local LLM server. The
+module enables the AI agent and greetd auto-login into niri by
+default.
 
 ```nix
 # flake.nix
@@ -58,10 +68,10 @@ by default.
 This gives you:
 - **Mod+T** — terminal (alacritty)
 - **Mod+D** — app launcher (fuzzel)
-- **Mod+A** — toggle the chat panel
+- **Mod+A** — toggle the pi-chat panel
 - **Mod+S** — toggle voice-to-text recording
 - **Mod+L** / **Ctrl+Alt+L** — lock the screen (swaylock)
-- Noctalia bar with system tray, workspaces, and chat widget
+- **Mod+Shift+N** — restart the pi-chat panel (live-reload after rebuild)
 
 See [docs/keybindings.md](docs/keybindings.md) for the full list of
 keyboard shortcuts (distro additions plus the inherited niri defaults).
@@ -72,25 +82,25 @@ The full desktop module includes voice-to-text out of the box. Press
 **Mod+S** to start recording and **Mod+S** again to stop. Speech is
 transcribed locally and typed into the focused window.
 
-### 2. Noctalia bar (any compositor)
+### 2. Panel only (any layer-shell Wayland compositor)
 
-Already using GNOME, Sway, Hyprland, or another Wayland compositor? Import
-`nixosModules.noctalia-bar` to get the noctalia bar with the AI chat widget.
-You keep your compositor.  The module enables the AI agent and chat widget by
-default.
+Already using sway, Hyprland, KDE Plasma 6, or another
+`wlr-layer-shell`-capable Wayland compositor? Import
+`nixosModules.pi-chat` to get just the panel + AI agent + local LLM.
+You keep your compositor.
 
 ```nix
 # flake.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    distro.url = "github:numtide/distro";
+    distro.url = "github:generational-infrastructure/distro";
   };
 
   outputs = { nixpkgs, distro, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
-        distro.nixosModules.noctalia-bar
+        distro.nixosModules.pi-chat
         ./configuration.nix
       ];
     };
@@ -98,73 +108,38 @@ default.
 }
 ```
 
-After enabling the NixOS module, open noctalia's **Settings → Plugins** and
-enable the **AI Chat** plugin.
+The panel runs as a user systemd service (`pi-chat.service`); it
+starts at login alongside `graphical-session.target` and stays
+running, hidden by default. Summon it with the bundled
+`pi-chat-toggle` CLI:
 
-The chat panel and voice-to-text rely on compositor-level keybinds.
-`nixosModules.distro` wires `Mod+A` and `Mod+S` into niri for you;
-with any other compositor you set them up yourself. Bind whatever keys
-you like to these commands:
-
-- chat panel: `noctalia-shell ipc call plugin:pi-chat toggle`
-- voice-to-text: `voxtype record toggle`
-
-#### Voice-to-text
-
-Voice-to-text is bundled with the noctalia-bar module — `voxtype`
-runs as a user service alongside noctalia. Trigger it from the
-chat panel's microphone button, from a `voxtype record toggle`
-keybind you wire in your compositor, or via the Mod+S binding that
-`nixosModules.distro` adds under niri.
-
-Then add `noctalia-shell` to your compositor's autostart:
-
-**Sway**
 ```
-# ~/.config/sway/config
-exec noctalia-shell
+pi-chat-toggle           # toggle visibility
+pi-chat-toggle show      # force show
+pi-chat-toggle hide      # force hide
 ```
 
-**Hyprland**
+Wire `pi-chat-toggle` to whatever compositor keybind you like. Under
+the hood it calls
+`quickshell ipc -c pi-chat call pi-chat toggle`, so you can also use
+that directly if you prefer.
+
+Examples:
+
+**sway** (`~/.config/sway/config`)
 ```
-# ~/.config/hypr/hyprland.conf
-exec-once = noctalia-shell
+bindsym $mod+a exec pi-chat-toggle
 ```
 
-### 3. Plugin only (existing noctalia)
-
-Already running noctalia? Import `nixosModules.noctalia-plugin` to add just the
-chat widget and agent backend.  The module enables the AI agent and chat widget
-by default.
-
-```nix
-# flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    distro.url = "github:numtide/distro";
-  };
-
-  outputs = { nixpkgs, distro, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      modules = [
-        distro.nixosModules.noctalia-plugin
-        ./configuration.nix
-      ];
-    };
-  };
-}
+**Hyprland** (`~/.config/hypr/hyprland.conf`)
 ```
-As with integration 2, `Mod+A` / `Mod+S` are only bound automatically
-under `nixosModules.distro`. On any other compositor, bind your own keys
-to `noctalia-shell ipc call plugin:pi-chat toggle` (and
-`voxtype record toggle` if you also imported `nixosModules.voxtype`).
-
-Apply `overlays.noctalia` so distro can auto-enable its plugins:
-
-```nix
-{ nixpkgs.overlays = [ inputs.distro.overlays.noctalia ]; }
+bind = SUPER, A, exec, pi-chat-toggle
 ```
+
+**KDE Plasma 6**: System Settings → Shortcuts → Custom Shortcuts → add
+a command shortcut bound to `pi-chat-toggle`.
+
+If you also want voice-to-text, bind `voxtype record toggle` similarly.
 
 ## Hacking
 

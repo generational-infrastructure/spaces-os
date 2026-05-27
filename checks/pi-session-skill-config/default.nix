@@ -25,7 +25,7 @@ pkgs.runCommand "pi-session-skill-config-test"
       skillConfigDaemon
       skillConfig
     ];
-    pluginDir = ../../programs/pi-chat-plugin;
+    pluginDir = ../../programs/pi-chat;
   }
   ''
     set -euo pipefail

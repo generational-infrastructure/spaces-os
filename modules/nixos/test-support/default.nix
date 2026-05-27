@@ -71,41 +71,8 @@
     };
   };
 
-  # ── Skip noctalia setup wizard + telemetry wizard ───────────────
-  # noctalia gates the user experience behind two first-launch popups
-  # that cover the screen and can't be dismissed via keyboard, blocking
-  # OCR of the wallpaper:
-  #   1. Setup wizard: shown when settings.json is missing
-  #      (Settings.isFreshInstall = true).  Pre-seed settings.json so
-  #      noctalia treats this as a returning user.
-  #   2. "Privacy Update" telemetry wizard: shown when shell-state.json's
-  #      changelogLastSeenVersion < telemetryIntroVersion (v4.0.2).
-  #      Pre-seed shell-state.json with a far-future version.
-  #
-  # Also disable noctalia's own wallpaper management.  Its Background.qml
-  # renders a layer-shell surface that covers swaybg even when no wallpaper
-  # image is configured (Background draws a fallback owl logo on a black
-  # surface).  swaybg's DISTRO_TEST_OK tile pattern is what we OCR; it must
-  # be the visible bottom layer.
-  systemd.user.tmpfiles.rules = [
-    "C %h/.config/noctalia/settings.json - - - - ${
-      pkgs.writeText "noctalia-settings.json" (
-        builtins.toJSON {
-          settingsVersion = 0;
-          wallpaper = {
-            enabled = false;
-          };
-        }
-      )
-    }"
-    "C %h/.cache/noctalia/shell-state.json - - - - ${
-      pkgs.writeText "noctalia-shell-state.json" (
-        builtins.toJSON {
-          changelogState = {
-            lastSeenVersion = "v99.99.99";
-          };
-        }
-      )
-    }"
-  ];
+  # noctalia is no longer bundled with distro. If a downstream test
+  # opts into noctalia separately and runs into its first-launch
+  # wizards blocking OCR, restore the settings.json + shell-state.json
+  # pre-seeds here (see git history pre-cutover for the exact JSON).
 }

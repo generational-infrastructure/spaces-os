@@ -16,7 +16,7 @@ pkgs.runCommand "pi-session-thinking-test"
       pkgs.qt6.qtbase
       pkgs.qt6.qtdeclarative
     ];
-    pluginDir = ../../programs/pi-chat-plugin;
+    pluginDir = ../../programs/pi-chat;
   }
   ''
     set -euo pipefail

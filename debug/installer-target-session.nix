@@ -5,7 +5,7 @@
 # extraGroups = [ wheel networkmanager ], greetd autologin via
 # distro module's default_session, no DE imports beyond the distro
 # module) and verifies the full user-session path:
-#   greetd → niri → wayland socket → noctalia spawn → pi-chat plugin
+#   greetd → niri → wayland socket → pi-chat.service
 #   → compositor actually paints frames (OCR of test wallpaper).
 #
 # Closes the gap left by `installer-loadmodule`: that test stubs
@@ -17,10 +17,6 @@
 pkgs.testers.runNixOSTest {
   name = "installer-target-session";
   node.specialArgs = { inherit inputs; };
-  # Required because `nixosModules.noctalia` registers an overlay via
-  # `nixpkgs.overlays`; runNixOSTest's default (pkgsReadOnly=true)
-  # would make that assignment fail.
-  node.pkgsReadOnly = false;
   enableOCR = true;
 
   nodes.target =
@@ -69,9 +65,9 @@ pkgs.testers.runNixOSTest {
       with subtest("niri exposes its Wayland socket"):
           target.wait_for_file("/run/user/${uid}/wayland-1", timeout=30)
 
-      with subtest("noctalia-shell is running"):
+      with subtest("pi-chat.service is running"):
           target.wait_until_succeeds(
-              "systemctl --user --machine=installed@.host is-active noctalia-shell.service",
+              "systemctl --user --machine=installed@.host is-active pi-chat.service",
               timeout=30,
           )
           target.wait_until_succeeds(
@@ -79,15 +75,13 @@ pkgs.testers.runNixOSTest {
               timeout=30,
           )
 
-      with subtest("pi-chat plugin is autoloaded into noctalia"):
-          # systemd.user.tmpfiles rules fire at user-manager start; their
-          # output must land for noctalia to pick the plugin up.
+      with subtest("pi-chat shell config is materialized"):
+          # distro-pi-chat-sync.service copies the shell from /nix/store
+          # into ~/.config/quickshell/pi-chat with fresh mtimes (Qt
+          # qmlcache invalidation). Assert the materialized copy exists
+          # and has the entry point.
           target.wait_until_succeeds(
-              "test -L /home/installed/.config/noctalia/plugins/pi-chat",
-              timeout=30,
-          )
-          target.wait_until_succeeds(
-              "test -L /home/installed/.config/noctalia/plugins-autoload/pi-chat",
+              "test -f /home/installed/.config/quickshell/pi-chat/shell.qml",
               timeout=30,
           )
 

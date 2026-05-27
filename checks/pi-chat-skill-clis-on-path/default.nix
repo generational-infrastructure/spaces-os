@@ -10,8 +10,9 @@
 #      terminal — debug a skill, script around it, use it without the
 #      chat panel.
 #
-# This check evaluates a default distro host (noctalia-bar import
-# chain), walks every enabled built-in skill's SKILL.md, extracts the
+# This check evaluates a default distro host (which imports pi-chat
+# + signal-cli via the bundle), walks every enabled built-in skill's
+# SKILL.md, extracts the
 # CLI binary names mentioned in fenced bash blocks, and asserts each
 # one is provided by `environment.systemPackages`.
 #
@@ -20,15 +21,15 @@
 let
   inherit (inputs.nixpkgs) lib;
 
-  # Default distro shape: noctalia-bar auto-enables pi-chat and (via
-  # noctalia-plugin) signal-cli. Both default-on; nothing extra to set.
+  # Default distro shape: the bundle auto-enables pi-chat and (via
+  # pi-chat's own dep) signal-cli. Both default-on; nothing extra to set.
   system = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
       inherit inputs;
       flake = inputs.self;
     };
     modules = [
-      inputs.self.nixosModules.noctalia-bar
+      inputs.self.nixosModules.distro
       {
         nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "skill-clis-fixture";

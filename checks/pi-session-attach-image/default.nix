@@ -23,7 +23,7 @@ pkgs.runCommand "pi-session-attach-image-test"
       pkgs.qt6.qtdeclarative
     ];
     extDir = ../../modules/nixos/pi-chat/extensions;
-    pluginDir = ../../programs/pi-chat-plugin;
+    pluginDir = ../../programs/pi-chat;
   }
   ''
     set -euo pipefail

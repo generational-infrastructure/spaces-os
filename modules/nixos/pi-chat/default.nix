@@ -1,24 +1,31 @@
 # Pi-chat NixOS module.
 #
-# Drives the noctalia chat plugin against pi --mode rpc directly.
-# One pi process per chat session is spawned by the plugin under a
-# per-session systemd-run --user transient service, so several
-# conversations can stream in parallel and each one lives in its own
+# Standalone Quickshell chat panel for the distro AI agent
+# (pi --mode rpc). Each chat session spawns its own pi process under
+# a per-session systemd-run --user transient service, so multiple
+# conversations stream in parallel and each lives in its own
 # filesystem sandbox (ProtectHome=tmpfs + selective binds).
 #
+# The panel is a wlr-layer-shell surface anchored to the right edge,
+# hidden by default, summoned via
+#   quickshell ipc -c pi-chat call pi-chat toggle
+# (wire to a compositor keybind for a global summon hotkey). Layer-
+# shell means the panel never appears in alt-tab — that's the design
+# point that ruled GNOME (no wlr-layer-shell) out of v1 scope.
+#
 # Files this module owns:
+#   ~/.config/quickshell/pi-chat/              (materialized shell config, fresh mtimes for Qt qmlcache)
 #   ~/.local/state/distro/pi/pi-agent/         (pi config dir, settings.json + auth.json + models.json)
 #   ~/.local/state/distro/pi/sessions/         (one subdir per chat — pi --session-dir target)
-#   ~/.local/share/distro/workspaces/          (default per-chat cwd, picked by the plugin)
+#   ~/.local/share/distro/workspaces/          (default per-chat cwd, picked by the shell)
 #   /run/distro-secrets/openrouter-api-key     (when openrouter.enable = true; user-readable)
 #
 # User systemd units:
+#   distro-pi-chat-sync.service                (materialize shell config with fresh mtimes)
+#   pi-chat.service                            (runs `quickshell -c pi-chat`)
 #   distro-skill-config-daemon.service         (skill-config IPC, $XDG_RUNTIME_DIR/distro-skill-config.sock)
-#   distro-notify-forward.service              (D-Bus notifications -> noctalia plugin IPC)
+#   distro-notify-forward.service              (D-Bus notifications -> pi-chat shell IPC)
 #   distro-location-update.service + timer     (geoclue -> $XDG_RUNTIME_DIR/distro/location.json)
-#
-# The plugin itself is enabled via services.pi-chat.noctaliaPlugin
-# (on by default). The module is otherwise self-contained.
 { inputs, ... }:
 {
   config,
@@ -49,8 +56,8 @@ let
   # bundled extension.
   memoryExtensionPkg = pkgs.callPackage ./extensions/memory { sediment = sedimentPkg; };
 
-  pluginDir = ../../../programs/pi-chat-plugin;
-  pluginId = "pi-chat";
+  shellDir = ../../../programs/pi-chat;
+  shellName = "pi-chat";
 
   # State paths use systemd tmpfiles' %h/%t substitutions when written
   # via systemd.user.tmpfiles. For module-internal use we keep the
@@ -62,9 +69,12 @@ let
   sessionsIndexRel = "${stateRel}/sessions.json";
   skillsDefsRel = "${stateRel}/skills-defs";
   skillConfigStoreRel = "${stateRel}/skill-config";
-  # noctalia's notification history file, redirected here so the pi sandbox
-  # can bind-mount the dedicated directory without exposing the rest of
-  # noctalia's cache. See systemd.user.services.noctalia-shell below.
+  # Notification history landing zone for the notifications skill.
+  # The pi sandbox bind-mounts this dir read-only. When noctalia is
+  # also running on the system, its `NOCTALIA_NOTIF_HISTORY_FILE`
+  # environment can be pointed here for continuity — but the pi-chat
+  # module no longer manages that redirect; operators wanting it set
+  # systemd.user.services.noctalia-shell.environment themselves.
   notificationsRel = "${stateRel}/notifications";
   notificationsFileRel = "${notificationsRel}/history.json";
   # Long-term memory store (sediment). The vector DB is shared across
@@ -154,9 +164,12 @@ let
     };
   };
 
-  # D-Bus notification forwarder. Posts incoming notifications into the
-  # active chat session via noctalia's plugin IPC. The plugin's `send`
-  # verb already exists and is unchanged.
+  # D-Bus notification forwarder. Posts incoming notifications into
+  # the active chat session via the standalone shell's IPC. The
+  # `send` verb on the `pi-chat` IPC target is unchanged across the
+  # plugin → standalone cutover; only the way we reach it differs:
+  # noctalia plugin used `noctalia-shell ipc call plugin:pi-chat send`,
+  # standalone uses `quickshell ipc -c pi-chat call pi-chat send`.
   notifScript = pkgs.writeShellScript "distro-notify-forward" ''
     set -u
     export PATH="${
@@ -164,10 +177,9 @@ let
         pkgs.dbus
         pkgs.coreutils
         pkgs.gnused
+        pkgs.quickshell
       ]
     }:$PATH"
-
-    NOCTALIA="${cfg.noctaliaShellBin}"
 
     # Colon-separated list of app names to ignore (case-insensitive).
     IGNORED="${lib.concatStringsSep ":" (map lib.toLower cfg.notificationForwarding.ignoredApps)}"
@@ -181,7 +193,11 @@ let
       return 1
     }
 
-    dbus-monitor --session "interface='org.freedesktop.Notifications',member='Notify'" |
+    # `stdbuf -oL` forces line buffering on dbus-monitor's stdout;
+    # otherwise it switches to block buffering when piped and the
+    # `while read` loop only fires after several KB of accumulated
+    # output — i.e. never, under normal notification volume.
+    stdbuf -oL dbus-monitor --session "interface='org.freedesktop.Notifications',member='Notify'" |
     while IFS= read -r line; do
       case "$line" in
         *member=Notify*) n=0; app=""; summary=""; body="" ;;
@@ -196,7 +212,7 @@ let
                if ! is_ignored "$app"; then
                  text="[Notification] ''${app}: ''${summary}"
                  [ -n "$body" ] && text="''${text} — ''${body}"
-                 "$NOCTALIA" ipc call plugin:${pluginId} send "$text" || true
+                 quickshell ipc -c ${shellName} call ${shellName} send "$text" || true
                fi
                ;;
           esac
@@ -249,8 +265,18 @@ let
   '';
 in
 {
+  # pi-chat needs a local LLM endpoint; our llama-swap wrapper
+  # configures the upstream `services.llama-swap` with port 8012
+  # (matching this module's default `llmUrl`), a vetted model set,
+  # GPU-accelerated llama-cpp, and the suspend/resume hooks. Users
+  # who want a different endpoint set `services.llama-swap.enable
+  # = false` and `services.pi-chat.llmUrl = "…"` to point elsewhere.
+  imports = [
+    ../llama-swap.nix
+  ];
+
   options.services.pi-chat = {
-    enable = lib.mkEnableOption "pi-chat: noctalia chat plugin driving pi --mode rpc directly";
+    enable = lib.mkEnableOption "pi-chat: standalone Quickshell chat panel for the distro AI agent (pi --mode rpc)";
 
     llmUrl = lib.mkOption {
       type = lib.types.str;
@@ -288,15 +314,6 @@ in
       description = "The pi coding agent package.";
     };
 
-    noctaliaShellBin = lib.mkOption {
-      type = lib.types.str;
-      default = "noctalia-shell";
-      description = ''
-        Binary name (or absolute path) used by the notification
-        forwarder to invoke noctalia IPC. Override only when running
-        a custom build outside the user's PATH.
-      '';
-    };
 
     skills = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
@@ -484,13 +501,6 @@ in
         '';
       };
     };
-
-    noctaliaPlugin = lib.mkEnableOption "symlink the noctalia chat plugin into user config dirs" // {
-      description = ''
-        When enabled, this module owns the
-        `~/.config/noctalia/plugins/${pluginId}` symlink.
-      '';
-    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -498,34 +508,6 @@ in
       {
         assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
         message = "services.pi-chat.openrouter.apiKeyFile must be set when openrouter.enable = true.";
-      }
-      {
-        # The notifications skill relies on the env-var redirect below to
-        # land noctalia's history file at a path the pi sandbox can bind-
-        # mount. That redirect only reaches noctalia when the systemd user
-        # manager launches it — niri spawn-at-startup, lassulus/wrappers
-        # without env propagation, or any other out-of-band launcher
-        # bypasses Environment= entirely and the skill stays empty.
-        assertion =
-          let
-            svc = config.systemd.user.services.noctalia-shell or { };
-            execStart = svc.serviceConfig.ExecStart or null;
-          in
-          execStart != null && execStart != "";
-        message = ''
-          services.pi-chat.enable = true redirects noctalia's notification
-          history via systemd.user.services.noctalia-shell.environment, but
-          no ExecStart is defined for that unit on this host. Noctalia must
-          therefore be launched by something other than the systemd user
-          manager (e.g. niri's spawn-at-startup), and the redirect never
-          reaches the running process — pi-chat's notifications skill will
-          always report an empty history.
-
-          Fix: import inputs.distro.nixosModules.noctalia (or the bundle
-          nixosModules.distro / nixosModules.noctalia-bar that pulls it in)
-          so systemd owns the launch, and remove any spawn-at-startup /
-          autostart hook that races it.
-        '';
       }
     ];
 
@@ -553,6 +535,21 @@ in
       osmCliPkg
       caldavCliPkg
       sedimentPkg
+      # Quickshell ships the `quickshell` binary used by the user
+      # service AND the `quickshell ipc` CLI used by the toggle
+      # helper, the notification forwarder, and the test harnesses.
+      pkgs.quickshell
+      # `notify-send` so users + the agent can post desktop
+      # notifications. distro-notify-forward then bridges those
+      # straight back into the chat panel via the IPC `send` verb.
+      pkgs.libnotify
+      # Convenience wrapper for compositor keybinds:
+      #     bind = Super+Space, pi-chat-toggle
+      # All it does is invoke the IPC; kept in /run/current-system/sw
+      # so it's discoverable on PATH.
+      (pkgs.writeShellScriptBin "pi-chat-toggle" ''
+        exec ${pkgs.quickshell}/bin/quickshell ipc -c ${shellName} call ${shellName} "''${1:-toggle}"
+      '')
     ];
 
     environment.sessionVariables = {
@@ -586,10 +583,13 @@ in
       # Symlink each skill so request-input can validate fields before
       # contacting the daemon.
       "d %h/${skillsDefsRel} 0755 - - -"
-      # noctalia is redirected to write its history file under this dir
-      # (see systemd.user.services.noctalia-shell.environment below) so the
-      # pi sandbox can bind-mount just this dir read-only without exposing
-      # the rest of ~/.cache/noctalia.
+      # The notification helper script forwards desktop notifications
+      # into the chat panel. Notifications never enter the pi sandbox
+      # via this dir — the helper just calls `quickshell ipc … send`.
+      # Kept as a tmpfile because the notifications skill still reads
+      # `$NOCTALIA_NOTIF_HISTORY_FILE` when present (for ops that opt
+      # back into noctalia and want continuity); the directory must
+      # exist so the redirect doesn't ENOENT.
       "d %h/${notificationsRel} 0755 - - -"
     ]
     ++ lib.mapAttrsToList (name: path: "L+ %h/${skillsDefsRel}/${name} - - - - ${path}") allSkills
@@ -604,51 +604,65 @@ in
       # path baked into the sediment package, not a writable dir.
       "d %h/${memoryDbRel} 0750 - - -"
     ]
-    ++ lib.optionals cfg.noctaliaPlugin [
-      "d %h/.config/noctalia 0755 - - -"
-      "d %h/.config/noctalia/plugins 0755 - - -"
-      "d %h/.config/noctalia/plugins-autoload 0755 - - -"
+    ++ [
+      "d %h/.config 0755 - - -"
+      "d %h/.config/quickshell 0755 - - -"
     ];
 
     # ── User services ────────────────────────────────────────────────
 
-    # Materialize the chat plugin into ~/.config/noctalia/plugins with
-    # CURRENT mtimes. Symlinking the plugin dir from /nix/store would
-    # be simpler, but Qt's qmlcache keys compiled bytecode by
+    # Materialize the chat shell into ~/.config/quickshell/pi-chat/
+    # with CURRENT mtimes. Symlinking the source tree from /nix/store
+    # would be simpler, but Qt's qmlcache keys compiled bytecode by
     # (absolute path, source mtime). Every file under /nix/store has
     # mtime = 1970-01-01, so on each rebuild Qt thinks its cached
-    # bytecode is still fresh and silently keeps the OLD plugin
-    # (missing newly-added IpcHandler functions, etc.). Copying with
-    # fresh mtimes invalidates the cache on every rebuild.
-    systemd.user.services.distro-pi-chat-plugin-sync = lib.mkIf cfg.noctaliaPlugin {
-      description = "Materialize pi-chat plugin with fresh mtimes (Qt qmlcache invalidation)";
+    # bytecode is still fresh and silently keeps the OLD QML (missing
+    # newly-added IpcHandler functions, etc.). Copying with fresh
+    # mtimes invalidates the cache on every rebuild.
+    systemd.user.services.distro-pi-chat-sync = {
+      description = "Materialize pi-chat shell with fresh mtimes (Qt qmlcache invalidation)";
       wantedBy = [ "default.target" ];
-      # Run before any UI starts so noctalia spawn picks up the
-      # refreshed plugin on its first load.
-      before = [ "graphical-session-pre.target" ];
+      # Must finish before pi-chat.service spawns quickshell — it
+      # would otherwise race against the cp -rT and load a half-
+      # materialised config dir.
+      before = [ "graphical-session-pre.target" "pi-chat.service" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
       };
       script = ''
         set -eu
-        src=${pluginDir}
-        dst="$HOME/.config/noctalia/plugins/${pluginId}"
-        autoload_dir="$HOME/.config/noctalia/plugins-autoload"
-        mkdir -p "$(dirname "$dst")" "$autoload_dir"
+        src=${shellDir}
+        dst="$HOME/.config/quickshell/${shellName}"
+        mkdir -p "$(dirname "$dst")"
         rm -rf "$dst"
         # cp without -p leaves mtimes at the current time.
         cp -rT "$src" "$dst"
         chmod -R u+w "$dst"
-        # Distro owns plugins-autoload/ exclusively: blow away every
-        # entry on each run so symlinks written by a previous distro
-        # generation (renamed plugin ids, dropped plugins, ...) don't
-        # linger and keep ghost entries alive in plugins.json. The
-        # immediately-following ln -sfn re-materializes whatever we
-        # currently ship.
-        find "$autoload_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-        ln -sfn "$dst" "$autoload_dir/${pluginId}"
       '';
+    };
+
+    # The standalone chat panel itself. Layer-shell surface anchored
+    # to the right edge, hidden by default, summoned via
+    #   quickshell ipc -c ${shellName} call ${shellName} toggle
+    # (wire a compositor keybind for global summon). Long-running
+    # service — the IpcHandler only answers while quickshell is up.
+    systemd.user.services.pi-chat = {
+      description = "pi-chat Quickshell panel";
+      partOf = [ "graphical-session.target" ];
+      after = [ "graphical-session.target" "distro-pi-chat-sync.service" ];
+      requires = [ "distro-pi-chat-sync.service" ];
+      wantedBy = [ "graphical-session.target" ];
+      restartTriggers = [ shellDir ];
+      serviceConfig = {
+        ExecStart = "${pkgs.quickshell}/bin/quickshell -c ${shellName}";
+        Restart = "on-failure";
+        RestartSec = 3;
+        Slice = "session.slice";
+        # Quickshell shells out to helpers (notify-send, dbus-send,
+        # the pi binary) by bare name; give them the standard PATH.
+        Environment = "PATH=/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
+      };
     };
 
     # Skill-config IPC daemon. Lives as a regular user systemd unit;
@@ -668,16 +682,6 @@ in
         RestartSec = 5;
       };
     };
-
-    # Redirect noctalia's notification history file from its default
-    # location under ~/.cache/noctalia/ to a dedicated directory under
-    # the pi state tree. The pi-chat sandbox bind-mounts that directory
-    # read-only (see programs/pi-chat-plugin/PiSession.qml) so the
-    # notifications skill can read what noctalia just wrote without
-    # exposing the rest of noctalia's cache (image thumbnails, color
-    # schemes, plugin metadata, …).
-    systemd.user.services.noctalia-shell.environment.NOCTALIA_NOTIF_HISTORY_FILE =
-      "%h/${notificationsFileRel}";
 
     systemd.user.services.distro-notify-forward = lib.mkIf cfg.notificationForwarding.enable {
       description = "Forward desktop notifications to the pi-chat panel";
@@ -736,16 +740,14 @@ in
       '';
     };
 
-    # Plugin config file. The QML side reads this on startup so we
-    # don't have to thread a dozen env vars through the user manager
-    # (whose extraConfig is awkward to wedge into the noctalia
-    # process tree). Symlink from a generation-pinned store path.
-    environment.etc."distro/pi-chat.json".source = jsonFormat.generate "pi-chat-plugin.json" {
+    # Shell config file. The QML side reads this on startup so we
+    # don't have to thread a dozen env vars through the user manager.
+    # Symlink from a generation-pinned store path.
+    environment.etc."distro/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
       inherit (cfg) llmUrl;
       inherit (cfg) defaultModel;
       inherit (cfg) defaultProvider;
       piBin = lib.getExe piPkg;
-      inherit pluginId;
       inherit (cfg.sandbox) idleTimeoutMinutes;
       inherit (cfg.sandbox) memoryHigh;
       openrouterEnabled = cfg.openrouter.enable;
@@ -762,5 +764,21 @@ in
       # pi-chat-owned baseline binds.
       inherit (cfg) sandboxBinds;
     };
+
+    # XDG autostart entry, for compositors that don't follow the
+    # systemd-managed graphical-session path (e.g. user runs niri via
+    # an exec wrapper instead of niri-session). The systemd unit
+    # remains the canonical autostart vector; the .desktop entry is
+    # a belt-and-braces fallback so users on bespoke setups still
+    # get the panel started at login.
+    environment.etc."xdg/autostart/pi-chat.desktop".text = ''
+      [Desktop Entry]
+      Type=Application
+      Name=pi-chat
+      Comment=Standalone Quickshell chat panel for the distro AI agent
+      Exec=${pkgs.quickshell}/bin/quickshell -c ${shellName}
+      X-GNOME-Autostart-enabled=true
+      OnlyShowIn=niri;sway;Hyprland;river;KDE;
+    '';
   };
 }

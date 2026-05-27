@@ -1,0 +1,12 @@
+module Widgets
+
+NButton 1.0 NButton.qml
+NComboBox 1.0 NComboBox.qml
+NDivider 1.0 NDivider.qml
+NFilePicker 1.0 NFilePicker.qml
+NIcon 1.0 NIcon.qml
+NIconButton 1.0 NIconButton.qml
+NListView 1.0 NListView.qml
+NSpinBox 1.0 NSpinBox.qml
+NText 1.0 NText.qml
+NTextInput 1.0 NTextInput.qml

@@ -20,7 +20,7 @@ Asserts both halves:
 A regression in either hook fails this loudly. The pre-baked
 embedding model in $HF_HOME means no network is touched.
 
-Usage: test-pi-memory.py <noctalia_bin> <plugin_target>
+Usage: test-pi-memory.py <quickshell_bin> <shell_config> <target>
 """
 
 import json
@@ -34,9 +34,9 @@ QUERY_PHRASE = "What's my hobby?"
 FACT_BODY = "mountain biking"
 
 
-def call(noctalia_bin, target, fn, *args, timeout=15):
+def call(quickshell_bin, config, target, fn, *args, timeout=15):
     res = subprocess.run(
-        [noctalia_bin, "ipc", "call", target, fn, *map(str, args)],
+        [quickshell_bin, "ipc", "-c", config, "call", target, fn, *map(str, args)],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -49,11 +49,11 @@ def call(noctalia_bin, target, fn, *args, timeout=15):
     return res.stdout.strip()
 
 
-def poll_reply(noctalia_bin, target, session_id, baseline, predicate, timeout=60):
+def poll_reply(quickshell_bin, config, target, session_id, baseline, predicate, timeout=60):
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
-        last = call(noctalia_bin, target, "lastAssistantText", session_id)
+        last = call(quickshell_bin, config, target, "lastAssistantText", session_id)
         if last != baseline and predicate(last):
             return last
         time.sleep(0.5)
@@ -128,12 +128,12 @@ def wait_for_stored_fact(timeout=120):
 
 
 def main():
-    if len(sys.argv) < 3:
-        sys.exit("usage: test-pi-memory.py <noctalia_bin> <plugin_target>")
-    noctalia_bin, target = sys.argv[1], sys.argv[2]
+    if len(sys.argv) < 4:
+        sys.exit("usage: test-pi-memory.py <quickshell_bin> <shell_config> <target>")
+    quickshell_bin, config, target = sys.argv[1], sys.argv[2], sys.argv[3]
 
     # ── Session A: state the fact, wait for storage. ────────────────
-    sessions = json.loads(call(noctalia_bin, target, "listSessions") or "[]")
+    sessions = json.loads(call(quickshell_bin, config, target, "listSessions") or "[]")
     if not sessions:
         sys.exit(f"no sessions to drive: {sessions!r}")
     session_a = next(
@@ -142,10 +142,11 @@ def main():
     )
     print(f"SESSION A: {session_a}", file=sys.stderr)
 
-    baseline_a = call(noctalia_bin, target, "lastAssistantText", session_a)
-    call(noctalia_bin, target, "sendTo", session_a, TRIGGER_PHRASE)
+    baseline_a = call(quickshell_bin, config, target, "lastAssistantText", session_a)
+    call(quickshell_bin, config, target, "sendTo", session_a, TRIGGER_PHRASE)
     reply_a = poll_reply(
-        noctalia_bin,
+        quickshell_bin,
+        config,
         target,
         session_a,
         baseline_a,
@@ -157,17 +158,18 @@ def main():
     print(f"STORED: {json.dumps(stored)[:200]}")
 
     # ── Session B: fresh chat, query memory. ────────────────────────
-    session_b = call(noctalia_bin, target, "newSession", "memory-recall")
+    session_b = call(quickshell_bin, config, target, "newSession", "memory-recall")
     if not session_b:
         sys.exit("newSession returned empty id")
     if session_b == session_a:
         sys.exit(f"newSession returned the active id: {session_b!r}")
     print(f"SESSION B: {session_b}", file=sys.stderr)
 
-    baseline_b = call(noctalia_bin, target, "lastAssistantText", session_b)
-    call(noctalia_bin, target, "sendTo", session_b, QUERY_PHRASE)
+    baseline_b = call(quickshell_bin, config, target, "lastAssistantText", session_b)
+    call(quickshell_bin, config, target, "sendTo", session_b, QUERY_PHRASE)
     reply_b = poll_reply(
-        noctalia_bin,
+        quickshell_bin,
+        config,
         target,
         session_b,
         baseline_b,

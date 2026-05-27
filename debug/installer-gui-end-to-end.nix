@@ -3,7 +3,7 @@
 # Boots a live environment identical to the installer ISO (GNOME +
 # Calamares with our distro overlay), drives the full Calamares wizard
 # via OCR + keyboard, then reboots into the installed system and
-# verifies that the niri compositor and noctalia bar actually launched.
+# verifies that the niri compositor and pi-chat panel actually launched.
 #
 # Two phases, one test:
 #   Phase 1 — `installer` node: GNOME + Calamares live env.  OCR
@@ -11,7 +11,7 @@
 #     summary → exec → finished.
 #   Phase 2 — raw QEMU launched from the test script (host-side
 #     Python) boots the disk Calamares partitioned.  Serial console +
-#     QEMU-monitor screendumps + tesseract verify niri + noctalia.
+#     QEMU-monitor screendumps + tesseract verify niri + pi-chat.
 #
 # Debugging: build with `--keep-failed` to preserve the output directory
 # on failure.  Screenshots (*.png) are saved at each wizard step and can
@@ -100,7 +100,6 @@ let
           # Flake input outPaths for evaluation.
           "${inputs.blueprint.outPath}"
           "${inputs.treefmt-nix.outPath}"
-          "${inputs.noctalia-shell.outPath}"
           "${inputs.llm-agents.outPath}"
         ];
 

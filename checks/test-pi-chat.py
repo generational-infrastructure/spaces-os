@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""End-to-end chat round-trip through the pi-chat noctalia plugin.
+"""End-to-end chat round-trip through the pi-chat standalone shell.
 
-Drives the plugin entirely via noctalia IPC. The plugin's
+Drives the shell entirely via Quickshell IPC. The shell's
 `send`/`lastAssistantText`/`listSessions` verbs are stable contract;
 the underlying pi process is spawned lazily inside a systemd-run scope
-the plugin owns.
+the shell owns.
 
-Usage: test-pi-chat.py <noctalia_bin> <plugin_target> [mode]
+Usage: test-pi-chat.py <quickshell_bin> <shell_config> <target> [mode]
 
+`shell_config` is the Quickshell config name (e.g. `pi-chat`).
+`target` is the IpcHandler target string (e.g. `pi-chat`).
 `mode` is "local" (default) or "openrouter". In openrouter mode the
 llama-swap-specific model assertions are skipped.
 
@@ -21,9 +23,12 @@ import sys
 import time
 
 
-def call(noctalia_bin, target, fn, *args, timeout=10):
-    """Invoke a plugin IPC function and return its stdout-stripped text."""
-    cmd = [noctalia_bin, "ipc", "call", target, fn, *(str(a) for a in args)]
+def call(quickshell_bin, config, target, fn, *args, timeout=10):
+    """Invoke a shell IPC function and return its stdout-stripped text."""
+    cmd = [
+        quickshell_bin, "ipc", "-c", config, "call", target, fn,
+        *(str(a) for a in args),
+    ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if res.returncode != 0:
         sys.exit(
@@ -33,12 +38,12 @@ def call(noctalia_bin, target, fn, *args, timeout=10):
     return res.stdout.strip()
 
 
-def poll_reply(noctalia_bin, target, session_id, baseline, predicate, timeout=30):
+def poll_reply(quickshell_bin, config, target, session_id, baseline, predicate, timeout=30):
     """Poll lastAssistantText until predicate(text) and text != baseline."""
     deadline = time.monotonic() + timeout
     last = baseline
     while time.monotonic() < deadline:
-        reply = call(noctalia_bin, target, "lastAssistantText", session_id)
+        reply = call(quickshell_bin, config, target, "lastAssistantText", session_id)
         if reply and reply != baseline and predicate(reply):
             return reply
         last = reply
@@ -47,17 +52,18 @@ def poll_reply(noctalia_bin, target, session_id, baseline, predicate, timeout=30
 
 
 def main():
-    if len(sys.argv) < 3:
-        sys.exit("usage: test-pi-chat.py <noctalia_bin> <plugin_target> [mode]")
-    noctalia_bin = sys.argv[1]
-    target = sys.argv[2]
-    mode = sys.argv[3] if len(sys.argv) > 3 else "local"
+    if len(sys.argv) < 4:
+        sys.exit("usage: test-pi-chat.py <quickshell_bin> <shell_config> <target> [mode]")
+    quickshell_bin = sys.argv[1]
+    config = sys.argv[2]
+    target = sys.argv[3]
+    mode = sys.argv[4] if len(sys.argv) > 4 else "local"
 
     # Discover the initial session so subsequent polls have a stable id.
-    raw = call(noctalia_bin, target, "listSessions")
+    raw = call(quickshell_bin, config, target, "listSessions")
     sessions = json.loads(raw or "[]")
     if not sessions:
-        sys.exit(f"plugin reported no sessions: {raw!r}")
+        sys.exit(f"shell reported no sessions: {raw!r}")
     session_id = next(
         (s["id"] for s in sessions if s.get("active")),
         sessions[0]["id"],
@@ -65,10 +71,11 @@ def main():
     print(f"SESSION: {session_id}", file=sys.stderr)
 
     # Turn 1: any non-empty reply is enough.
-    baseline = call(noctalia_bin, target, "lastAssistantText", session_id)
-    call(noctalia_bin, target, "send", "Hello bot")
+    baseline = call(quickshell_bin, config, target, "lastAssistantText", session_id)
+    call(quickshell_bin, config, target, "send", "Hello bot")
     reply1 = poll_reply(
-        noctalia_bin, target, session_id, baseline, predicate=lambda t: bool(t.strip())
+        quickshell_bin, config, target, session_id, baseline,
+        predicate=lambda t: bool(t.strip()),
     )
     print(f"TURN 1 OK: {reply1[:80]!r}")
 
@@ -76,16 +83,11 @@ def main():
     # reliably says "blue" for the sky question.
     baseline = reply1
     call(
-        noctalia_bin,
-        target,
-        "send",
+        quickshell_bin, config, target, "send",
         "What color is the sky? Answer in one word.",
     )
     reply2 = poll_reply(
-        noctalia_bin,
-        target,
-        session_id,
-        baseline,
+        quickshell_bin, config, target, session_id, baseline,
         predicate=lambda t: "blue" in t.lower(),
     )
     print(f"TURN 2 OK: {reply2[:80]!r}")
@@ -93,16 +95,16 @@ def main():
     # Multi-session smoke test: open a fresh chat, ensure it lands as a
     # separate entry in listSessions and remains independent from the
     # default chat's history.
-    new_id = call(noctalia_bin, target, "newSession", "harness-2")
+    new_id = call(quickshell_bin, config, target, "newSession", "harness-2")
     if not new_id:
         sys.exit("newSession returned empty id")
-    sessions = json.loads(call(noctalia_bin, target, "listSessions") or "[]")
+    sessions = json.loads(call(quickshell_bin, config, target, "listSessions") or "[]")
     if not any(s["id"] == new_id for s in sessions):
         sys.exit(f"new session not in listSessions: {sessions}")
     print(f"MULTI-SESSION OK: {len(sessions)} sessions total")
 
     # Original session should still hold turn-2's reply unchanged.
-    snap = call(noctalia_bin, target, "lastAssistantText", session_id)
+    snap = call(quickshell_bin, config, target, "lastAssistantText", session_id)
     if snap != reply2:
         sys.exit(
             f"original session bled into new session: snap={snap!r} reply2={reply2!r}"

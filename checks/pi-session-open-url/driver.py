@@ -24,7 +24,7 @@ from pathlib import Path
 
 QUICKSHELL = sys.argv[1]
 TEST_DIR = sys.argv[2]  # checks/pi-session-open-url/
-PLUGIN_DIR = sys.argv[3]  # programs/pi-chat-plugin/
+PLUGIN_DIR = sys.argv[3]  # programs/pi-chat/
 WORK = Path(sys.argv[4])
 
 shell_qml = WORK / "shell" / "shell.qml"

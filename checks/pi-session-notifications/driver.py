@@ -124,7 +124,12 @@ class PiClient:
 
 
 def seed_notifications(path):
-    """Write a fixture history file that mirrors noctalia's schema."""
+    """Write a fixture history file in the schema the notifications skill reads.
+
+    The shape matches noctalia's persistent history file by design — the
+    skill was built against that schema and continues to read anything
+    written in it (noctalia, a future swaync bridge, our own writer).
+    """
     payload = {
         "notifications": [
             {

@@ -1,17 +1,23 @@
 ---
 name: Desktop notifications
-description: Read recent desktop notifications captured by the noctalia shell.
+description: Read recent desktop notifications from a JSON history file written by a notification-history daemon.
 ---
 
 The user's notification history is exposed by the `notifications` CLI. The
-underlying data is noctalia's persistent history file — every notification
-the desktop has received is in there, capped at the 100 most recent entries
-and ordered newest-first.
+CLI reads a JSON history file in a stable schema (every notification the
+desktop has received, capped at the 100 most recent entries, ordered
+newest-first). It does not capture notifications itself — a separate
+notification-history daemon must write the file.
+
+On distro the writer is not bundled out of the box. If the user runs
+[noctalia](https://github.com/noctalia-dev/noctalia-shell) the skill
+auto-picks up its history file (`~/.cache/noctalia/notifications.json`).
+Otherwise the CLI returns `(no notifications)` and you should tell the user
+the skill needs a writer wired up.
 
 Use this skill whenever the user asks anything about *what they missed*,
 *what just popped up*, *who messaged them*, or any other question that maps
 onto recent desktop activity.
-
 ### List recent notifications
 
 ```bash
@@ -48,7 +54,7 @@ notifications list --json --limit 10
 ```
 
 Emits the raw entries as a JSON array. Each entry includes every field
-noctalia persisted (`actionsJson`, `cachedImage`, `originalId`, etc.), so
+the writer persisted (`actionsJson`, `cachedImage`, `originalId`, etc.), so
 parse this when you need anything beyond app / summary / body / urgency.
 
 ### Look up one entry
@@ -64,15 +70,15 @@ ambiguous.
 
 ### Tips
 
-- The data is captured passively by the desktop shell — the user did not have
-  to opt in per notification. Treat the contents as private; never quote them
-  unprompted in unrelated answers.
+- The data is captured passively by the notification-history writer — the
+  user did not have to opt in per notification. Treat the contents as
+  private; never quote them unprompted in unrelated answers.
 - Timestamps are stored in milliseconds since the Unix epoch. Combine with
   the datetime skill (`date -u +%s%3N` etc.) for "since this morning",
   "in the last hour", and similar windows.
 - Urgency `2` (critical) is what apps reserve for things you really should
   read — battery, security alerts, missed calls. Surface those first when
   summarising.
-- The file may not exist yet on a fresh install. `notifications list` returns
-  `(no notifications)` rather than failing, so it is safe to call without a
-  preflight check.
+- The file may not exist yet (fresh install, no writer wired up).
+  `notifications list` returns `(no notifications)` rather than failing,
+  so it is safe to call without a preflight check.

@@ -192,9 +192,9 @@ class OpenUrlTests(unittest.TestCase):
     =tmpfs + private namespaces). A direct `webbrowser.open` therefore
     spawns Firefox/Chromium inside the sandbox, where it cannot see the
     user's real profile — Firefox renders 'Profile Missing'. Instead the
-    CLI dispatches to the noctalia pi-chat plugin via a unix socket that
+    CLI dispatches to the pi-chat Quickshell panel via a unix socket that
     lives in the user's $XDG_RUNTIME_DIR and is bind-mounted into the
-    sandbox. The plugin then calls Qt.openUrlExternally in the real user
+    sandbox. The panel then calls Qt.openUrlExternally in the real user
     session.
 
     When DISTRO_OPEN_URL_SOCKET is unset (CI, the unit-test harness,

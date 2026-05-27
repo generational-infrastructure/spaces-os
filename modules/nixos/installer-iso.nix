@@ -97,7 +97,7 @@ in
   #     source path with the matching narHash is in the store; the
   #     evaluated input outPath has that same narHash.  Without these
   #     entries, every install hits the network for blueprint,
-  #     noctalia-shell, etc.
+  #     etc.
   isoImage.storeContents = [
     distroSrc
     flake.nixosConfigurations.${installerTargetFor}.config.system.build.toplevel

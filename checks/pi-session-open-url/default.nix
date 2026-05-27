@@ -17,7 +17,7 @@ pkgs.runCommand "pi-session-open-url-test"
       pkgs.qt6.qtbase
       pkgs.qt6.qtdeclarative
     ];
-    pluginDir = ../../programs/pi-chat-plugin;
+    pluginDir = ../../programs/pi-chat;
   }
   ''
     set -euo pipefail

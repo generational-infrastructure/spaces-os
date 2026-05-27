@@ -6,7 +6,7 @@
 # distro store path already present on the live medium.
 #
 # The corresponding test (`debug/installer-target-session.nix`) boots
-# the same shape as a VM and asserts niri + noctalia start, so a
+# the same shape as a VM and asserts niri + pi-chat start, so a
 # regression in the "Calamares-shape installed system" surfaces in
 # CI without going through a full ISO install.
 {
