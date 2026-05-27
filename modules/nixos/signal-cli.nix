@@ -270,5 +270,10 @@ in
         mode = "rw";
       }
     ];
+
+    # Skip the bash-confirm prompt for `signal …` — the bridge already
+    # gates non-self-sends at panel.sock (unreachable from the
+    # sandbox), and the read-only subcommands have nothing to gate.
+    services.pi-chat.bashConfirm.allowPatterns = [ "^signal(\\s|$)" ];
   };
 }

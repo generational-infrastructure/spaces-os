@@ -76,7 +76,6 @@ let
   # module no longer manages that redirect; operators wanting it set
   # systemd.user.services.noctalia-shell.environment themselves.
   notificationsRel = "${stateRel}/notifications";
-  notificationsFileRel = "${notificationsRel}/history.json";
   # Long-term memory store (sediment). The vector DB is shared across
   # all sessions of the same user; the per-session sandbox bind-mounts
   # it read-write. The embedding model lives in a /nix/store path
@@ -314,7 +313,6 @@ in
       description = "The pi coding agent package.";
     };
 
-
     skills = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
@@ -409,21 +407,14 @@ in
     bashConfirm = {
       allowPatterns = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [
-          "^skill-config(\\s|$)"
-          "^notifications(\\s|$)"
-        ];
+        default = [ ];
         description = ''
-          ECMAScript regex patterns whose `bash` invocations skip the
-          bash-confirm prompt. The user/LLM still issues the command
-          through pi's normal bash tool, but the extension allows it
-          without prompting. Default whitelists every `skill-config`
-          subcommand because that CLI proxies through a dedicated IPC
-          daemon whose input/output never carries attacker-controlled
-          payloads.
+          Regex patterns (ECMAScript) for `bash` commands that skip the
+          confirm prompt. Merges across modules — skill modules append
+          their own patterns here instead of asking users to edit the
+          list.
 
-          Patterns are matched anywhere in the command unless you anchor
-          them yourself with `^` / `$`.
+          Unanchored unless you write `^` / `$` yourself.
         '';
       };
     };
@@ -509,6 +500,17 @@ in
         assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
         message = "services.pi-chat.openrouter.apiKeyFile must be set when openrouter.enable = true.";
       }
+    ];
+
+    # Baseline bash-confirm allow-list. Set in the config block (not
+    # via the option's `default`) so other modules' contributions
+    # concatenate instead of replacing.
+    services.pi-chat.bashConfirm.allowPatterns = [
+      # skill-config: proxied through an IPC daemon, no attacker-
+      # controlled payloads.
+      "^skill-config(\\s|$)"
+      # notifications: thin reader over a host-managed history file.
+      "^notifications(\\s|$)"
     ];
 
     # llama-swap supplies the default LLM endpoint; enable by default
@@ -626,7 +628,10 @@ in
       # Must finish before pi-chat.service spawns quickshell — it
       # would otherwise race against the cp -rT and load a half-
       # materialised config dir.
-      before = [ "graphical-session-pre.target" "pi-chat.service" ];
+      before = [
+        "graphical-session-pre.target"
+        "pi-chat.service"
+      ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -651,7 +656,10 @@ in
     systemd.user.services.pi-chat = {
       description = "pi-chat Quickshell panel";
       partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" "distro-pi-chat-sync.service" ];
+      after = [
+        "graphical-session.target"
+        "distro-pi-chat-sync.service"
+      ];
       requires = [ "distro-pi-chat-sync.service" ];
       wantedBy = [ "graphical-session.target" ];
       restartTriggers = [ shellDir ];
