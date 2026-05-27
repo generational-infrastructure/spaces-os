@@ -515,11 +515,12 @@ in
     # so a fresh install boots into a usable state.
     services.llama-swap.enable = lib.mkDefault true;
 
-    # Every built-in skill's CLI lands on the system PATH. Two
-    # reasons:
-    #   1. The pi-chat sandbox inherits the user's PATH, so the
-    #      agent can shell out by bare name (`osm-cli search …`,
-    #      `caldav list …`, etc.).
+    # Every built-in skill's CLI lands on the system PATH. Two reasons:
+    #   1. The chat shell forwards its own PATH into the pi-chat
+    #      sandbox via `systemd-run --setenv=PATH=`, so the agent can
+    #      shell out by bare name (`signal threads`, `osm-cli search …`,
+    #      `caldav list …`, etc.) without each skill's SKILL.md having
+    #      to spell out absolute store paths.
     #   2. The user can run the exact same commands from a normal
     #      terminal — debug a skill's behaviour, script around it,
     #      or just use it without going through the chat panel.

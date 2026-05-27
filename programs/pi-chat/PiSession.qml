@@ -377,6 +377,18 @@ QtObject {
       "--setenv=DISTRO_NOTIFICATIONS_FILE=" + notificationsFile,
       "--setenv=PI_TELEMETRY=0",
       "--setenv=PI_OFFLINE=0",
+      // Propagate the chat shell's PATH into the transient unit.
+      // `systemd-run --user` builds the unit's exec environment from
+      // the user manager's Manager.Environment, which is just the
+      // baked-in user@.service PATH (coreutils + systemd's bin) on
+      // NixOS — none of /run/current-system/sw/bin or the user profile
+      // makes it through. Without this, every skill CLI shelled out by
+      // bare name from SKILL.md (signal, notifications, skill-config,
+      // …) ENOENTs. niri-session imports the full env into the user
+      // manager so the inheritance happens implicitly there, but we
+      // can't rely on the compositor doing that for sway / hyprland /
+      // GNOME hosts. Forwarding PATH explicitly closes the gap.
+      "--setenv=PATH=" + String(Quickshell.env("PATH")),
       "--property=BindPaths=" + sessionState + ":" + sessionState,
       "--property=BindPaths=" + workspacePath + ":" + workspacePath,
       "--property=BindPaths=" + skillSockHost + ":" + skillSockHost,
