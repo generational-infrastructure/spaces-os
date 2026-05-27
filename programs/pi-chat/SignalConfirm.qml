@@ -2,7 +2,7 @@
 // panel UI.
 //
 // Owns the long-lived subscriber connection to
-// $XDG_RUNTIME_DIR/distro-signal-panel.sock. Each `op:"snapshot"`
+// $XDG_RUNTIME_DIR/distro-signal/panel.sock. Each `op:"snapshot"`
 // rebuilds `pending`; `op:"added"` appends one row; `op:"removed"`
 // drops a row by token. The panel binds `pending` directly to render
 // the approval cards.

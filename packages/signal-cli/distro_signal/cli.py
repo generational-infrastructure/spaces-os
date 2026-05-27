@@ -45,7 +45,7 @@ def _runtime_dir() -> str:
 
 def _enqueue_socket_path() -> str:
     env = os.environ.get(DEFAULT_ENQUEUE_SOCKET_ENV)
-    return env or f"{_runtime_dir()}/distro-signal-enqueue.sock"
+    return env or f"{_runtime_dir()}/distro-signal/sandbox/enqueue.sock"
 
 
 _ONBOARDING_HINT = (

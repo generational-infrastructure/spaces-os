@@ -221,22 +221,51 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     esac
     [ "$bridgeRestart" = "always" ] || fail "bridge Restart must be 'always', got '$bridgeRestart'"
 
-    # ── 2c. enqueue socket bind is present (RW, optional)
+    # ── 2c. The sandbox bind-mounts a *directory*, not a socket file,
+    # and specifically the inner `sandbox/` subdir. Binding the dir
+    # fixes the spawn-time race: the dir always exists (created
+    # unconditionally by tmpfiles below), the bind succeeds, and the
+    # enqueue socket the bridge later creates inside the dir becomes
+    # visible inside the sandbox automatically. Mandatory (not
+    # optional) — if this ever drops back to optional we re-introduce
+    # the silent-skip race.
     jq -e '
       .sandboxBinds
-      | any(.source == "%t/distro-signal-enqueue.sock" and .mode == "rw" and .optional == true)
+      | any(.source == "%t/distro-signal/sandbox" and .mode == "rw" and (.optional // false) == false)
     ' "$pichatConfig" >/dev/null \
-      || fail "enqueue socket not in sandboxBinds: $binds"
+      || fail "distro-signal sandbox subdir must be in sandboxBinds (rw, mandatory): $binds"
 
-    # ── 2d. panel socket is NOT bind-mounted — that split is the
-    # whole security boundary of the confirmation flow.
+    # ── 2d. The panel socket — and the parent dir that contains it —
+    # MUST stay out of the sandbox. That's the security boundary: a
+    # prompt-injected agent can post to enqueue.sock but cannot mint
+    # an approval on panel.sock. Reject any bind whose source could
+    # expose the panel socket, including the parent `distro-signal/`
+    # dir, the panel file itself, or the legacy flat names.
     jq -e '
       .sandboxBinds
-      | all(.source != "%t/distro-signal-panel.sock")
+      | all(.source != "%t/distro-signal"
+            and .source != "%t/distro-signal/panel.sock"
+            and .source != "%t/distro-signal/sandbox/panel.sock"
+            and .source != "%t/distro-signal-panel.sock"
+            and .source != "%t/distro-signal-enqueue.sock")
     ' "$pichatConfig" >/dev/null \
-      || fail "panel socket must NOT be in sandboxBinds (security regression!): $binds"
+      || fail "sandboxBinds exposes the panel socket or its parent dir (security regression — agent could self-approve sends): $binds"
 
-    # ── 2e. signal SKILL.md is included by default (since enable
+    # ── 2e. Both runtime dirs are created unconditionally by user-
+    # tmpfiles, so the mandatory bind above succeeds even on hosts
+    # that have never linked Signal. We need *both* lines: the parent
+    # holds the host-only panel socket, the child is the sandbox bind
+    # source.
+    case "$enabledTmpfiles" in
+      *"d %t/distro-signal 0700"*) ;;
+      *) fail "user-tmpfiles must create %t/distro-signal 0700 unconditionally: $enabledTmpfiles" ;;
+    esac
+    case "$enabledTmpfiles" in
+      *"d %t/distro-signal/sandbox 0700"*) ;;
+      *) fail "user-tmpfiles must create %t/distro-signal/sandbox 0700 unconditionally (sandbox bind source): $enabledTmpfiles" ;;
+    esac
+
+    # ── 2f. signal SKILL.md is included by default (since enable
     # tracks pi-chat.enable) and stripped when explicitly disabled.
     # Guards against the agent advertising a CLI the sandbox doesn't
     # actually ship. The skill is materialised as a symlink line in
@@ -250,7 +279,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       *) ;;
     esac
 
-    # ── 2f. ConditionPathExistsGlob gates both units so they no-op
+    # ── 2g. ConditionPathExistsGlob gates both units so they no-op
     # silently until the user runs `signal-cli link`. Without this
     # the daemon spins a JVM at every login for nothing on fresh
     # systems; with it, login does not start signal-cli until an
@@ -261,7 +290,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     [ "$bridgeCondition" = "$expectedGlob" ] \
       || fail "bridge ConditionPathExistsGlob must be '$expectedGlob', got '$bridgeCondition'"
 
-    # ── 2g. systemd.user.paths.distro-signal-link auto-starts the
+    # ── 2h. systemd.user.paths.distro-signal-link auto-starts the
     # daemon when the account dir is created by `signal-cli link`.
     # Without this the first link requires a manual `systemctl
     # --user start` — defeats the auto-onboarding goal.
@@ -274,7 +303,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       *) fail "path-unit must be wantedBy=default.target so login arms it, got '$pathUnitWantedBy'" ;;
     esac
 
-    # ── 2h. Bridge follows daemon. The path-unit only triggers the
+    # ── 2i. Bridge follows daemon. The path-unit only triggers the
     # daemon; the bridge must be wantedBy that daemon so it comes
     # up in lockstep when the first link happens.
     case " $bridgeWantedBy " in
@@ -282,7 +311,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       *) fail "bridge must be wantedBy=distro-signal-cli.service (so path-activation propagates), got '$bridgeWantedBy'" ;;
     esac
 
-    # ── 2i. Opt-out path: explicit `enable = false` strips every
+    # ── 2j. Opt-out path: explicit `enable = false` strips every
     # signal-cli-shaped artifact from the system, including the user
     # units and the pi-chat sandbox binds.
     [ "$disabledHasSignalUnits" = "no" ] \
@@ -291,7 +320,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
       .sandboxBinds
       | all(.source | startswith("%t/signal-cli/") | not)
       and all(.source | startswith("%h/.local/state/distro/signal") | not)
-      and all(.source | startswith("%t/distro-signal-") | not)
+      and all(.source | startswith("%t/distro-signal") | not)
     ' "$disabledPichatConfig" >/dev/null \
       || fail "sandboxBinds still carry signal-cli entries after explicit enable = false: $(jq -c '.sandboxBinds' "$disabledPichatConfig")"
 

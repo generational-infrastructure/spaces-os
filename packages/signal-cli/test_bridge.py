@@ -953,5 +953,108 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
         self.assertEqual(accounts_requested, ["+1111", "+2222"])
 
 
+class TestSocketPathDefaults(unittest.TestCase):
+    """Path conventions that couple this module to signal-cli.nix.
+
+    The pi-chat sandbox bind-mounts `$XDG_RUNTIME_DIR/distro-signal/sandbox`
+    (see modules/nixos/signal-cli.nix). The defaults below MUST keep
+    the enqueue socket *inside* that subdir (so the agent in the
+    sandbox can reach it through the bind-mount) and the panel
+    socket *outside* it (so a prompt-injected agent cannot mint
+    its own approvals). If you change one side without the other,
+    `signal threads` either says "infrastructure not running" forever
+    or — worse — the sandbox can talk to the approval channel.
+    """
+
+    def setUp(self) -> None:
+        self._saved = {
+            k: os.environ.get(k)
+            for k in (
+                "XDG_RUNTIME_DIR",
+                "DISTRO_SIGNAL_ENQUEUE_SOCKET",
+                "DISTRO_SIGNAL_PANEL_SOCKET",
+            )
+        }
+        os.environ["XDG_RUNTIME_DIR"] = "/run/user/1234"
+        for k in (
+            "DISTRO_SIGNAL_ENQUEUE_SOCKET",
+            "DISTRO_SIGNAL_PANEL_SOCKET",
+        ):
+            os.environ.pop(k, None)
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_enqueue_default_lives_inside_sandbox_subdir(self) -> None:
+        self.assertEqual(
+            bridge_mod._default_enqueue_socket(),
+            "/run/user/1234/distro-signal/sandbox/enqueue.sock",
+        )
+
+    def test_panel_default_lives_outside_sandbox_subdir(self) -> None:
+        # Panel must NOT be under `.../distro-signal/sandbox/`; a
+        # sibling of the sandbox dir is fine, anything below it is
+        # a security regression.
+        panel = bridge_mod._default_panel_socket()
+        self.assertEqual(panel, "/run/user/1234/distro-signal/panel.sock")
+        self.assertFalse(
+            panel.startswith("/run/user/1234/distro-signal/sandbox/"),
+            f"panel socket leaked into sandbox-bound dir: {panel}",
+        )
+
+    def test_env_override_wins_for_enqueue(self) -> None:
+        os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = "/custom/enq.sock"
+        self.assertEqual(bridge_mod._default_enqueue_socket(), "/custom/enq.sock")
+
+    def test_env_override_wins_for_panel(self) -> None:
+        os.environ["DISTRO_SIGNAL_PANEL_SOCKET"] = "/custom/pan.sock"
+        self.assertEqual(bridge_mod._default_panel_socket(), "/custom/pan.sock")
+
+
+class TestServeSocketCreatesParentDir(unittest.TestCase):
+    """Bridge binds inside `%t/distro-signal/sandbox/`, a dir created
+    by user-tmpfiles in a deployed system. For ad-hoc runs and tests
+    that aren't going through systemd, the bridge must still cope
+    with a missing parent — otherwise it dies on first start and the
+    Restart=always loop spins forever.
+    """
+
+    def test_bind_creates_missing_parent(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        daemon_sock = str(base / "signal.sock")
+        nested = base / "distro-signal" / "sandbox"
+        enqueue_sock = str(nested / "enqueue.sock")
+        panel_sock = str(base / "distro-signal" / "panel.sock")
+        db_path = base / "messages.db"
+
+        self.assertFalse(nested.exists(), "test precondition: nested dir missing")
+
+        daemon = FakeSignalDaemon(daemon_sock)
+        self.addCleanup(daemon.stop)
+
+        bridge = bridge_mod.Bridge(
+            bridge_mod.BridgeConfig(
+                db_path=db_path,
+                daemon_socket=daemon_sock,
+                enqueue_socket=enqueue_sock,
+                panel_socket=panel_sock,
+            ),
+            accounts_refresh_seconds=60.0,
+        )
+        bridge.start()
+        self.addCleanup(bridge.stop)
+
+        if not _wait_until(lambda: os.path.exists(enqueue_sock)):
+            self.fail("bridge never bound enqueue socket inside missing parent dir")
+        if not _wait_until(lambda: os.path.exists(panel_sock)):
+            self.fail("bridge never bound panel socket inside missing parent dir")
+
+
 if __name__ == "__main__":
     unittest.main()

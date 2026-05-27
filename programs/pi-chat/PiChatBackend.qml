@@ -94,7 +94,7 @@ Item {
   }
   readonly property string skillConfigSockPath: runtimeDir + "/distro-skill-config.sock"
   readonly property string openUrlSockPath: runtimeDir + "/distro-pi-open-url.sock"
-  readonly property string signalPanelSockPath: runtimeDir + "/distro-signal-panel.sock"
+  readonly property string signalPanelSockPath: runtimeDir + "/distro-signal/panel.sock"
 
   // Bridge between the distro-signal panel socket and the chat UI.
   // The panel sits *outside* the pi-chat sandbox, so it (not the
