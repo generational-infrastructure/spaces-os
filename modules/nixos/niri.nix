@@ -58,10 +58,11 @@ let
         sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "pi-chat-toggle"; }' $out
         # Mod+S toggles voice-to-text recording.
         sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
-        # Mod+Shift+N restarts the pi-chat user service so a freshly
-        # rebuilt config / patched build lands without a full session
-        # logout.
-        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload pi-chat" { spawn "systemctl" "--user" "restart" "pi-chat.service"; }' $out
+        # Mod+Shift+N reloads the noctalia bar, Mod+Shift+A the pi-chat
+        # agent panel — restart each user service to pick up a rebuild
+        # without a session logout.
+        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "systemctl" "--user" "restart" "noctalia-shell.service"; }' $out
+        sed -i '/^binds {$/a\    Mod+Shift+A hotkey-overlay-title="Reload pi-chat" { spawn "systemctl" "--user" "restart" "pi-chat.service"; }' $out
         # Mod+L and Ctrl+Alt+L lock the screen with swaylock. Mod+L
         # overrides upstream's focus-column-right (Mod+Right / Mod+L
         # both did that — Mod+Right still works).
