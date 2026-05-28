@@ -353,39 +353,36 @@ Item {
   // event's `instance` field (set from DISTRO_SESSION_ID inside the
   // scope), falling back to the active session.
 
-  Loader {
+  Socket {
     id: skillSock
-    sourceComponent: skillSockComponent
-    readonly property bool connected: item?.connected ?? false // qmllint disable missing-property
-  }
-  Component {
-    id: skillSockComponent
-    Socket {
-      path: root.skillConfigSockPath
-      connected: true
-      parser: SplitParser { onRead: line => root._recvSkillConfig(line) }
-      onConnectionStateChanged: {
-        if (connected) {
-          skillReconnect.stop();
-          skillReconnect.interval = 500;
-          write(JSON.stringify({ op: "subscribe" }) + "\n");
-          flush();
-        } else {
-          skillReconnect.start();
-          root._retractAllPendingPrompts();
-        }
-      }
-      onError: e => { // qmllint disable signal-handler-parameters
-        Logger.w("PiChat", "skill-config subscribe", e);
+    path: root.skillConfigSockPath
+    connected: true
+    parser: SplitParser { onRead: line => root._recvSkillConfig(line) }
+    onConnectionStateChanged: {
+      if (connected) {
+        skillReconnect.stop();
+        skillReconnect.interval = 500;
+        write(JSON.stringify({ op: "subscribe" }) + "\n");
+        flush();
+      } else {
         skillReconnect.start();
+        root._retractAllPendingPrompts();
       }
+    }
+    onError: e => { // qmllint disable signal-handler-parameters
+      Logger.w("PiChat", "skill-config subscribe", e);
+      skillReconnect.start();
     }
   }
   Timer {
     id: skillReconnect
     interval: 500
     onTriggered: {
-      skillSock.active = false; skillSock.active = true;
+      // Bounce the connection: setting connected=false closes the
+      // socket, =true reopens it. Matches the old Loader recreate
+      // semantics without losing the static Socket type.
+      skillSock.connected = false;
+      skillSock.connected = true;
       interval = Math.min(interval * 2, 4000);
     }
   }
@@ -530,7 +527,14 @@ Item {
 
   Component {
     id: _piSessionComponent
-    PiSession { }
+    // Persist and notification routing live on the instance instead of
+    // imperative `.connect()` calls in _reconcileSessions(): keeps the
+    // signal targets statically typed for qmllint and removes the need
+    // to capture sessionId out-of-band.
+    PiSession {
+      onNeedsPersist: backend._persist()
+      onIncomingNotification: t => backend._notify(sessionId, t)
+    }
   }
 
   onSessionsListChanged: _reconcileSessions()
@@ -563,9 +567,6 @@ Item {
           memoryHfHome: Qt.binding(() => root.memoryHfHome),
           sandboxBinds: Qt.binding(() => root.sandboxBinds),
         });
-        const idCaptured = s.id;
-        obj.needsPersist.connect(() => root._persist()); // qmllint disable missing-property
-        obj.incomingNotification.connect((t) => root._notify(idCaptured, t)); // qmllint disable missing-property
         _registerSession(obj);
       } else {
         if (obj.sessionName !== s.name) obj.sessionName = s.name;

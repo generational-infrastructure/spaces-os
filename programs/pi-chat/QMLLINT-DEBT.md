@@ -53,17 +53,6 @@ demands the second parameter be a resolvable type even when the
 handler doesn't use it. Typed handler annotations (`code: int`, etc.)
 do not help; qmllint validates the *signal*'s declared type, not the
 slot signature.
-
-### `missing-property` on dynamic QObject refs
-- `PiChatBackend.qml:359` (`Loader.item?.connected`)
-- `PiChatBackend.qml:567`,`568` (`obj.needsPersist`, `obj.incomingNotification`)
-
-`Loader.item` is typed as `QObject`; the qmltypes don't narrow it to
-the actual component. Same for PiSession instances that we hold via a
-`var` map (`_sessionObjs[id]`) — qmllint loses the type. Replacing the
-`var` map with a typed container (an `ObjectModel` or
-`Repeater.itemAt(i)`) is the right long-term fix.
-
 ### `Quick.anchor-combinations` — conditional anchor selection
 - `Bubble.qml:81`
 
