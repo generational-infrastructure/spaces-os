@@ -12,9 +12,12 @@
 #      the guest doesn't fight the host's Super grab — see
 #      `modules/nixos/test-support` and `checks/test-machine.nix`).
 #
-# NIRI_CONFIG is set on the user-service unit to bypass niri's user/system
-# config lookup and avoid niri auto-creating ~/.config/niri/config.kdl
-# (which would shadow our system config).
+# NIRI_CONFIG is the stable /etc/niri/config.kdl symlink, not the pinned
+# store path. Explicit path → niri skips its user/system lookup and won't
+# auto-create ~/.config/niri/config.kdl. niri's watcher reloads when
+# canonicalize(path) changes, so re-pointing the /etc symlink on deploy
+# live-reloads the binds; the store path's canonical form never moved,
+# which is why keybind edits used to need a relogin.
 #
 # enableDefaultPath = false on niri.service: the NixOS default injects a
 # stripped Environment=PATH= which prevents niri's bare-name `spawn`
@@ -107,7 +110,9 @@ in
     environment.etc."niri/config.kdl".source = niriConfig;
 
     systemd.user.services.niri = {
-      environment.NIRI_CONFIG = toString niriConfig;
+      # Stable /etc symlink, not the store path, so niri live-reloads on
+      # deploy (see header).
+      environment.NIRI_CONFIG = "/etc/niri/config.kdl";
       enableDefaultPath = false;
       # Avoid killing the desktop on deploy
       restartIfChanged = false;
