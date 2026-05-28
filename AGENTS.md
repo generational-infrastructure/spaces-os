@@ -28,6 +28,26 @@ just because it already runs the chat shell. The VM test is for
 cross-subsystem wiring; extend it only when the behaviour genuinely
 depends on the full boot path.
 
+### Iterating on GUI changes
+
+For visual changes that the cheap headless checks can't verify
+(layout, theming, panel behaviour under a real compositor), use
+the headless `agent-vm` wrapper. All state lands in
+`<repo>/.agent-vm/`; no env vars, no flags.
+
+```
+pueue add -- nix run .#agent-vm -- run    # background; long-running
+nix run .#agent-vm -- wait                # block until sshd answers
+nix run .#agent-vm -- ssh 'systemctl --user is-active niri'
+nix run .#agent-vm -- key alt-a           # open the chat panel
+nix run .#agent-vm -- screenshot .agent-vm/after.png
+nix run .#agent-vm -- log -f              # serial console if sshd never came up
+```
+
+Read the resulting PNG back with the `read` tool to actually
+see what changed. Rebuild and `agent-vm run` again after edits —
+the qcow2 is throwaway.
+
 ## Translations
 
 The chat panel's user-visible strings live in
