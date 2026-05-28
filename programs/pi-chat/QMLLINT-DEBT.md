@@ -53,12 +53,3 @@ demands the second parameter be a resolvable type even when the
 handler doesn't use it. Typed handler annotations (`code: int`, etc.)
 do not help; qmllint validates the *signal*'s declared type, not the
 slot signature.
-### `Quick.anchor-combinations` — conditional anchor selection
-- `Bubble.qml:81`
-
-The bubble's `anchors.left`/`anchors.right`/`anchors.horizontalCenter`
-bindings each evaluate to `undefined` when not in use, so at runtime
-only one anchor is set. qmllint flags the three-way pattern statically
-because it doesn't model `undefined`-clears-anchor semantics. A cleaner
-fix is splitting into a State machine, but the current binding pattern
-is clearer; suppression keeps it that way.

@@ -78,9 +78,27 @@ Item {
   // alignment itself reads as "who said this" without an avatar.
   Rectangle {
     id: bubble
-    anchors.left:  row.isNotification ? undefined : (row.mine ? undefined : parent.left) // qmllint disable Quick.anchor-combinations
-    anchors.right: row.isNotification ? undefined : (row.mine ? parent.right : undefined)
-    anchors.horizontalCenter: row.isNotification ? parent.horizontalCenter : undefined
+    // Anchor selection: one of "notification" (centered) / "mine"
+    // (right) / "peer" (left). Kept as States so the three anchor
+    // properties never appear together in the base scope — qmllint's
+    // Quick.anchor-combinations check requires that.
+    states: [
+      State {
+        name: "notification"
+        when: row.isNotification
+        AnchorChanges { target: bubble; anchors.horizontalCenter: parent.horizontalCenter }
+      },
+      State {
+        name: "mine"
+        when: !row.isNotification && row.mine
+        AnchorChanges { target: bubble; anchors.right: parent.right }
+      },
+      State {
+        name: "peer"
+        when: !row.isNotification && !row.mine
+        AnchorChanges { target: bubble; anchors.left: parent.left }
+      }
+    ]
     visible: !row.isNotification && !row.isConfirm && !row.isPrompt && !row.isThinking
     // Image/quote/streaming bubbles snap to the cap; plain text shrinks
     // to fit so short replies don't stretch edge-to-edge.
