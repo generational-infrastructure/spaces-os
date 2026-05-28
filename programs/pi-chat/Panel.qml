@@ -732,18 +732,6 @@ Item {
       onExited: code => { if (code === 0 && tmp) root.chat?.sendFile(tmp, true); tmp = ""; } // qmllint disable signal-handler-parameters
     }
 
-    // Drag-and-drop from file managers. Most offer text/uri-list; take
-    // the first local file and let the daemon reject non-images.
-    DropArea {
-      parent: root  // cover the whole panel, not just this layout slot
-      anchors.fill: parent // qmllint disable Quick.layout-positioning
-      onDropped: d => {
-        if (!d.hasUrls) return;
-        const u = d.urls[0].toString();
-        if (u.startsWith("file://")) root.chat?.sendFile(decodeURIComponent(u.slice(7)));
-      }
-    }
-
     NText {
       visible: (root.chat?.lastError ?? "") !== ""
       text: root.chat?.lastError ?? ""
@@ -751,6 +739,19 @@ Item {
       pointSize: Style.fontSizeS
       Layout.fillWidth: true
       wrapMode: Text.Wrap
+    }
+  }
+
+  // Drag-and-drop from file managers. Most offer text/uri-list; take
+  // the first local file and let the daemon reject non-images. Lives
+  // at the root scope so it covers the whole panel rather than only
+  // the ColumnLayout's footprint.
+  DropArea {
+    anchors.fill: parent
+    onDropped: d => {
+      if (!d.hasUrls) return;
+      const u = d.urls[0].toString();
+      if (u.startsWith("file://")) root.chat?.sendFile(decodeURIComponent(u.slice(7)));
     }
   }
 

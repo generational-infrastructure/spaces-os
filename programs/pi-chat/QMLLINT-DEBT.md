@@ -73,13 +73,3 @@ only one anchor is set. qmllint flags the three-way pattern statically
 because it doesn't model `undefined`-clears-anchor semantics. A cleaner
 fix is splitting into a State machine, but the current binding pattern
 is clearer; suppression keeps it that way.
-
-### `Quick.layout-positioning` — DropArea reparented to root
-- `Panel.qml:739`
-
-The full-panel `DropArea` is declared inside the main `ColumnLayout`
-for locality but explicitly reparents itself to `root` so it covers
-the entire panel surface, not just one layout cell. qmllint can't see
-the reparent and warns about `anchors.fill: parent` on a layout child.
-Runtime is correct because `parent` resolves after the `parent: root`
-assignment.
