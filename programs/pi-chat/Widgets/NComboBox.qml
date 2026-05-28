@@ -110,6 +110,11 @@ ComboBox {
     implicitHeight: Math.min(contentItem.implicitHeight, root.popupHeight)
     contentItem: ListView {
       clip: true
+      // Qt's own ComboBox popup sets this; without it a bare ListView
+      // reports implicitHeight 0, collapsing the Popup to zero height
+      // (the dropdown opens but is invisible). contentHeight is the
+      // laid-out total, capped by popupHeight in the Popup above.
+      implicitHeight: contentHeight
       model: root.popup.visible ? root.delegateModel : null
       currentIndex: root.highlightedIndex
     }
