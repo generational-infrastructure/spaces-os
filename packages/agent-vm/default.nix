@@ -114,7 +114,7 @@ else
           exit 1
           ;;
 
-        key|screenshot)
+        key|screenshot|move|click)
           export AGENT_VM_QMP="$qmp"
           exec python3 ${./qmp.py} "$cmd" "$@"
           ;;
@@ -133,6 +133,8 @@ else
         key <chord>        send a synthetic key chord via QMP
                            (alt-a, ctrl-alt-t, shift-space, …)
         screenshot <path>  save a PNG framebuffer dump via QMP
+        move <x> <y>       warp the absolute pointer to pixel (x, y)
+        click <x> <y> [b]  click button b (left/right/middle) at (x, y)
         log [tail args]    print/follow the guest serial console
 
       State lives at $state_dir.

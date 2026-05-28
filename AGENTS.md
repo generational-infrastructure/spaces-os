@@ -41,6 +41,7 @@ nix run .#agent-vm -- wait                # block until sshd answers
 nix run .#agent-vm -- ssh 'systemctl --user is-active niri'
 nix run .#agent-vm -- key alt-a           # open the chat panel
 nix run .#agent-vm -- screenshot .agent-vm/after.png
+nix run .#agent-vm -- click 640 700        # left-click at framebuffer pixel
 nix run .#agent-vm -- log -f              # serial console if sshd never came up
 ```
 
