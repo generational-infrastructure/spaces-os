@@ -108,7 +108,7 @@ QtObject {
             root._reconnectTimer.start();
           }
         }
-        onError: _e => root._reconnectTimer.start() // qmllint disable signal-handler-parameters
+        onError: _e => root._reconnectTimer.start()
       }
     }
   }

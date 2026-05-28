@@ -46,7 +46,7 @@ QtObject {
     property real fontDefaultScale: 1.0
   }
 
-  // qmllint disable unresolved-type
+
   property FileView _file: FileView {
     path: root.configDir + "/settings.json"
     printErrors: false
@@ -68,5 +68,4 @@ QtObject {
       writeAdapter();
     }
   }
-  // qmllint enable unresolved-type
 }

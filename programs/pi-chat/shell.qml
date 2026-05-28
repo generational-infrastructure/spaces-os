@@ -20,7 +20,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 
-// qmllint disable uncreatable-type
+
 PanelWindow {
   id: shell
 

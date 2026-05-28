@@ -34,7 +34,7 @@ Item {
   Process {
     id: cleanup
     command: ["rm", "-f", "--", root.sockPath]
-    onExited: root._ready = true // qmllint disable signal-handler-parameters
+    onExited: root._ready = true
   }
   Component.onCompleted: cleanup.running = true
 

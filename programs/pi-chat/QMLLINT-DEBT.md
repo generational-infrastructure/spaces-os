@@ -1,55 +1,28 @@
 # qmllint debt
 
 `checks/pi-chat-qmllint` runs `qmllint --max-warnings 0` over every QML
-file in this tree, so any warning is a build failure. A handful of
-warnings can't be fixed from this side; we suppress them per-line with
-`// qmllint disable <category>` markers and explain each one below.
+file in this tree, so any warning is a build failure.
 
-If you add a new `qmllint disable`, you **MUST** add a matching entry
-here. CI does not enforce this — the reviewer does.
+There is no per-file suppression left in this tree. Three upstream
+`Quickshell` qmltypes gaps that used to require `// qmllint disable …`
+markers are now fixed by patching qmltypes in
+`checks/pi-chat-qmllint/patch-qmltypes.py`. The patches affect only
+qmllint — the runtime `pkgs.quickshell` plugin the panel loads is
+untouched. See the comment block in `checks/pi-chat-qmllint/default.nix`
+for the rationale per patch.
 
-## Suppressions
+If you hit a new qmllint warning and want to suppress it instead of
+fixing the source, add a per-line `// qmllint disable <category>`
+marker and document it here, including:
 
-### `uncreatable-type` — `PanelWindow`
-- `shell.qml:23`
+- file:line and category,
+- why fixing it in source isn't the right move,
+- if it's an upstream qmltypes bug: whether adding it to
+  `patch-qmltypes.py` is feasible (preferred over per-line markers).
 
-`Quickshell.PanelWindow` is created via the Wayland layer-shell at
-runtime, but its qmltypes proxy is registered as not-creatable so
-qmllint refuses to instantiate it. There is no user-side workaround;
-needs a quickshell upstream fix.
-
-### `unresolved-type` — `JsonAdapter.adapter` proxy
-- `Commons/Settings.qml:49`
-- `PiChatBackend.qml:45` (config JSON)
-- `PiChatBackend.qml:138` (sessions JSON)
-
-`Quickshell.Io.FileView.adapter` is typed as `FileViewAdapter` in the
-qmltypes, which qmllint treats as incomplete. The runtime relationship
-is fine — `FileView` accepts a `JsonAdapter` child unchanged. Same
-upstream-fix story.
-
-A side-effect of the proxy type being opaque: ids declared inside the
-adapter (e.g. `id: configAdapter`) aren't visible to bindings outside
-the FileView, so qmllint flags every outer access as `unqualified`.
-The workaround is the `readonly property alias _cfg: configAdapter` /
-`_sessions: sessionsAdapter` aliases in PiChatBackend.qml.
-
-### `signal-handler-parameters` — `QProcess::ExitStatus`, `QLocalSocketError`
-- `OpenUrlListener.qml:37`   (Process.onExited)
-- `Panel.qml:732`           (paste image Process.onExited)
-- `PiChatBackend.qml:378`   (skill subscriber Socket.onError)
-- `PiChatBackend.qml:402`   (skill one-shot Socket.onError)
-- `PiChatBackend.qml:639`   (one-shot Process.onExited)
-- `PiSession.qml:835`       (main pi Process.onExited)
-- `PiSession.qml:857`       (stop Process.onExited)
-- `PiSession.qml:866`       (memory-marker Process.onExited)
-- `PiSession.qml:874`       (image reader Process.onExited)
-- `SignalConfirm.qml:111`   (bridge Socket.onError)
-
-`Process.exited(int, QProcess::ExitStatus)` and `Socket.error(
-QLocalSocket::LocalSocketError)` reference Qt-side enum types whose
-qmltypes registration is missing from `Quickshell.Io` — qmllint
-demands the second parameter be a resolvable type even when the
-handler doesn't use it. Typed handler annotations (`code: int`, etc.)
-do not help; qmllint validates the *signal*'s declared type, not the
-slot signature.
+There is currently no source-level workaround in the tree beyond the
+`readonly property alias _cfg: configAdapter` / `_sessions:
+sessionsAdapter` lines in `PiChatBackend.qml`. Those are not really
+debt — they exist because ids declared inside a `JsonAdapter` aren't
+visible to bindings outside the enclosing `FileView`, which is a
+scope-visibility quirk separate from any qmltypes gap.

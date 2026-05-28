@@ -729,7 +729,7 @@ Item {
         `f="$XDG_RUNTIME_DIR/pi-chat-paste-$$"; ` +
         `wl-paste --type image > "$f" && printf %s "$f"`]
       stdout: StdioCollector { onStreamFinished: pasteImage.tmp = text }
-      onExited: code => { if (code === 0 && tmp) root.chat?.sendFile(tmp, true); tmp = ""; } // qmllint disable signal-handler-parameters
+      onExited: code => { if (code === 0 && tmp) root.chat?.sendFile(tmp, true); tmp = ""; }
     }
 
     NText {

@@ -832,7 +832,7 @@ QtObject {
     Process {
       stdout: SplitParser { onRead: line => session._onLine(line) }
       stderr: SplitParser { onRead: line => Logger.w("PiSession", session.sessionId, "stderr", line) }
-      onExited: code => { // qmllint disable signal-handler-parameters
+      onExited: code => {
         session.streaming = false;
         session.typing = false;
         session._streamingId = "";
@@ -854,7 +854,7 @@ QtObject {
 
   readonly property Component _stopComponent: Component {
     Process {
-      onExited: _ => { // qmllint disable signal-handler-parameters
+      onExited: _ => {
         session._stopProcess = null;
       }
     }
@@ -863,7 +863,7 @@ QtObject {
   // Short-lived process for `touch`/`rm -f` of the memory-off marker.
   // Self-destructs on exit so we don't accumulate one per toggle.
   readonly property Component _markerComponent: Component {
-    Process { onExited: _ => destroy(2000) } // qmllint disable signal-handler-parameters
+    Process { onExited: _ => destroy(2000) }
   }
 
   readonly property Component _imageReaderComponent: Component {
@@ -871,7 +871,7 @@ QtObject {
       property string _imagePath: ""
       property string _staged: ""
       stdout: StdioCollector { onStreamFinished: _staged = text }
-      onExited: code => { // qmllint disable signal-handler-parameters
+      onExited: code => {
         if (code === 0 && _staged) {
           const nl = _staged.indexOf("\n");
           const mt = nl > 0 ? _staged.slice(0, nl).trim() : "application/octet-stream";

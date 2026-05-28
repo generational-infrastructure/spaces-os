@@ -42,7 +42,7 @@ Item {
     id: configFile
     path: "/etc/distro/pi-chat.json"
     printErrors: false
-    JsonAdapter { // qmllint disable unresolved-type
+    JsonAdapter {
       id: configAdapter
       property string llmUrl: "http://127.0.0.1:8012"
       property string defaultModel: "gemma4:e4b"
@@ -135,7 +135,7 @@ Item {
     id: sessionsFile
     path: root.sessionsIndexPath
     printErrors: false
-    JsonAdapter { // qmllint disable unresolved-type
+    JsonAdapter {
       id: sessionsAdapter
       property int version: 1
       property var sessions: []
@@ -369,7 +369,7 @@ Item {
         root._retractAllPendingPrompts();
       }
     }
-    onError: e => { // qmllint disable signal-handler-parameters
+    onError: e => {
       Logger.w("PiChat", "skill-config subscribe", e);
       skillReconnect.start();
     }
@@ -396,7 +396,7 @@ Item {
         write(JSON.stringify(payload) + "\n");
         flush();
       }
-      onError: e => Logger.w("PiChat", "skill-config one-shot", e) // qmllint disable signal-handler-parameters
+      onError: e => Logger.w("PiChat", "skill-config one-shot", e)
       parser: SplitParser { onRead: () => {} }
     }
   }
@@ -637,6 +637,6 @@ Item {
   // ── helper components ──
 
   readonly property Component _oneShotProcess: Component {
-    Process { onExited: _ => destroy(2000) } // qmllint disable signal-handler-parameters
+    Process { onExited: _ => destroy(2000) }
   }
 }
