@@ -42,12 +42,17 @@ Item {
   }
 
 
-  // SmartPanel.qml sizes by contentPreferred{Width,Height} — without
-  // these it falls back to its 900px default, ignoring implicitHeight.
-  property real contentPreferredWidth: 1000
-  property real contentPreferredHeight: 800
-  implicitWidth: contentPreferredWidth
-  implicitHeight: contentPreferredHeight
+  // No implicitWidth/implicitHeight on purpose. shell.qml's
+  // PanelWindow requests the wayland-surface size via its own
+  // `implicitWidth: 480`, and QQuickWindow uses its contentItem's
+  // implicit size as the window's implicit. Anything we advertise
+  // here would propagate up and replace the shell's value, sizing
+  // the surface to whatever we put (the noctalia SmartPanel host
+  // used to read a 1000 px `contentPreferredWidth` from us — that
+  // value reaching the standalone window made the panel render
+  // wider than the screen, clipping the header and bubbles off the
+  // right edge). The shell sets the width; we fill it via
+  // anchors.fill at our call site.
 
   // Relative-time formatter for the tiny timestamp under each bubble.
   // Absolute times would be noise for a chat that's mostly "just now".
