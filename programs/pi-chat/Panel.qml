@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Window
 import QtQuick.Controls
@@ -19,7 +20,7 @@ Item {
 
   // Daemon pushes this in the status event — single source of truth is
   // the hm-module's displayName option, not a separate plugin setting.
-  readonly property string peerName: chat?.peerName || tr("panel.default-peer-name")
+  readonly property string peerName: root.chat?.peerName || tr("panel.default-peer-name")
 
   // UI-only "hide thinking bubbles" toggle. Persisted in our own
   // settings.json (Commons.Settings) so it survives across launches.
@@ -34,7 +35,7 @@ Item {
   // Look up a message by id to render the quoted snippet above a
   // threaded reply. Linear scan is fine — maxHistory caps it at ~200.
   function findMsg(id) {
-    const arr = chat?.messages || [];
+    const arr = root.chat?.messages || [];
     for (let i = arr.length - 1; i >= 0; i--)
       if (arr[i].id === id) return arr[i];
     return null;
@@ -108,26 +109,28 @@ Item {
           model: sessionTabsHost.sessions
 
           delegate: Rectangle {
-            readonly property bool isActive: modelData.id === sessionTabsHost.active
-            readonly property int unread: modelData.unread || 0
+            id: tabDelegate
+            required property var modelData
+            readonly property bool isActive: tabDelegate.modelData.id === sessionTabsHost.active
+            readonly property int unread: tabDelegate.modelData.unread || 0
             height: ListView.view.height
             width: tabLabel.implicitWidth + Style.marginM * 2
             radius: Style.radiusS
-            color: isActive ? Color.mPrimary : Color.mSurfaceVariant
-            border.width: isActive ? 0 : 1
+            color: tabDelegate.isActive ? Color.mPrimary : Color.mSurfaceVariant
+            border.width: tabDelegate.isActive ? 0 : 1
             border.color: Color.mOutline
             TapHandler {
-              onTapped: root.backend?.selectSession?.(modelData.id)
-              onLongPressed: root.backend?.removeSession?.(modelData.id)
+              onTapped: root.backend?.selectSession?.(tabDelegate.modelData.id)
+              onLongPressed: root.backend?.removeSession?.(tabDelegate.modelData.id)
             }
             HoverHandler { cursorShape: Qt.PointingHandCursor }
             NText {
               id: tabLabel
               anchors.centerIn: parent
-              text: (modelData.name || "chat") + (unread > 0 ? "  •" : "")
-              color: parent.isActive ? Color.mOnPrimary : Color.mOnSurface
+              text: (tabDelegate.modelData.name || "chat") + (tabDelegate.unread > 0 ? "  •" : "")
+              color: tabDelegate.isActive ? Color.mOnPrimary : Color.mOnSurface
               pointSize: Style.fontSizeS
-              font.bold: parent.isActive
+              font.bold: tabDelegate.isActive
             }
           }
         }
@@ -153,9 +156,9 @@ Item {
           font.bold: true
         }
         NText {
-          text: (chat !== null && chat.typing)
+          text: (root.chat !== null && root.chat.typing)
             ? "thinking…"
-            : chat?.streaming
+            : root.chat?.streaming
               ? "ready"
               : root.tr("panel.status-offline")
           pointSize: Style.fontSizeXS
@@ -177,16 +180,16 @@ Item {
         // NComboBox expects [{key, name}]. We use "<provider>/<id>" as the
         // stable key and name for now — pi doesn't expose a separate display
         // name for models, just provider+id.
-        model: (chat?.models ?? []).map(m => ({
+        model: (root.chat?.models ?? []).map(m => ({
           key: m.provider + "/" + m.id,
           name: m.id + (m.reasoning ? "  ⚡" : ""),
           provider: m.provider,
           modelId: m.id,
         }))
-        currentKey: chat?.activeModel ?? ""
+        currentKey: root.chat?.activeModel ?? ""
         onSelected: key => {
-          const item = (chat?.models ?? []).find(m => (m.provider + "/" + m.id) === key);
-          if (item) chat.setModel(item.provider, item.id);
+          const item = (root.chat?.models ?? []).find(m => (m.provider + "/" + m.id) === key);
+          if (item) root.chat.setModel(item.provider, item.id);
         }
       }
       NIconButton {
@@ -210,15 +213,15 @@ Item {
       // the bool; the backend persists, writes the marker file the
       // pi extension reads, and reflects back through chat.memoryEnabled.
       NIconButton {
-        icon: (chat?.memoryEnabled ?? true) ? "brain" : "database-off"
-        tooltipText: (chat?.memoryEnabled ?? true)
+        icon: (root.chat?.memoryEnabled ?? true) ? "brain" : "database-off"
+        tooltipText: (root.chat?.memoryEnabled ?? true)
           ? root.tr("panel.memory-on-tooltip")
           : root.tr("panel.memory-off-tooltip")
         baseSize: Style.baseWidgetSize * 0.9
         onClicked: {
           const id = root.backend?.activeSessionId;
           if (!id) return;
-          root.backend.setSessionMemoryEnabled(id, !(chat?.memoryEnabled ?? true));
+          root.backend.setSessionMemoryEnabled(id, !(root.chat?.memoryEnabled ?? true));
         }
       }
       // Wipe every stored memory item across all sessions. Destructive
@@ -241,14 +244,14 @@ Item {
         // local clear keeps the panel from flashing stale bubbles
         // while pi sets up the new session.
         onClicked: {
-          if (!chat) return;
-          chat.restart();
+          if (!root.chat) return;
+          root.chat.restart();
         }
       }
       Rectangle {
         id: relayDot
         implicitWidth: 8; implicitHeight: 8; radius: 4
-        color: chat?.streaming ? Color.mTertiary : Color.mError
+        color: root.chat?.streaming ? Color.mTertiary : Color.mError
       }
     }
 
@@ -364,7 +367,7 @@ Item {
     // that false positive (one extra line until the user sends anything)
     // is lower than the cost of silently appending to a hidden history.
     NText {
-      visible: chat?.streaming && (chat?.messages?.length ?? 0) === 0
+      visible: root.chat?.streaming && (root.chat?.messages?.length ?? 0) === 0
       Layout.fillWidth: true
       text: root.tr("panel.context-hint")
       color: Color.mOnSurfaceVariant
@@ -397,6 +400,8 @@ Item {
         Repeater {
           model: signalConfirmBanner.items
           delegate: RowLayout {
+            id: signalDelegate
+            required property var modelData
             Layout.fillWidth: true
             spacing: Style.marginS
             ColumnLayout {
@@ -404,14 +409,14 @@ Item {
               spacing: 0
               NText {
                 Layout.fillWidth: true
-                text: root.tr("panel.signal-pending-prefix", { to: (modelData.display_name || modelData.recipient || "?") })
+                text: root.tr("panel.signal-pending-prefix", { to: (signalDelegate.modelData.display_name || signalDelegate.modelData.recipient || "?") })
                 pointSize: Style.fontSizeS
                 font.bold: true
                 wrapMode: Text.Wrap
               }
               NText {
                 Layout.fillWidth: true
-                text: modelData.body || ""
+                text: signalDelegate.modelData.body || ""
                 pointSize: Style.fontSizeXS
                 wrapMode: Text.Wrap
                 maximumLineCount: 4
@@ -420,11 +425,11 @@ Item {
             }
             NButton {
               text: root.tr("panel.signal-approve")
-              onClicked: root.chat?.signalApprove(modelData.token)
+              onClicked: root.chat?.signalApprove(signalDelegate.modelData.token)
             }
             NButton {
               text: root.tr("panel.signal-deny")
-              onClicked: root.chat?.signalDeny(modelData.token)
+              onClicked: root.chat?.signalDeny(signalDelegate.modelData.token)
             }
           }
         }
@@ -446,7 +451,7 @@ Item {
       // without any positionViewAtEnd() gymnastics. Scrolling up
       // increases contentY into history as usual.
       verticalLayoutDirection: ListView.BottomToTop
-      model: MsgFilter.visible(chat?.messages ?? [], root.showThinking).slice().reverse()
+      model: MsgFilter.visible(root.chat?.messages ?? [], root.showThinking).slice().reverse()
       clip: true
       // "Near bottom" = within two bubble-heights of contentY 0.
       readonly property bool atBottom: contentY < Style.baseWidgetSize * 2
@@ -472,18 +477,18 @@ Item {
         tr: root.tr
 
         onReplyRequested: {
-          chat.replyTarget = { id: modelData.id, text: modelData.text };
+          root.chat.replyTarget = { id: modelData.id, text: modelData.text };
           input.forceActiveFocus();
         }
         onJumpToQuote: {
           const i = history.model.findIndex(m => m.id === modelData.replyTo);
           if (i >= 0) history.positionViewAtIndex(i, ListView.Center);
         }
-        onRetryRequested:  chat.retry(modelData.id)
-        onCancelRequested: chat.cancel(modelData.id)
-        onConfirmRequested: confirmed => chat.confirmRespond(modelData.id, confirmed)
-        onPromptSubmit: value => chat.promptRespond(modelData.id, value)
-        onPromptCancel: chat.promptCancel(modelData.id)
+        onRetryRequested:  root.chat.retry(modelData.id)
+        onCancelRequested: root.chat.cancel(modelData.id)
+        onConfirmRequested: confirmed => root.chat.confirmRespond(modelData.id, confirmed)
+        onPromptSubmit: value => root.chat.promptRespond(modelData.id, value)
+        onPromptCancel: root.chat.promptCancel(modelData.id)
       }
 
       // BottomToTop keeps contentY stable on append, so the only
@@ -543,7 +548,7 @@ Item {
     // Reply context bar — shown when a bubble was tapped. Cleared on
     // send (Main.qml) or by the × here.
     Rectangle {
-      visible: (chat?.replyTarget ?? null) !== null
+      visible: (root.chat?.replyTarget ?? null) !== null
       Layout.fillWidth: true
       implicitHeight: replyRow.implicitHeight + Style.marginS * 2
       radius: Style.radiusS
@@ -556,7 +561,7 @@ Item {
         NIcon { icon: "corner-down-right"; color: Color.mPrimary }
         NText {
           Layout.fillWidth: true
-          text: Txt.snippet(chat?.replyTarget?.text ?? "", 80)
+          text: Txt.snippet(root.chat?.replyTarget?.text ?? "", 80)
           elide: Text.ElideRight
           pointSize: Style.fontSizeS
           color: Color.mOnSurfaceVariant
@@ -564,7 +569,7 @@ Item {
         NIconButton {
           icon: "x"
           baseSize: Style.baseWidgetSize * 0.7
-          onClicked: chat.replyTarget = null
+          onClicked: root.chat.replyTarget = null
         }
       }
     }
@@ -595,10 +600,10 @@ Item {
         function forceActiveFocus() { inputArea.forceActiveFocus(); }
 
         onAccepted: {
-          if (!chat) return;
+          if (!root.chat) return;
           // Send regardless of streaming state — the daemon's outbox
           // queues it and retries when relays come back.
-          chat.send(inputArea.text);
+          root.chat.send(inputArea.text);
           inputArea.clear();
         }
 
@@ -615,7 +620,7 @@ Item {
           ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
           TextArea {
             id: inputArea
-            placeholderText: chat?.streaming ? root.tr("panel.compose-placeholder", { name: root.peerName }) : root.tr("panel.compose-waiting")
+            placeholderText: root.chat?.streaming ? root.tr("panel.compose-placeholder", { name: root.peerName }) : root.tr("panel.compose-waiting")
             placeholderTextColor: Qt.alpha(Color.mOnSurfaceVariant, 0.6)
             color: Color.mOnSurface
             wrapMode: TextEdit.Wrap
@@ -629,7 +634,7 @@ Item {
             font.pointSize: Style.fontSizeS * Style.uiScaleRatio
 
             // Esc clears the reply target without reaching for the ×.
-            Keys.onEscapePressed: if (chat?.replyTarget) chat.replyTarget = null
+            Keys.onEscapePressed: if (root.chat?.replyTarget) root.chat.replyTarget = null
 
             // Ctrl+V: if the clipboard holds an image, dump it to
             // $XDG_RUNTIME_DIR and hand the path to the daemon with
@@ -714,7 +719,7 @@ Item {
       selectionMode: "files"
       nameFilters: ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp"]
       initialPath: Quickshell.env("HOME") + "/Pictures"
-      onAccepted: paths => { if (paths.length > 0) chat?.sendFile(paths[0]); }
+      onAccepted: paths => { if (paths.length > 0) root.chat?.sendFile(paths[0]); }
     }
 
     Process {
@@ -724,24 +729,24 @@ Item {
         `f="$XDG_RUNTIME_DIR/pi-chat-paste-$$"; ` +
         `wl-paste --type image > "$f" && printf %s "$f"`]
       stdout: StdioCollector { onStreamFinished: pasteImage.tmp = text }
-      onExited: (code) => { if (code === 0 && tmp) chat?.sendFile(tmp, true); tmp = ""; }
+      onExited: code => { if (code === 0 && tmp) root.chat?.sendFile(tmp, true); tmp = ""; } // qmllint disable signal-handler-parameters
     }
 
     // Drag-and-drop from file managers. Most offer text/uri-list; take
     // the first local file and let the daemon reject non-images.
     DropArea {
       parent: root  // cover the whole panel, not just this layout slot
-      anchors.fill: parent
+      anchors.fill: parent // qmllint disable Quick.layout-positioning
       onDropped: d => {
         if (!d.hasUrls) return;
         const u = d.urls[0].toString();
-        if (u.startsWith("file://")) chat?.sendFile(decodeURIComponent(u.slice(7)));
+        if (u.startsWith("file://")) root.chat?.sendFile(decodeURIComponent(u.slice(7)));
       }
     }
 
     NText {
-      visible: (chat?.lastError ?? "") !== ""
-      text: chat?.lastError ?? ""
+      visible: (root.chat?.lastError ?? "") !== ""
+      text: root.chat?.lastError ?? ""
       color: Color.mError
       pointSize: Style.fontSizeS
       Layout.fillWidth: true
@@ -768,7 +773,7 @@ Item {
   // Loader has `active: isPanelOpen`), so Component.onCompleted is the
   // open hook.
   Component.onCompleted: {
-    chat?.listModels();
+    root.chat?.listModels();
     if (history) { history.contentY = 0; history.returnToBounds(); }
   }
 

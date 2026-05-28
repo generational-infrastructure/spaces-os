@@ -4,8 +4,8 @@
 // Mirrors noctalia's NButton API for the props the plugin sets:
 // `text`, `icon` (optional leading icon name), `onClicked`,
 // `enabled`. Visual: pill-shaped with primary background.
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
 import qs.Commons
 
 Item {

@@ -10,9 +10,9 @@
 //
 // Implementation wraps QtQuick Controls ComboBox and maintains the
 // key↔index mapping ourselves so callers stay in key space.
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 import qs.Commons
 
 ComboBox {
@@ -70,14 +70,21 @@ ComboBox {
   }
 
   delegate: ItemDelegate {
+    id: delegateItem
+    required property var modelData
+    required property int index
     width: root.width
     contentItem: NText {
-      text: modelData && modelData.name ? modelData.name : (modelData && modelData.key ? modelData.key : String(modelData))
+      text: delegateItem.modelData && delegateItem.modelData.name
+        ? delegateItem.modelData.name
+        : (delegateItem.modelData && delegateItem.modelData.key
+          ? delegateItem.modelData.key
+          : String(delegateItem.modelData))
       pointSize: Style.fontSizeS
-      color: root.highlightedIndex === index ? Color.mOnPrimary : Color.mOnSurface
+      color: root.highlightedIndex === delegateItem.index ? Color.mOnPrimary : Color.mOnSurface
     }
     background: Rectangle {
-      color: root.highlightedIndex === index ? Color.mPrimary : "transparent"
+      color: root.highlightedIndex === delegateItem.index ? Color.mPrimary : "transparent"
     }
   }
 

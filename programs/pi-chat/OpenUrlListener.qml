@@ -12,8 +12,8 @@
 // The unit-test harness overrides `openUrlSink` to capture URLs
 // without launching a real browser. Production wiring leaves the
 // default `Qt.openUrlExternally`.
+pragma ComponentBehavior: Bound
 import QtQuick
-import Quickshell
 import Quickshell.Io
 import qs.Commons
 
@@ -34,7 +34,7 @@ Item {
   Process {
     id: cleanup
     command: ["rm", "-f", "--", root.sockPath]
-    onExited: root._ready = true
+    onExited: root._ready = true // qmllint disable signal-handler-parameters
   }
   Component.onCompleted: cleanup.running = true
 

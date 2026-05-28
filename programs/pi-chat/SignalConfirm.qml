@@ -16,8 +16,8 @@
 // reachable from outside the sandbox, so only the panel can
 // instantiate this. The CLI inside the sandbox uses the disjoint
 // enqueue socket and has no way to mint approvals.
+pragma ComponentBehavior: Bound
 import QtQuick
-import Quickshell
 import Quickshell.Io
 
 QtObject {
@@ -96,8 +96,8 @@ QtObject {
         parser: SplitParser { onRead: line => root._onLine(line) }
         onConnectionStateChanged: {
           if (connected) {
-            _reconnectTimer.stop();
-            _reconnectTimer.interval = 500;
+            root._reconnectTimer.stop();
+            root._reconnectTimer.interval = 500;
             write(JSON.stringify({ op: "subscribe" }) + "\n");
             flush();
           } else {
@@ -105,10 +105,10 @@ QtObject {
             // panel doesn't render stale approval cards against a
             // bridge that may have restarted with fresh tokens.
             root.pending = [];
-            _reconnectTimer.start();
+            root._reconnectTimer.start();
           }
         }
-        onError: (e) => _reconnectTimer.start()
+        onError: _e => root._reconnectTimer.start() // qmllint disable signal-handler-parameters
       }
     }
   }
@@ -116,8 +116,8 @@ QtObject {
   property var _reconnectTimer: Timer {
     interval: 500
     onTriggered: {
-      _socket.active = false;
-      _socket.active = true;
+      root._socket.active = false;
+      root._socket.active = true;
       // Cap backoff at 4s — bridge restarts via systemd within ~3s.
       interval = Math.min(interval * 2, 4000);
     }

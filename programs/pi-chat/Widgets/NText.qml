@@ -6,8 +6,8 @@
 //
 // Defaults pulled from Style/Color so most call sites can pass just
 // `text:`.
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Layouts
 import qs.Commons
 
 Text {

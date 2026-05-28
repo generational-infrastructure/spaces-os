@@ -40,6 +40,13 @@ QtObject {
     (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config"))
     + "/pi-chat"
 
+  component UiPrefs : JsonObject {
+    property string fontDefault: "Inter"
+    property string fontFixed: "JetBrains Mono"
+    property real fontDefaultScale: 1.0
+  }
+
+  // qmllint disable unresolved-type
   property FileView _file: FileView {
     path: root.configDir + "/settings.json"
     printErrors: false
@@ -53,13 +60,7 @@ QtObject {
       property bool showThinking: true
 
       // UI preferences (previously in noctalia's Settings.data.ui).
-      // JsonObject is the JsonAdapter-aware analogue of QtObject —
-      // its nested properties round-trip through writeAdapter().
-      property JsonObject ui: JsonObject {
-        property string fontDefault: "Inter"
-        property string fontFixed: "JetBrains Mono"
-        property real fontDefaultScale: 1.0
-      }
+      property UiPrefs ui: UiPrefs {}
     }
     onLoadFailed: () => {
       // First launch: file doesn't exist; write defaults so the
@@ -67,4 +68,5 @@ QtObject {
       writeAdapter();
     }
   }
+  // qmllint enable unresolved-type
 }

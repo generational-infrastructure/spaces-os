@@ -8,6 +8,7 @@
 //
 // Skill-config prompts come through a separate persistent subscriber
 // socket — same NDJSON protocol the skill-config daemon publishes.
+pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -41,7 +42,7 @@ Item {
     id: configFile
     path: "/etc/distro/pi-chat.json"
     printErrors: false
-    JsonAdapter {
+    JsonAdapter { // qmllint disable unresolved-type
       id: configAdapter
       property string llmUrl: "http://127.0.0.1:8012"
       property string defaultModel: "gemma4:e4b"
@@ -67,30 +68,32 @@ Item {
     }
   }
 
+  readonly property alias _cfg: configAdapter
+
   readonly property string homeDir: String(Quickshell.env("HOME"))
   readonly property string runtimeDir: String(Quickshell.env("XDG_RUNTIME_DIR"))
   readonly property string stateDir: homeDir + "/.local/state/distro/pi"
   readonly property string piAgentDir: stateDir + "/pi-agent"
   readonly property string workspacesDir: homeDir + "/.local/share/distro/workspaces"
   readonly property string sessionsIndexPath: stateDir + "/sessions.json"
-  readonly property string piBin: configAdapter.piBin
-  readonly property string llmUrl: configAdapter.llmUrl
-  readonly property string memoryHigh: configAdapter.memoryHigh
-  readonly property bool openrouterEnabled: configAdapter.openrouterEnabled
+  readonly property string piBin: root._cfg.piBin
+  readonly property string llmUrl: root._cfg.llmUrl
+  readonly property string memoryHigh: root._cfg.memoryHigh
+  readonly property bool openrouterEnabled: root._cfg.openrouterEnabled
   // memoryDbDir is composed against $HOME; memoryHfHome is consumed
   // as-is because it points at a /nix/store path that's already
   // accessible inside the sandbox without an extra BindPath. Empty
   // strings stay empty so PiSession's sandbox setup skips wiring
   // anything when the module hasn't populated the JSON.
-  readonly property string memoryDbDir: configAdapter.memoryDbDir
-    ? homeDir + "/" + String(configAdapter.memoryDbDir).replace(/^\/+/, "")
+  readonly property string memoryDbDir: root._cfg.memoryDbDir
+    ? homeDir + "/" + String(root._cfg.memoryDbDir).replace(/^\/+/, "")
     : ""
-  readonly property string memoryHfHome: configAdapter.memoryHfHome
-  readonly property var sandboxBinds: configAdapter.sandboxBinds || []
+  readonly property string memoryHfHome: root._cfg.memoryHfHome
+  readonly property var sandboxBinds: root._cfg.sandboxBinds || []
   readonly property int idleTimeoutMin: {
     const c = cfg("idleTimeoutMinutes");
     if (typeof c === "number" && c > 0) return c;
-    return configAdapter.idleTimeoutMinutes > 0 ? configAdapter.idleTimeoutMinutes : 10;
+    return root._cfg.idleTimeoutMinutes > 0 ? root._cfg.idleTimeoutMinutes : 10;
   }
   readonly property string skillConfigSockPath: runtimeDir + "/distro-skill-config.sock"
   readonly property string openUrlSockPath: runtimeDir + "/distro-pi-open-url.sock"
@@ -132,7 +135,7 @@ Item {
     id: sessionsFile
     path: root.sessionsIndexPath
     printErrors: false
-    JsonAdapter {
+    JsonAdapter { // qmllint disable unresolved-type
       id: sessionsAdapter
       property int version: 1
       property var sessions: []
@@ -140,12 +143,13 @@ Item {
     }
     onLoaded: root._loadFromAdapter()
   }
+  readonly property alias _sessions: sessionsAdapter
 
   function _loadFromAdapter() {
-    const raw = sessionsAdapter.sessions || [];
+    const raw = root._sessions.sessions || [];
     if (Array.isArray(raw) && raw.length > 0) {
       sessionsList = raw.slice();
-      activeSessionId = sessionsAdapter.activeSessionId || raw[0].id;
+      activeSessionId = root._sessions.activeSessionId || raw[0].id;
     } else {
       // Bootstrap: auto-create one default session so the panel has
       // something to render on first run.
@@ -158,9 +162,9 @@ Item {
   }
 
   function _persist() {
-    sessionsAdapter.version = 1;
-    sessionsAdapter.sessions = sessionsList;
-    sessionsAdapter.activeSessionId = activeSessionId;
+    root._sessions.version = 1;
+    root._sessions.sessions = sessionsList;
+    root._sessions.activeSessionId = activeSessionId;
     sessionsFile.writeAdapter();
   }
 
@@ -169,7 +173,7 @@ Item {
     // for filesystem-name + key uniqueness here.
     const t = Date.now().toString(36);
     const r = Math.floor(Math.random() * 0x10000000).toString(36).padStart(8, "0");
-    return (t + r).slice(0, 21);
+    return String(t + r).slice(0, 21);
   }
 
   function _freshSessionEntry(id, name) {
@@ -352,7 +356,7 @@ Item {
   Loader {
     id: skillSock
     sourceComponent: skillSockComponent
-    readonly property bool connected: item?.connected ?? false
+    readonly property bool connected: item?.connected ?? false // qmllint disable missing-property
   }
   Component {
     id: skillSockComponent
@@ -371,7 +375,7 @@ Item {
           root._retractAllPendingPrompts();
         }
       }
-      onError: (e) => {
+      onError: e => { // qmllint disable signal-handler-parameters
         Logger.w("PiChat", "skill-config subscribe", e);
         skillReconnect.start();
       }
@@ -395,7 +399,7 @@ Item {
         write(JSON.stringify(payload) + "\n");
         flush();
       }
-      onError: (e) => Logger.w("PiChat", "skill-config one-shot", e)
+      onError: e => Logger.w("PiChat", "skill-config one-shot", e) // qmllint disable signal-handler-parameters
       parser: SplitParser { onRead: () => {} }
     }
   }
@@ -560,8 +564,8 @@ Item {
           sandboxBinds: Qt.binding(() => root.sandboxBinds),
         });
         const idCaptured = s.id;
-        obj.needsPersist.connect(() => root._persist());
-        obj.incomingNotification.connect((t) => root._notify(idCaptured, t));
+        obj.needsPersist.connect(() => root._persist()); // qmllint disable missing-property
+        obj.incomingNotification.connect((t) => root._notify(idCaptured, t)); // qmllint disable missing-property
         _registerSession(obj);
       } else {
         if (obj.sessionName !== s.name) obj.sessionName = s.name;
@@ -632,6 +636,6 @@ Item {
   // ── helper components ──
 
   readonly property Component _oneShotProcess: Component {
-    Process { onExited: _ => destroy(2000) }
+    Process { onExited: _ => destroy(2000) } // qmllint disable signal-handler-parameters
   }
 }

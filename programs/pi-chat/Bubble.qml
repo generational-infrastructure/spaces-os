@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -40,15 +41,15 @@ Item {
   signal promptSubmit(string value)
   signal promptCancel
 
-  readonly property bool mine: msg.from === "me"
-  readonly property bool isNotification: (msg.type ?? "") === "notification"
-  readonly property bool isConfirm: (msg.type ?? "") === "confirm"
-  readonly property bool isPrompt: (msg.type ?? "") === "prompt"
-  readonly property bool isThinking: (msg.type ?? "") === "thinking"
+  readonly property bool mine: row.msg.from === "me"
+  readonly property bool isNotification: (row.msg.type ?? "") === "notification"
+  readonly property bool isConfirm: (row.msg.type ?? "") === "confirm"
+  readonly property bool isPrompt: (row.msg.type ?? "") === "prompt"
+  readonly property bool isThinking: (row.msg.type ?? "") === "thinking"
   // Match locally — O(1) and can't drift from Panel's hit list since
   // it's the same predicate.
   readonly property bool searchHit:
-    searchQuery !== "" && (msg.text || "").toLowerCase().includes(searchQuery)
+    searchQuery !== "" && (row.msg.text || "").toLowerCase().includes(searchQuery)
 
   implicitHeight: row.isConfirm ? confirmCard.implicitHeight
                                 : row.isPrompt ? promptCard.implicitHeight
@@ -77,13 +78,13 @@ Item {
   // alignment itself reads as "who said this" without an avatar.
   Rectangle {
     id: bubble
-    anchors.left:  row.isNotification ? undefined : (row.mine ? undefined : parent.left)
+    anchors.left:  row.isNotification ? undefined : (row.mine ? undefined : parent.left) // qmllint disable Quick.anchor-combinations
     anchors.right: row.isNotification ? undefined : (row.mine ? parent.right : undefined)
     anchors.horizontalCenter: row.isNotification ? parent.horizontalCenter : undefined
     visible: !row.isNotification && !row.isConfirm && !row.isPrompt && !row.isThinking
     // Image/quote/streaming bubbles snap to the cap; plain text shrinks
     // to fit so short replies don't stretch edge-to-edge.
-    width: ((msg.image ?? "") !== "" || (msg.replyTo ?? "") !== "" || (msg.state ?? "") === "streaming")
+    width: ((row.msg.image ?? "") !== "" || (row.msg.replyTo ?? "") !== "" || (row.msg.state ?? "") === "streaming")
       ? row.width * 0.85
       : Math.min(msgText.implicitWidth + Style.marginM * 2, row.width * 0.85)
     implicitHeight: col.implicitHeight + Style.marginM * 2
@@ -95,7 +96,7 @@ Item {
       : Color.mOutline
     // Dim only while the outbox still owns it. Once a relay has the
     // wrap it's out of our hands — ✓ covers the rest.
-    opacity: (row.mine && msg.state === row.pendingState) ? 0.7 : 1.0
+    opacity: (row.mine && row.msg.state === row.pendingState) ? 0.7 : 1.0
     Behavior on opacity { NumberAnimation { duration: 150 } }
 
     HoverHandler { id: hov }
@@ -109,7 +110,7 @@ Item {
       // Quoted snippet for threaded replies. Panel resolves the text;
       // we just render.
       Rectangle {
-        visible: (msg.replyTo ?? "") !== ""
+        visible: (row.msg.replyTo ?? "") !== ""
         Layout.fillWidth: true
         implicitHeight: quote.implicitHeight + Style.marginXS * 2
         radius: Style.radiusXS
@@ -136,12 +137,12 @@ Item {
       // the local path. QML Image won't load a bare path — needs the
       // file:// scheme.
       Image {
-        visible: (msg.image ?? "") !== ""
+        visible: (row.msg.image ?? "") !== ""
         Layout.fillWidth: true
         Layout.preferredHeight: visible
           ? Math.min(implicitHeight * (width / Math.max(implicitWidth, 1)), 240)
           : 0
-        source: msg.image ? "file://" + msg.image : ""
+        source: row.msg.image ? "file://" + row.msg.image : ""
         fillMode: Image.PreserveAspectFit
         asynchronous: true
         cache: true
@@ -149,7 +150,7 @@ Item {
         // reading a screenshot.
         TapHandler {
           grabPermissions: PointerHandler.TakeOverForbidden
-          onTapped: Quickshell.execDetached(["xdg-open", msg.image])
+          onTapped: Quickshell.execDetached(["xdg-open", row.msg.image])
         }
         HoverHandler { cursorShape: Qt.PointingHandCursor }
       }
@@ -161,9 +162,9 @@ Item {
           row.mine ? Color.mOnPrimary : Color.mSecondary
         text: Txt.colorizeLinks(
           row.searchHit
-            ? Txt.highlight(msg.text, row.searchQuery,
+            ? Txt.highlight(row.msg.text, row.searchQuery,
                             Color.mTertiary, Color.mOnTertiary)
-            : msg.text,
+            : row.msg.text,
           linkColor)
         wrapMode: Text.Wrap
         textFormat: Text.MarkdownText
@@ -188,7 +189,7 @@ Item {
         Layout.alignment: row.mine ? Qt.AlignRight : Qt.AlignLeft
         spacing: Style.marginXS
         NText {
-          text: row.ago(msg.ts)
+          text: row.ago(row.msg.ts)
           pointSize: Style.fontSizeM
           color: row.mine
             ? Qt.alpha(Color.mOnPrimary, 0.6)
@@ -199,18 +200,18 @@ Item {
         NText {
           visible: row.mine
           text: {
-            if ((msg.tries ?? 0) > 0) return "⚠";
-            if (msg.state === row.pendingState) return "🕓";
-            const a = msg.ack ?? "";
+            if ((row.msg.tries ?? 0) > 0) return "⚠";
+            if (row.msg.state === row.pendingState) return "🕓";
+            const a = row.msg.ack ?? "";
             if (a === "") return "✓";
             return (a === "+" || a === "✓") ? "✓✓" : a;
           }
           pointSize: Style.fontSizeL
-          color: (msg.tries ?? 0) > 0
+          color: (row.msg.tries ?? 0) > 0
             ? Color.mError
             : Qt.alpha(Color.mOnPrimary, 0.8)
           TapHandler {
-            enabled: (msg.tries ?? 0) > 0
+            enabled: (row.msg.tries ?? 0) > 0
             onTapped: row.retryRequested()
             onLongPressed: row.cancelRequested()
           }
@@ -225,7 +226,7 @@ Item {
     visible: row.isNotification
     anchors.horizontalCenter: parent.horizontalCenter
     width: parent.width * 0.85
-    text: msg.text
+    text: row.msg.text
     horizontalAlignment: Text.AlignHCenter
     wrapMode: Text.Wrap
     pointSize: Style.fontSizeM
@@ -239,7 +240,7 @@ Item {
     visible: row.isThinking
     anchors.left: parent.left
     width: parent.width * 0.85
-    text: (msg.text || "") !== "" ? msg.text : "thinking…"
+    text: (row.msg.text || "") !== "" ? row.msg.text : "thinking…"
     wrapMode: Text.Wrap
     pointSize: Style.fontSizeS
     font.italic: true
@@ -260,7 +261,7 @@ Item {
     color: Color.mSurfaceVariant
     border.width: 1
     border.color: {
-      const s = msg.confirmState ?? "pending";
+      const s = row.msg.confirmState ?? "pending";
       if (s === "allowed") return Color.mTertiary;
       if (s === "denied")  return Color.mError;
       return Color.mPrimary;
@@ -271,7 +272,7 @@ Item {
       anchors.margins: Style.marginM
       spacing: Style.marginXS
       NText {
-        text: msg.confirmTitle ?? row.tr("bubble.confirm-default-title")
+        text: row.msg.confirmTitle ?? row.tr("bubble.confirm-default-title")
         pointSize: Style.fontSizeM
         font.bold: true
         color: Color.mOnSurface
@@ -280,7 +281,7 @@ Item {
       // not a paragraph. Selectable so the user can copy before deciding.
       TextEdit {
         Layout.fillWidth: true
-        text: msg.text
+        text: row.msg.text
         readOnly: true
         selectByMouse: true
         wrapMode: Text.Wrap
@@ -291,7 +292,7 @@ Item {
       RowLayout {
         Layout.alignment: Qt.AlignRight
         spacing: Style.marginS
-        visible: (msg.confirmState ?? "pending") === "pending"
+        visible: (row.msg.confirmState ?? "pending") === "pending"
         Button {
           text: row.tr("bubble.confirm-deny")
           onClicked: row.confirmRequested(false)
@@ -304,11 +305,11 @@ Item {
       }
       NText {
         Layout.alignment: Qt.AlignRight
-        visible: (msg.confirmState ?? "pending") !== "pending"
-        text: (msg.confirmState === "allowed")
+        visible: (row.msg.confirmState ?? "pending") !== "pending"
+        text: (row.msg.confirmState === "allowed")
           ? row.tr("bubble.confirm-allowed")
           : row.tr("bubble.confirm-denied")
-        color: (msg.confirmState === "allowed") ? Color.mTertiary : Color.mError
+        color: (row.msg.confirmState === "allowed") ? Color.mTertiary : Color.mError
         pointSize: Style.fontSizeS
         font.bold: true
       }
@@ -331,13 +332,13 @@ Item {
     color: Color.mSurfaceVariant
     border.width: 1
     border.color: {
-      const s = msg.promptState ?? "pending";
+      const s = row.msg.promptState ?? "pending";
       if (s === "submitted") return Color.mTertiary;
       if (s === "cancelled") return Color.mError;
       if (s === "retracted") return Color.mOutline;
       return Color.mPrimary;
     }
-    readonly property bool pending: (msg.promptState ?? "pending") === "pending"
+    readonly property bool pending: (row.msg.promptState ?? "pending") === "pending"
     ColumnLayout {
       id: promptCol
       anchors.fill: parent
@@ -347,7 +348,7 @@ Item {
         Layout.fillWidth: true
         spacing: Style.marginS
         NIcon {
-          icon: msg.promptSecret ? "key" : "edit"
+          icon: row.msg.promptSecret ? "key" : "edit"
           pointSize: Style.fontSizeL
           color: Color.mPrimary
         }
@@ -355,14 +356,14 @@ Item {
           Layout.fillWidth: true
           spacing: 0
           NText {
-            text: msg.promptInstance ? ("session-" + msg.promptInstance) : ""
+            text: row.msg.promptInstance ? ("session-" + row.msg.promptInstance) : ""
             pointSize: Style.fontSizeXS
             color: Color.mOnSurfaceVariant
           }
           NText {
-            text: (msg.promptSkill || "") + " · "
-              + (msg.promptProfile || "") + " · "
-              + (msg.promptField || "")
+            text: (row.msg.promptSkill || "") + " · "
+              + (row.msg.promptProfile || "") + " · "
+              + (row.msg.promptField || "")
             pointSize: Style.fontSizeM
             font.bold: true
             color: Color.mOnSurface
@@ -372,8 +373,8 @@ Item {
       // Description: markdown so SKILL.md formatting survives.
       NText {
         Layout.fillWidth: true
-        visible: (msg.text || "") !== ""
-        text: msg.text
+        visible: (row.msg.text || "") !== ""
+        text: row.msg.text
         wrapMode: Text.Wrap
         markdownTextEnabled: true
         color: Color.mOnSurfaceVariant
@@ -386,8 +387,8 @@ Item {
         id: promptInput
         Layout.fillWidth: true
         visible: promptCard.pending
-        echoMode: msg.promptSecret ? TextInput.Password : TextInput.Normal
-        placeholderText: msg.promptSecret
+        echoMode: row.msg.promptSecret ? TextInput.Password : TextInput.Normal
+        placeholderText: row.msg.promptSecret
           ? row.tr("bubble.prompt-placeholder-secret")
           : row.tr("bubble.prompt-placeholder")
         Keys.onReturnPressed: e => {
@@ -418,14 +419,14 @@ Item {
         Layout.alignment: Qt.AlignRight
         visible: !promptCard.pending
         text: {
-          const s = msg.promptState ?? "";
+          const s = row.msg.promptState ?? "";
           if (s === "submitted") return row.tr("bubble.prompt-submitted");
           if (s === "cancelled") return row.tr("bubble.prompt-cancelled");
           if (s === "retracted") return row.tr("bubble.prompt-retracted");
           return "";
         }
         color: {
-          const s = msg.promptState ?? "";
+          const s = row.msg.promptState ?? "";
           if (s === "submitted") return Color.mTertiary;
           if (s === "cancelled") return Color.mError;
           return Color.mOnSurfaceVariant;
