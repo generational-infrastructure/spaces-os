@@ -1,12 +1,13 @@
-// Vertically-scrolling list with a styled scrollbar. Used by the
-// panel's session tab strip.
+// Vertically-scrolling list. Used by the panel's session tab strip
+// and the chat history pane.
 //
 // Inherits everything from QtQuick ListView so call sites pass model,
 // delegate, spacing, etc., directly. The wrapper only attaches a
-// ScrollBar so the look matches the rest of the chat surface.
+// hidden vertical ScrollBar — wheel and drag still scroll, the bar
+// just never paints; the chat panel is narrow enough that even a 4 px
+// indicator stole real estate next to each bubble.
 import QtQuick
 import QtQuick.Controls
-import qs.Commons
 
 ListView {
   id: root
@@ -23,18 +24,14 @@ ListView {
   clip: true
   boundsBehavior: Flickable.StopAtBounds
 
+  // Hidden: the chat panel is narrow (~480 px) and even a 4 px bar
+  // eats real estate next to each bubble. Wheel and drag still work
+  // because Flickable doesn't need a visible scrollbar to scroll.
   ScrollBar.vertical: ScrollBar {
     parent: root
     anchors.top: root.top
     anchors.bottom: root.bottom
     anchors.right: root.right
-    policy: ScrollBar.AsNeeded
-
-    contentItem: Rectangle {
-      implicitWidth: 4
-      radius: 2
-      color: Color.mOnSurfaceVariant
-      opacity: 0.5
-    }
+    policy: ScrollBar.AlwaysOff
   }
 }
