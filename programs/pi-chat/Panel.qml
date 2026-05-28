@@ -165,8 +165,12 @@ Item {
       // Model selector. PiChatBackend exposes the llama-swap-discovered list.
       NComboBox {
         id: modelCombo
+        // fillWidth so the combo absorbs whatever space is left after
+        // the icon / status block / icon-button row. Hard-coding a
+        // 420px minimum used to push siblings off the 480px panel.
+        Layout.fillWidth: true
         Layout.alignment: Qt.AlignVCenter
-        minimumWidth: 420
+        Layout.minimumWidth: 0
         popupHeight: 420
         baseSize: 0.85
         tooltip: root.tr("panel.models-tooltip")
