@@ -1,28 +1,24 @@
-# Distro module bundle.
-#
-# Single import that pulls in every NixOS module this distro provides:
-# the standalone pi-chat Quickshell panel + its pi --mode rpc backend,
-# the llama-swap LLM-serving module, signal-cli for the signal skill,
-# voxtype for the voice-to-text button, the niri compositor, and VM
-# debug + nix tooling.
-#
-# Configures greetd to auto-login into niri by default. Override
-# `services.greetd` in your host config to customise.
-#
-# Users who want the noctalia desktop shell can run it themselves —
-# distro no longer bundles it. The pi-chat panel coexists with any
-# Wayland shell; layer-shell compositors only (no GNOME — see
-# modules/nixos/pi-chat/default.nix for the constraint).
+# Distro module bundle: every NixOS module the distro ships, plus a
+# greetd auto-login into niri.
 { inputs, ... }:
 { config, lib, ... }:
 {
   imports = [
+    # AI chat Quickshell panel + pi --mode rpc backend
     inputs.self.nixosModules.pi-chat
+    # local LLM server with bundled GGUF models
     inputs.self.nixosModules.llama-swap
+    # signal-cli daemon + bridge for the signal skill
     inputs.self.nixosModules.signal-cli
+    # push-to-talk voice-to-text (Mod+S)
     inputs.self.nixosModules.voxtype
+    # noctalia status bar (vanilla, no plugin)
+    inputs.self.nixosModules.noctalia
+    # niri scrollable-tiling Wayland compositor
     inputs.self.nixosModules.niri
+    # QEMU display/audio/clipboard/SSH for nix build .#test-vm
     inputs.self.nixosModules.vm-debug
+    # nix daemon settings (flakes, experimental features)
     inputs.self.nixosModules.nix
   ];
 

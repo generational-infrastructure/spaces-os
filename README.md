@@ -38,10 +38,7 @@ avoid building dependencies from source.
 
 ### 1. Full desktop
 
-Import `nixosModules.distro` for the complete experience: niri
-compositor, pi-chat Quickshell panel, AI agent, local LLM server. The
-module enables the AI agent and greetd auto-login into niri by
-default.
+Import `nixosModules.distro` for the complete experience: niri compositor, noctalia bar, pi-chat Quickshell panel, AI agent, local LLM server. The module enables the AI agent and greetd auto-login into niri by default.
 
 ```nix
 # flake.nix

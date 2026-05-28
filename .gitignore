@@ -19,3 +19,6 @@ __pycache__/
 # from inside a git/jj repo (see get_or_create_project_id). Ignore it
 # so debugging memory state from this checkout doesn't dirty the tree.
 .sediment/
+
+# agent-vm workdir (qcow2 + qmp.sock)
+.agent-vm/
