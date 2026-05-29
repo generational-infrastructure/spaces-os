@@ -90,13 +90,14 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     shutil.copy2(
         os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
     )
-    # Stage the real Commons so the test exercises the actual Color/
-    # Style/Settings singletons the panel ships.
-    shutil.copytree(
-        os.path.join(plugin_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
+    # Stage the real Commons + Widgets + icons so the test exercises the
+    # actual Color/Style/Settings singletons and NIcon the panel ships.
+    for sub in ("Commons", "Widgets", "icons"):
+        shutil.copytree(
+            os.path.join(plugin_dir, sub),
+            os.path.join(shell_root, sub),
+            dirs_exist_ok=True,
+        )
     now = time.time()
     for root, _dirs, files in os.walk(shell_root):
         for f in files:
@@ -116,8 +117,10 @@ def write_colors(noctalia_dir: str, scheme: dict) -> None:
     os.replace(tmp, path)
 
 
-def ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:color", *args]
+def ipc_call(
+    qs_bin: str, shell_qml: str, env: dict, *args: str, target: str = "test:color"
+) -> str:
+    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", target, *args]
     out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
     if out.returncode != 0:
         raise RuntimeError(
@@ -230,7 +233,40 @@ def main():
                 f"want {SCHEME_DARK['mSurface']!r}) — no live theme reload"
             )
 
-        sys.stderr.write("PASS: panel palette tracks noctalia colors.json\n")
+        # (3) NIcon must bake `color` into the SVG markup it paints.
+        # Tabler icons stroke with `currentColor`; a MultiEffect tint is
+        # luminance-weighted and collapses a black stroke to black for
+        # every colour, so the panel's icons would silently stop tracking
+        # the theme (invisible on a dark hover bg).
+        if not wait_until(
+            lambda: (
+                ipc_call(qs_bin, shell_qml, env, "ready", target="test:icon") == "true"
+            ),
+            timeout_s=5,
+        ):
+            die("NIcon never produced a recoloured source")
+
+        def icon_baked(hex_: str) -> bool:
+            ipc_call(qs_bin, shell_qml, env, "setColor", hex_, target="test:icon")
+
+            def baked():
+                m = ipc_call(qs_bin, shell_qml, env, "markup", target="test:icon")
+                return hex_ in m and "currentColor" not in m
+
+            return wait_until(baked, timeout_s=5)
+
+        for hx in ("#ff00ff", "#00ff00"):
+            if not icon_baked(hx):
+                m = ipc_call(qs_bin, shell_qml, env, "markup", target="test:icon")
+                die(
+                    f"NIcon did not bake {hx} into its SVG (markup={m[:120]!r}) "
+                    "— icon recolour is not wired to `color`"
+                )
+
+        sys.stderr.write(
+            "PASS: panel palette tracks noctalia colors.json; "
+            "NIcon bakes theme colour into its SVG\n"
+        )
     finally:
         qs_proc.terminate()
         try:

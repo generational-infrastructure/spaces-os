@@ -7,10 +7,10 @@
 //
 // API surface matches noctalia's NIcon enough that call sites port
 // unchanged: `icon` (name without .svg), `pointSize` (treated as
-// visual size in px), `color` (recolors the SVG via ColorOverlay).
+// visual size in px), `color` (recolours the stroke).
 import QtQuick
-import QtQuick.Effects
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 
 Item {
@@ -32,28 +32,46 @@ Item {
   implicitHeight: renderSize
   visible: icon !== ""
 
-  // Greyscale SVG source — Tabler outline icons are pure-stroke SVGs
-  // with currentColor stroke; rendering at full width/height with the
-  // sourceSize equal to the visual size gives crisp output at any DPI.
+  // Raw SVG markup for the current icon, refreshed on `icon` change.
+  property string _svg: ""
+
+  // "#rrggbb" for the SVG stroke. Tabler icons stroke with
+  // `currentColor`; QML has no way to feed an SVG a current colour, so
+  // we substitute it in the markup below.
+  function _hex(c) {
+    return "#" + [c.r, c.g, c.b].map(v => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
+  }
+
+  // The recoloured SVG the icon paints, as a data URI. Exposed (readonly)
+  // so the live colour bake is observable to tests and debugging.
+  //
+  // We recolour by baking the stroke into the SVG markup rather than
+  // tinting with MultiEffect.colorization: that blend is luminance-
+  // weighted (output ≈ colorizationColor × source luminance), and Tabler
+  // strokes render pure black (luminance ≈ 0), so the tint collapsed to
+  // black for every colour — even on hardware GL. Black reads fine on a
+  // light surface but vanishes on the dark hover background. Qt's raster
+  // SVG renderer honours the baked colour and repaints live when `color`
+  // changes.
+  readonly property string imageSource: _svg === "" ? "" : ("data:image/svg+xml;utf8," + encodeURIComponent(_svg.replace(/currentColor/g, _hex(color))))
+
+  FileView {
+    id: svgFile
+    path: root.icon === "" ? "" : (Quickshell.shellDir + "/icons/" + root.icon + ".svg")
+    printErrors: false
+    onLoaded: root._svg = text()
+    // FileView 0.3.0 does not read on construction; prime it once and
+    // reload whenever the icon name (and thus the path) changes.
+    onPathChanged: { root._svg = ""; if (path !== "") reload(); }
+    Component.onCompleted: reload()
+  }
+
   Image {
-    id: src
     anchors.fill: parent
-    source: root.icon === "" ? "" : ("file://" + Quickshell.shellDir + "/icons/" + root.icon + ".svg")
     sourceSize.width: root.renderSize
     sourceSize.height: root.renderSize
     fillMode: Image.PreserveAspectFit
-    visible: false
     asynchronous: true
-  }
-
-  // Recolour the SVG. SVGs from tabler use `currentColor` strokes
-  // (rendered as black by default); MultiEffect's `colorization`
-  // tints the entire visible content to `colorizationColor`.
-  MultiEffect {
-    anchors.fill: src
-    source: src
-    colorization: 1.0
-    colorizationColor: root.color
-    visible: src.status === Image.Ready
+    source: root.imageSource
   }
 }
