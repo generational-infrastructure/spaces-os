@@ -49,6 +49,12 @@ Read the resulting PNG back with the `read` tool to actually
 see what changed. Rebuild and `agent-vm run` again after edits —
 the qcow2 is throwaway.
 
+Save artifacts under `.agent-vm/` — QEMU is sandboxed out of `/tmp`.
+
+When screenshotting new UI, check text-vs-background contrast in
+every state (hover especially): foregrounds **MUST** use the matching
+`mOn…` palette entry (e.g. `Color.mOnHover` on `Color.mHover`).
+
 ## Translations
 
 The chat panel's user-visible strings live in
