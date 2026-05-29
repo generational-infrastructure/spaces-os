@@ -33,9 +33,11 @@ pkgs.runCommand "niri-distro-binds-test" { inherit niriConfig; } ''
   grep -qE 'Mod\+Shift\+N .*"restart" "noctalia-shell\.service"' "$niriConfig" \
     || fail "Mod+Shift+N must restart noctalia-shell.service"
 
-  # Mod+Shift+A reloads the pi-chat agent panel.
-  grep -qE 'Mod\+Shift\+A .*"restart" "pi-chat\.service"' "$niriConfig" \
-    || fail "Mod+Shift+A must restart pi-chat.service"
+  # Mod+Shift+A reloads the pi-chat agent: daemon-reload to pick up a
+  # rebuild's new unit defs, then restart (its ExecStartPre re-materializes
+  # the QML) so the latest build actually lands.
+  grep -qE 'Mod\+Shift\+A .*daemon-reload.*restart.*pi-chat\.service' "$niriConfig" \
+    || fail "Mod+Shift+A must daemon-reload and restart pi-chat.service"
 
   # Regression guard: the noctalia chord must not be the pi-chat one.
   if grep -qE 'Mod\+Shift\+N .*"pi-chat\.service"' "$niriConfig"; then

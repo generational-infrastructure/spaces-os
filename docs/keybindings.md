@@ -16,7 +16,7 @@ Added in [`modules/nixos/niri.nix`](../modules/nixos/niri.nix).
 | `Mod+L` | Lock the screen (swaylock) |
 | `Ctrl+Alt+L` | Lock the screen (swaylock) — same as `Mod+L`, works with any modKey |
 | `Mod+Shift+N` | Restart `noctalia-shell.service` (reload the bar after rebuild without a logout) |
-| `Mod+Shift+A` | Restart `pi-chat.service` (reload the agent panel after rebuild without a logout) |
+| `Mod+Shift+A` | Reload the pi-chat agent: re-materialize the panel's QML and restart it, picking up the latest rebuild without a logout |
 
 `Mod+L` overrides the upstream `focus-column-right` binding. The same
 action is still available on `Mod+Right`.

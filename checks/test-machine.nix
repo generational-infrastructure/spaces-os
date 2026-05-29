@@ -20,9 +20,9 @@
 #   - greetd starts and opens a PAM session for the test user
 #   - the user manager (user@1000.service) comes up
 #   - niri.service activates and exposes a Wayland socket
-#   - distro-pi-chat-sync materializes the shell into
-#     ~/.config/quickshell/pi-chat with fresh mtimes
-#   - pi-chat.service starts under graphical-session.target
+#   - pi-chat.service materializes the shell into
+#     ~/.config/quickshell/pi-chat with fresh mtimes (ExecStartPre) and
+#     starts under graphical-session.target
 #   - the IpcHandler target `pi-chat` is registered with the running
 #     quickshell instance and answers `listSessions` / `send` / …
 #   - the test user can send a message through the shell IPC and the
@@ -197,7 +197,7 @@ else
               machine.wait_for_file("/run/user/${uid}/wayland-1", timeout=30)
 
           with subtest("shell config materialized with fresh mtimes"):
-              # The pi-chat module's distro-pi-chat-sync.service copies
+              # The pi-chat module's pi-chat.service ExecStartPre copies
               # programs/pi-chat into ~/.config/quickshell/pi-chat with
               # current mtimes so Qt's qmlcache invalidates on rebuild.
               # Assert both the copy exists and shell.qml has a current

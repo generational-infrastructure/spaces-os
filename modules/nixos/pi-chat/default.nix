@@ -21,8 +21,7 @@
 #   /run/distro-secrets/openrouter-api-key     (when openrouter.enable = true; user-readable)
 #
 # User systemd units:
-#   distro-pi-chat-sync.service                (materialize shell config with fresh mtimes)
-#   pi-chat.service                            (runs `quickshell -c pi-chat`)
+#   pi-chat.service                            (materializes shell config, then runs `quickshell -c pi-chat`)
 #   distro-skill-config-daemon.service         (skill-config IPC, $XDG_RUNTIME_DIR/distro-skill-config.sock)
 #   distro-notify-forward.service              (D-Bus notifications -> pi-chat shell IPC)
 #   distro-location-update.service + timer     (geoclue -> $XDG_RUNTIME_DIR/distro/location.json)
@@ -58,6 +57,19 @@ let
 
   shellDir = ../../../programs/pi-chat;
   shellName = "pi-chat";
+
+  # Materialize the chat shell into ~/.config/quickshell/pi-chat with
+  # fresh mtimes (Qt qmlcache invalidation — see pi-chat.service).
+  materializeShell = pkgs.writeShellScript "pi-chat-materialize" ''
+    set -eu
+    src=${shellDir}
+    dst="$HOME/.config/quickshell/${shellName}"
+    mkdir -p "$(dirname "$dst")"
+    rm -rf "$dst"
+    # cp without -p leaves mtimes at the current time.
+    cp -rT "$src" "$dst"
+    chmod -R u+w "$dst"
+  '';
 
   # State paths use systemd tmpfiles' %h/%t substitutions when written
   # via systemd.user.tmpfiles. For module-internal use we keep the
@@ -614,56 +626,28 @@ in
 
     # ── User services ────────────────────────────────────────────────
 
-    # Materialize the chat shell into ~/.config/quickshell/pi-chat/
-    # with CURRENT mtimes. Symlinking the source tree from /nix/store
-    # would be simpler, but Qt's qmlcache keys compiled bytecode by
-    # (absolute path, source mtime). Every file under /nix/store has
-    # mtime = 1970-01-01, so on each rebuild Qt thinks its cached
-    # bytecode is still fresh and silently keeps the OLD QML (missing
-    # newly-added IpcHandler functions, etc.). Copying with fresh
-    # mtimes invalidates the cache on every rebuild.
-    systemd.user.services.distro-pi-chat-sync = {
-      description = "Materialize pi-chat shell with fresh mtimes (Qt qmlcache invalidation)";
-      wantedBy = [ "default.target" ];
-      # Must finish before pi-chat.service spawns quickshell — it
-      # would otherwise race against the cp -rT and load a half-
-      # materialised config dir.
-      before = [
-        "graphical-session-pre.target"
-        "pi-chat.service"
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-      };
-      script = ''
-        set -eu
-        src=${shellDir}
-        dst="$HOME/.config/quickshell/${shellName}"
-        mkdir -p "$(dirname "$dst")"
-        rm -rf "$dst"
-        # cp without -p leaves mtimes at the current time.
-        cp -rT "$src" "$dst"
-        chmod -R u+w "$dst"
-      '';
-    };
-
-    # The standalone chat panel itself. Layer-shell surface anchored
-    # to the right edge, hidden by default, summoned via
+    # The standalone chat panel. Layer-shell surface anchored to the
+    # right edge, hidden by default, summoned via
     #   quickshell ipc -c ${shellName} call ${shellName} toggle
     # (wire a compositor keybind for global summon). Long-running
     # service — the IpcHandler only answers while quickshell is up.
+    #
+    # ExecStartPre materializes the QML with fresh mtimes: Qt's qmlcache
+    # keys bytecode by (absolute path, source mtime), and every
+    # /nix/store file has mtime 1970, so a store symlink would let Qt
+    # keep stale bytecode across rebuilds. Copying on every (re)start
+    # invalidates the cache, so a plain `systemctl --user restart
+    # pi-chat.service` always picks up the latest build — that's the
+    # Mod+Shift+A reload, and the autostart fallback below routes
+    # through here too.
     systemd.user.services.pi-chat = {
       description = "pi-chat Quickshell panel";
       partOf = [ "graphical-session.target" ];
-      after = [
-        "graphical-session.target"
-        "distro-pi-chat-sync.service"
-      ];
-      requires = [ "distro-pi-chat-sync.service" ];
+      after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
       restartTriggers = [ shellDir ];
       serviceConfig = {
+        ExecStartPre = "${materializeShell}";
         ExecStart = "${pkgs.quickshell}/bin/quickshell -c ${shellName}";
         Restart = "on-failure";
         RestartSec = 3;
@@ -776,16 +760,16 @@ in
 
     # XDG autostart entry, for compositors that don't follow the
     # systemd-managed graphical-session path (e.g. user runs niri via
-    # an exec wrapper instead of niri-session). The systemd unit
-    # remains the canonical autostart vector; the .desktop entry is
-    # a belt-and-braces fallback so users on bespoke setups still
-    # get the panel started at login.
+    # an exec wrapper instead of niri-session). It starts the systemd
+    # unit rather than launching quickshell directly, so the panel still
+    # goes through pi-chat.service's materialize ExecStartPre. The unit
+    # is the canonical vector; this is a belt-and-braces fallback.
     environment.etc."xdg/autostart/pi-chat.desktop".text = ''
       [Desktop Entry]
       Type=Application
       Name=pi-chat
       Comment=Standalone Quickshell chat panel for the distro AI agent
-      Exec=${pkgs.quickshell}/bin/quickshell -c ${shellName}
+      Exec=${pkgs.systemd}/bin/systemctl --user start pi-chat.service
       X-GNOME-Autostart-enabled=true
       OnlyShowIn=niri;sway;Hyprland;river;KDE;
     '';
