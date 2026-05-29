@@ -52,7 +52,13 @@ QtObject {
     path: root.noctaliaConfigDir + "/colors.json"
     printErrors: false
     watchChanges: true
+    // FileView 0.3.0 does not read its file on construction — setPath only
+    // arms the watcher. Without an explicit prime the adapter keeps its
+    // defaults (Noctalia-default dark), so the panel only *looked* themed
+    // under a dark scheme and never tracked a light/dark switch. Prime it
+    // once the adapter is wired up; the watcher handles changes after that.
     onFileChanged: reload()
+    Component.onCompleted: reload()
 
     // Defaults match Noctalia-default dark; a missing file or absent key
     // falls back here. Keys mirror noctalia's colors.json schema.
@@ -75,14 +81,5 @@ QtObject {
       property color mHover: "#9BFECE"
       property color mOnHover: "#0e0e43"
     }
-  }
-
-  // noctalia replaces colors.json atomically (rename), which the file
-  // watcher alone can miss; watch the dir too, exactly as noctalia does.
-  property FileView _colorsDir: FileView {
-    path: root.noctaliaConfigDir
-    printErrors: false
-    watchChanges: true
-    onFileChanged: root._colorsFile.reload()
   }
 }
