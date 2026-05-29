@@ -74,8 +74,10 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     return shell_root
 
 
-def ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:panel-width", *args]
+def ipc_call(
+    qs_bin: str, shell_qml: str, env: dict, *args: str, target: str = "test:panel-width"
+) -> str:
+    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", target, *args]
     out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
     if out.returncode != 0:
         raise RuntimeError(
@@ -137,10 +139,14 @@ def main():
                 text=True,
                 timeout=5,
             )
-            return r.returncode == 0 and "test:panel-width" in r.stdout
+            return (
+                r.returncode == 0
+                and "test:panel-width" in r.stdout
+                and "test:signal-banner" in r.stdout
+            )
 
         if not wait_until(ipc_ready, timeout_s=20):
-            die("quickshell never bound the test:panel-width IPC target")
+            die("quickshell never bound the test IPC targets")
 
         # Sanity: the window honoured shell.qml's implicitWidth of 480.
         # If this drifts the rest of the assertions become meaningless.
@@ -185,6 +191,32 @@ def main():
         sys.stderr.write(
             f"PASS: panel implicitWidth={implicit:.0f} width={laid:.0f} (both <= 480)\n"
         )
+
+        # THE REGRESSION: the pending-Signal approval banner is owned by
+        # PiChatBackend (signalPendingSends), not by the active session.
+        # When the banner binds to `chat` (= backend.chat) instead of
+        # `backend`, the cards never render and the user can't approve a
+        # send the agent enqueued. The stub backend in shell.qml exposes
+        # exactly one pending send off the backend; the banner must see it.
+        count = ipc_call(
+            qs_bin, shell_qml, env, "bannerCount", target="test:signal-banner"
+        )
+        if count == "no-banner":
+            die("signal banner Rectangle not found in the Panel tree")
+        if count != "1":
+            die(
+                f"signal banner items={count}, expected 1 — banner not reading "
+                "backend.signalPendingSends"
+            )
+        visible = ipc_call(
+            qs_bin, shell_qml, env, "bannerVisible", target="test:signal-banner"
+        )
+        if visible != "true":
+            die(
+                f"signal banner visible={visible!r}, expected 'true' — "
+                "pending send enqueued but no approval card shown"
+            )
+        sys.stderr.write("PASS: signal banner renders backend pending sends\n")
     finally:
         qs_proc.terminate()
         try:

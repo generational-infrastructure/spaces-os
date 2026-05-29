@@ -388,7 +388,8 @@ Item {
     // while looking at the chat.
     Rectangle {
       id: signalConfirmBanner
-      readonly property var items: (root.chat?.signalPendingSends) || []
+      objectName: "signalConfirmBanner"
+      readonly property var items: (root.backend?.signalPendingSends) || []
       Layout.fillWidth: true
       visible: items.length > 0
       implicitHeight: visible ? signalConfirmCol.implicitHeight + Style.marginS * 2 : 0
@@ -430,11 +431,11 @@ Item {
             }
             NButton {
               text: root.tr("panel.signal-approve")
-              onClicked: root.chat?.signalApprove(signalDelegate.modelData.token)
+              onClicked: root.backend?.signalApprove(signalDelegate.modelData.token)
             }
             NButton {
               text: root.tr("panel.signal-deny")
-              onClicked: root.chat?.signalDeny(signalDelegate.modelData.token)
+              onClicked: root.backend?.signalDeny(signalDelegate.modelData.token)
             }
           }
         }
