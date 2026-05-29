@@ -15,8 +15,6 @@
     "reset-tooltip": "Redémarrer la conversation (effacer le contexte)",
     "voice-tooltip": "Saisie vocale",
     "voice-stop-tooltip": "Arrêter l'enregistrement (transcrire)",
-    "thinking-hide-tooltip": "Masquer le raisonnement dans le chat",
-    "thinking-show-tooltip": "Afficher le raisonnement dans le chat",
     "memory-on-tooltip": "Mémoire à long terme : ACTIVÉE (cliquer pour désactiver pour ce chat)",
     "memory-off-tooltip": "Mémoire à long terme : DÉSACTIVÉE (cliquer pour activer pour ce chat)",
     "memory-wipe-tooltip": "Effacer toute la mémoire à long terme",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "Annuler",
     "signal-pending-prefix": "Message Signal en attente pour {to} :",
     "signal-approve": "Envoyer",
-    "signal-deny": "Annuler"
+    "signal-deny": "Annuler",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "Répondre",

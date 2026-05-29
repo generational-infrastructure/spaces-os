@@ -95,6 +95,13 @@ QtObject {
   property var _stopProcess: null
   property string _streamingId: ""    // id of the bubble currently receiving deltas
   property string _thinkingId: ""    // id of the bubble currently receiving thinking deltas
+  // tps tracking: stamp on the first text_start of an assistant message;
+  // patched onto the last text bubble when the matching message_end with
+  // usage.output > 0 arrives. Reset on agent_end so the next turn starts
+  // fresh. Approximation when one assistant message produces multiple
+  // text bubbles — the tps gets attached to the final one only.
+  property real _assistantStartedAt: 0
+  property string _assistantLastTextBubbleId: ""
   property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
   // Request/response correlation. Each entry is { resolve, reject }; pi
@@ -506,6 +513,8 @@ QtObject {
       _finalizeStreaming();
       _existingSessionFlag = true;
       if (lastError) lastError = "";
+      _assistantStartedAt = 0;
+      _assistantLastTextBubbleId = "";
       break;
 
     // Lifecycle markers from pi >=0.70. The chat panel does not need
@@ -516,7 +525,10 @@ QtObject {
     case "turn_start":
     case "turn_end":
     case "message_start":
+      break;
+
     case "message_end":
+      _handleMessageEnd(ev);
       break;
 
     case "tool_execution_start":
@@ -578,6 +590,11 @@ QtObject {
         type: "",
       });
       typing = false;
+      // First text bubble of this assistant message starts the wall
+      // clock for the tps calculation; the last text bubble wins as
+      // the patch target when message_end arrives with usage.
+      if (_assistantStartedAt === 0) _assistantStartedAt = _now();
+      _assistantLastTextBubbleId = _streamingId;
     } else if (me.type === "text_delta") {
       if (!_streamingId) _handleMessageUpdate({ assistantMessageEvent: { type: "text_start" } });
       const arr = messages.slice();
@@ -653,6 +670,29 @@ QtObject {
       }
       _thinkingId = "";
     }
+  }
+
+  // Attach inference-speed (tokens/second) to the last text bubble of
+  // the assistant message that just ended. Pi forwards the full
+  // AgentMessage including provider usage on `message_end`; we use
+  // usage.output (output token count) over the wall clock since the
+  // first text_start. Skipped if usage is absent, output is zero, no
+  // bubble exists yet, or the elapsed clock is too small to be useful.
+  // The Panel renders this only when Settings.data.showInferenceSpeed
+  // is enabled, so unconditionally patching is safe.
+  function _handleMessageEnd(ev) {
+    const msg = ev.message;
+    if (!msg || msg.role !== "assistant") return;
+    const output = (msg.usage && msg.usage.output) || 0;
+    if (output <= 0) return;
+    if (!_assistantLastTextBubbleId || _assistantStartedAt === 0) return;
+    const elapsedMs = _now() - _assistantStartedAt;
+    if (elapsedMs < 50) return;
+    const tps = output / (elapsedMs / 1000);
+    patch(_assistantLastTextBubbleId, { tps: tps, outputTokens: output });
+    // Reset for the next assistant message in this turn (tool → text again).
+    _assistantStartedAt = 0;
+    _assistantLastTextBubbleId = "";
   }
 
   function _appendToolBubble(ev) {

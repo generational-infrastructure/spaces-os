@@ -203,17 +203,6 @@ Item {
         baseSize: Style.baseWidgetSize * 0.9
         onClicked: { searchBar.visible = !searchBar.visible; if (searchBar.visible) searchField.forceActiveFocus(); }
       }
-      NIconButton {
-        icon: root.showThinking ? "eye" : "eye-off"
-        tooltipText: root.showThinking
-          ? root.tr("panel.thinking-hide-tooltip")
-          : root.tr("panel.thinking-show-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        // Flip the persisted setting in-place. root.showThinking
-        // re-binds against Settings.data and the ListView's
-        // MsgFilter binding recomputes immediately.
-        onClicked: { Settings.data.showThinking = !Settings.data.showThinking; Settings.persist(); }
-      }
       // Per-session long-term-memory toggle. The active session owns
       // the bool; the backend persists, writes the marker file the
       // pi extension reads, and reflects back through chat.memoryEnabled.
@@ -252,6 +241,17 @@ Item {
           if (!root.chat) return;
           root.chat.restart();
         }
+      }
+      // Options menu — gathers UI display toggles that don't deserve
+      // their own header slot. Pinned to the right end of the header
+      // (just before the relay dot) so the dedicated per-session
+      // actions stay grouped on the left.
+      NIconButton {
+        id: optionsButton
+        icon: "dots-vertical"
+        tooltipText: root.tr("panel.options-tooltip")
+        baseSize: Style.baseWidgetSize * 0.9
+        onClicked: optionsPopup.visible ? optionsPopup.close() : optionsPopup.open()
       }
       Rectangle {
         id: relayDot
@@ -790,5 +790,103 @@ Item {
     sequences: [StandardKey.Find]
     enabled: root.visible
     onActivated: { searchBar.visible = true; searchField.forceActiveFocus(); }
+  }
+
+  // ── Options popup ──────────────────────────────────────────────────
+  // Floats above the header from under the dots-vertical button. Each
+  // row is a clickable strip that flips a Settings flag. Popup keeps
+  // the close-on-outside-click behaviour without us wiring it.
+  Popup {
+    id: optionsPopup
+    objectName: "optionsPopup"
+    // Anchor under the dots button. parent is `root`; map the button's
+    // position into root's coordinate space so the popup tracks even
+    // if the header layout reshuffles.
+    x: optionsButton ? optionsButton.mapToItem(root, 0, 0).x + optionsButton.width - implicitWidth : 0
+    y: optionsButton ? optionsButton.mapToItem(root, 0, 0).y + optionsButton.height + Style.marginXS : 0
+    padding: Style.marginXS
+    implicitWidth: 220
+    closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+
+    background: Rectangle {
+      color: Color.mSurfaceVariant
+      radius: Style.iRadiusM
+      border.color: Color.mOutline
+      border.width: Style.borderS
+    }
+
+    contentItem: ColumnLayout {
+      spacing: 0
+
+      Repeater {
+        model: [
+          {
+            key: "showThinking",
+            iconOn: "eye",
+            iconOff: "eye-off",
+            labelOn: "panel.options-thinking-hide",
+            labelOff: "panel.options-thinking-show",
+          },
+          {
+            key: "showInferenceSpeed",
+            iconOn: "gauge",
+            iconOff: "gauge",
+            labelOn: "panel.options-tps-hide",
+            labelOff: "panel.options-tps-show",
+          },
+        ]
+        delegate: Item {
+          id: optionRow
+          required property var modelData
+          readonly property bool on: Settings.data[optionRow.modelData.key] === true
+          Layout.fillWidth: true
+          implicitHeight: Style.baseWidgetSize
+
+          Rectangle {
+            anchors.fill: parent
+            color: optionTap.hovered ? Color.mHover : "transparent"
+            radius: Style.radiusS
+            Behavior on color {
+              ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
+            }
+          }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.marginS
+            anchors.rightMargin: Style.marginS
+            spacing: Style.marginS
+
+            NIcon {
+              icon: optionRow.on ? optionRow.modelData.iconOn : optionRow.modelData.iconOff
+              pointSize: Style.fontSizeL
+              color: optionTap.hovered
+                ? Color.mOnHover
+                : (optionRow.on ? Color.mPrimary : Color.mOnSurfaceVariant)
+            }
+            NText {
+              Layout.fillWidth: true
+              text: root.tr(optionRow.on ? optionRow.modelData.labelOn : optionRow.modelData.labelOff)
+              pointSize: Style.fontSizeS
+              color: optionTap.hovered ? Color.mOnHover : Color.mOnSurface
+              elide: Text.ElideRight
+            }
+            NText {
+              text: optionRow.on ? "✓" : ""
+              pointSize: Style.fontSizeS
+              color: optionTap.hovered ? Color.mOnHover : Color.mPrimary
+            }
+          }
+
+          HoverHandler { id: optionTap; cursorShape: Qt.PointingHandCursor }
+          TapHandler {
+            onTapped: {
+              Settings.data[optionRow.modelData.key] = !optionRow.on;
+              Settings.persist();
+            }
+          }
+        }
+      }
+    }
   }
 }

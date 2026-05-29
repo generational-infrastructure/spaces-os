@@ -213,6 +213,17 @@ Item {
             ? Qt.alpha(Color.mOnPrimary, 0.6)
             : Color.mOnSurfaceVariant
         }
+        // Inference-speed footer for assistant text bubbles when the
+        // user opted in via the Panel's options menu. Pi feeds tps
+        // onto the message via PiSession on message_end with usage.
+        NText {
+          visible: !row.mine
+            && Settings.data.showInferenceSpeed
+            && (row.msg.tps ?? 0) > 0
+          text: (row.msg.tps ?? 0).toFixed(1) + " t/s"
+          pointSize: Style.fontSizeM
+          color: Color.mOnSurfaceVariant
+        }
         // Delivery ladder: 🕓 pending → ✓ sent → ✓✓/emoji read.
         // ⚠ when retries pile up — tap to force, long-press to cancel.
         NText {

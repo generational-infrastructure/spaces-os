@@ -58,6 +58,7 @@ QtObject {
       property int idleTimeoutMinutes: 10
       property string memoryHigh: "4G"
       property bool showThinking: true
+      property bool showInferenceSpeed: false
 
       // UI preferences (previously in noctalia's Settings.data.ui).
       property UiPrefs ui: UiPrefs {}

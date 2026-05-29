@@ -15,8 +15,6 @@
     "reset-tooltip": "Unterhaltung neu starten (Kontext löschen)",
     "voice-tooltip": "Spracheingabe",
     "voice-stop-tooltip": "Aufnahme stoppen (transkribieren)",
-    "thinking-hide-tooltip": "Denkschritte im Chat ausblenden",
-    "thinking-show-tooltip": "Denkschritte im Chat anzeigen",
     "memory-on-tooltip": "Langzeitgedächtnis: AN (klicken zum Deaktivieren für diesen Chat)",
     "memory-off-tooltip": "Langzeitgedächtnis: AUS (klicken zum Aktivieren für diesen Chat)",
     "memory-wipe-tooltip": "Gesamtes Langzeitgedächtnis löschen",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "Abbrechen",
     "signal-pending-prefix": "Ausstehende Signal-Nachricht an {to}:",
     "signal-approve": "Senden",
-    "signal-deny": "Abbrechen"
+    "signal-deny": "Abbrechen",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "Antworten",

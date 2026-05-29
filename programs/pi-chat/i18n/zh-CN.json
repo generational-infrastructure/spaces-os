@@ -15,8 +15,6 @@
     "reset-tooltip": "重启对话（清除上下文）",
     "voice-tooltip": "语音输入",
     "voice-stop-tooltip": "停止录音（转写）",
-    "thinking-hide-tooltip": "在聊天中隐藏思考",
-    "thinking-show-tooltip": "在聊天中显示思考",
     "memory-on-tooltip": "长期记忆:已开启(点击为该对话关闭)",
     "memory-off-tooltip": "长期记忆:已关闭(点击为该对话开启)",
     "memory-wipe-tooltip": "清空所有长期记忆",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "取消",
     "signal-pending-prefix": "向 {to} 发送的 Signal 消息待批准:",
     "signal-approve": "发送",
-    "signal-deny": "取消"
+    "signal-deny": "取消",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "回复",

@@ -15,8 +15,6 @@
     "reset-tooltip": "会話を再開（コンテキストを消去）",
     "voice-tooltip": "音声入力",
     "voice-stop-tooltip": "録音を停止（文字起こし）",
-    "thinking-hide-tooltip": "チャットで思考を非表示",
-    "thinking-show-tooltip": "チャットで思考を表示",
     "memory-on-tooltip": "長期メモリ:ON(このチャットで無効化するにはクリック)",
     "memory-off-tooltip": "長期メモリ:OFF(このチャットで有効化するにはクリック)",
     "memory-wipe-tooltip": "長期メモリをすべて消去",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "キャンセル",
     "signal-pending-prefix": "{to} 宛の Signal 送信を承認待ち:",
     "signal-approve": "送信",
-    "signal-deny": "キャンセル"
+    "signal-deny": "キャンセル",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "返信",

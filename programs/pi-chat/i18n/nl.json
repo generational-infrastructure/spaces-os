@@ -15,8 +15,6 @@
     "reset-tooltip": "Gesprek herstarten (context wissen)",
     "voice-tooltip": "Spraakinvoer",
     "voice-stop-tooltip": "Opname stoppen (transcriberen)",
-    "thinking-hide-tooltip": "Denken verbergen in chat",
-    "thinking-show-tooltip": "Denken tonen in chat",
     "memory-on-tooltip": "Langetermijngeheugen: AAN (klik om uit te schakelen voor deze chat)",
     "memory-off-tooltip": "Langetermijngeheugen: UIT (klik om in te schakelen voor deze chat)",
     "memory-wipe-tooltip": "Alle langetermijngeheugen wissen",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "Annuleren",
     "signal-pending-prefix": "Wachtend Signal-bericht voor {to}:",
     "signal-approve": "Verzenden",
-    "signal-deny": "Annuleren"
+    "signal-deny": "Annuleren",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "Beantwoorden",

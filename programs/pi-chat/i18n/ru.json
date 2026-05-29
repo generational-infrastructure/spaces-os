@@ -15,8 +15,6 @@
     "reset-tooltip": "Перезапустить разговор (очистить контекст)",
     "voice-tooltip": "Голосовой ввод",
     "voice-stop-tooltip": "Остановить запись (транскрибировать)",
-    "thinking-hide-tooltip": "Скрыть размышления в чате",
-    "thinking-show-tooltip": "Показать размышления в чате",
     "memory-on-tooltip": "Долговременная память: ВКЛ (нажмите, чтобы отключить для этого чата)",
     "memory-off-tooltip": "Долговременная память: ВЫКЛ (нажмите, чтобы включить для этого чата)",
     "memory-wipe-tooltip": "Стереть всю долговременную память",
@@ -25,7 +23,12 @@
     "memory-wipe-no": "Отмена",
     "signal-pending-prefix": "Ожидающее сообщение Signal для {to}:",
     "signal-approve": "Отправить",
-    "signal-deny": "Отмена"
+    "signal-deny": "Отмена",
+    "options-tooltip": "Display options",
+    "options-thinking-hide": "Hide thinking in chat",
+    "options-thinking-show": "Show thinking in chat",
+    "options-tps-hide": "Hide inference speed",
+    "options-tps-show": "Show inference speed"
   },
   "bubble": {
     "reply-tooltip": "Ответить",
