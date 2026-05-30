@@ -32,7 +32,12 @@ PanelWindow {
     right: true
     bottom: true
   }
-  implicitWidth: 480
+  // Width follows the screen: the golden-ratio minor portion (1/phi^2 =
+  // 0.382), so the app left visible behind the panel gets the major 61.8%.
+  // screen.width is logical (post-HiDPI) pixels, so the proportion already
+  // adapts across resolutions; the clamp keeps it usable on small laptops
+  // and from sprawling on ultrawides.
+  implicitWidth: Math.round(Math.min(900, Math.max(440, screen.width * 0.382)))
   exclusiveZone: 0
   // Layer-shell layer choice: Top is enough for "above normal
   // windows, below screen-edge OSDs/lockscreens". Overlay would
