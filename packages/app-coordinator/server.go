@@ -43,7 +43,12 @@ func NewServer(manifestPath string) (*Server, error) {
 	for name, app := range m.Apps {
 		patterns := make([]*regexp.Regexp, 0, len(app.AllowedArgs))
 		for _, p := range app.AllowedArgs {
-			re, err := regexp.Compile(p)
+			// Anchor to a full-string match. allowedArgs is an allow-list
+			// gate, so an unanchored pattern like "--foo" must not pass an
+			// arg that merely *contains* it (e.g. "x--foo=evil"). Operators
+			// may still write their own ^…$; the \A…\z wrap is harmless on
+			// top of those.
+			re, err := regexp.Compile(`\A(?:` + p + `)\z`)
 			if err != nil {
 				return nil, fmt.Errorf("app %q: invalid allowedArgs regex %q: %w", name, p, err)
 			}

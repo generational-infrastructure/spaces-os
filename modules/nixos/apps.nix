@@ -151,12 +151,14 @@ let
             default) rejects any runtime arg — argv passthrough is
             opt-in per app.
 
-            Each runtime arg is checked against this list; the arg
-            is accepted if at least one pattern matches. Use anchors
-            (`^` / `$`) where you mean "exact"; unanchored regexes
-            allow surrounding text. Static `args` baked at module-
-            eval time are not subject to this check (they are
-            operator-controlled).
+            Each runtime arg is accepted if at least one pattern
+            matches. The coordinator anchors every pattern to a full
+            string match (`\A…\z`), so a pattern can never accept an
+            arg that merely contains it as a substring. Patterns are
+            still required to carry explicit `^`/`$` (see the assertion
+            below) so manifest intent reads unambiguously. Static
+            `args` baked at module-eval time are not subject to this
+            check (they are operator-controlled).
           '';
           example = lib.literalExpression ''
             [
@@ -418,12 +420,12 @@ let
     app: builtins.elem "wm.spawn-named-tasks" (effectiveOf app)
   ) (lib.attrValues cfg);
 
-  # ── Operator-footgun lint: unanchored allowedArgs ──────────────────
-  # Go's `regexp.MatchString` reports any *substring* match, so an
-  # unanchored pattern like `--profile=[a-z]+` matches `evil --profile=alice`
-  # at the `e` and lets the malicious arg through. Require every
-  # pattern to be bracketed by `^` and `$`. Operators who really want
-  # "allow anything" can spell it out as `^.*$`.
+  # ── Operator-clarity lint: require explicit ^…$ on allowedArgs ──────
+  # The coordinator already anchors every pattern to a full-string match
+  # (`\A(?:…)\z` in app-coordinator/server.go), so an unanchored pattern
+  # can no longer leak a substring match. We still require operators to
+  # bracket every pattern with `^` and `$` so manifest intent is explicit
+  # at a glance. Operators who really want "allow anything" spell it `^.*$`.
   unanchoredArgs = lib.concatLists (
     lib.mapAttrsToList (
       name: app:
