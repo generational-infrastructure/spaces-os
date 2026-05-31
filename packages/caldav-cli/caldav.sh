@@ -50,9 +50,9 @@ origin="$(printf '%s' "$base" | sed -E 's#^(https?://[^/]+).*#\1#')"
 href_to_url() {
   local href="$1"
   case "$href" in
-    http://* | https://*) printf '%s' "$href" ;;
-    /*) printf '%s%s' "$origin" "$href" ;;
-    *) printf '%s/%s' "$base" "$href" ;;
+  http://* | https://*) printf '%s' "$href" ;;
+  /*) printf '%s%s' "$origin" "$href" ;;
+  *) printf '%s/%s' "$base" "$href" ;;
   esac
 }
 
@@ -69,10 +69,11 @@ href_to_url() {
 resolve_url() {
   local value="$1"
   local resp hrefs count
-  resp="$(curl -fsS -u "$auth" -X REPORT \
-    -H "Content-Type: application/xml; charset=utf-8" \
-    -H "Depth: 1" \
-    --data-binary @- "$base" <<XML 2>/dev/null || true
+  resp="$(
+    curl -fsS -u "$auth" -X REPORT \
+      -H "Content-Type: application/xml; charset=utf-8" \
+      -H "Depth: 1" \
+      --data-binary @- "$base" <<XML 2>/dev/null || true
 <?xml version="1.0" encoding="UTF-8"?>
 <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
   <d:prop><d:getetag/></d:prop>
@@ -101,7 +102,7 @@ XML
     {
       echo "caldav: UID '${value}' matched ${count} resources:"
       printf '  %s\n' "$hrefs"
-      echo "Pass the exact resource name (the .ics segment of the <d:href> from \`caldav list\`) instead."
+      echo "Pass the exact resource name (the .ics segment of the <d:href> from 'caldav list') instead."
     } >&2
     exit 1
   fi
