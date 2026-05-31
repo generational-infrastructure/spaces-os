@@ -115,7 +115,13 @@ def assistant_message(output_tokens):
             "cacheRead": 0,
             "cacheWrite": 0,
             "totalTokens": 10 + output_tokens,
-            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0},
+            "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0,
+            },
         },
         "stopReason": "stop",
         "timestamp": 1700000000000,
@@ -173,6 +179,7 @@ def main():
                 sys.stderr.write(open(path).read())
 
     try:
+
         def ipc_ready():
             r = subprocess.run(
                 [qs_bin, "ipc", "-p", shell_qml, "show"],
@@ -191,24 +198,52 @@ def main():
         # 100 tokens over a pinned 2 s elapsed window → 50.0 t/s.
 
         inject(qs_bin, shell_qml, env, {"type": "agent_start"})
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
-        })
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "hello world"},
-        })
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": "hello world"},
-        })
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
+            },
+        )
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "contentIndex": 0,
+                    "delta": "hello world",
+                },
+            },
+        )
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_end",
+                    "contentIndex": 0,
+                    "content": "hello world",
+                },
+            },
+        )
 
         set_elapsed(qs_bin, shell_qml, env, 2_000)
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_end",
-            "message": assistant_message(100),
-        })
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_end",
+                "message": assistant_message(100),
+            },
+        )
 
         msgs = get_messages(qs_bin, shell_qml, env)
         text_bubble = find_msg(msgs, type="", text="hello world")
@@ -234,23 +269,51 @@ def main():
 
         # ── Test 3: message_end with output=0 is a no-op ──
 
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
-        })
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "second"},
-        })
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_update",
-            "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": "second"},
-        })
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
+            },
+        )
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "contentIndex": 0,
+                    "delta": "second",
+                },
+            },
+        )
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_end",
+                    "contentIndex": 0,
+                    "content": "second",
+                },
+            },
+        )
         set_elapsed(qs_bin, shell_qml, env, 1_000)
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_end",
-            "message": assistant_message(0),
-        })
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_end",
+                "message": assistant_message(0),
+            },
+        )
 
         msgs = get_messages(qs_bin, shell_qml, env)
         second = find_msg(msgs, type="", text="second")
@@ -265,10 +328,15 @@ def main():
 
         inject(qs_bin, shell_qml, env, {"type": "agent_end", "messages": []})
         before_count = len(get_messages(qs_bin, shell_qml, env))
-        inject(qs_bin, shell_qml, env, {
-            "type": "message_end",
-            "message": assistant_message(50),
-        })
+        inject(
+            qs_bin,
+            shell_qml,
+            env,
+            {
+                "type": "message_end",
+                "message": assistant_message(50),
+            },
+        )
         after_count = len(get_messages(qs_bin, shell_qml, env))
         if before_count != after_count:
             cleanup()
