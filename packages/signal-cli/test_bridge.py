@@ -1,4 +1,4 @@
-"""End-to-end tests for distro_signal.bridge.
+"""End-to-end tests for spaces_signal.bridge.
 
 Spawns a tiny in-process FakeSignalDaemon over a unix socket, points
 the bridge at it, and drives both the sandbox-facing enqueue socket
@@ -19,8 +19,8 @@ import unittest
 from pathlib import Path
 from typing import Callable
 
-from distro_signal import bridge as bridge_mod
-from distro_signal import db as dbmod
+from spaces_signal import bridge as bridge_mod
+from spaces_signal import db as dbmod
 
 # ── Fake signal-cli daemon ──────────────────────────────────────────
 
@@ -956,7 +956,7 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
 class TestSocketPathDefaults(unittest.TestCase):
     """Path conventions that couple this module to signal-cli.nix.
 
-    The pi-chat sandbox bind-mounts `$XDG_RUNTIME_DIR/distro-signal/sandbox`
+    The pi-chat sandbox bind-mounts `$XDG_RUNTIME_DIR/spaces-signal/sandbox`
     (see modules/nixos/signal-cli.nix). The defaults below MUST keep
     the enqueue socket *inside* that subdir (so the agent in the
     sandbox can reach it through the bind-mount) and the panel
@@ -971,14 +971,14 @@ class TestSocketPathDefaults(unittest.TestCase):
             k: os.environ.get(k)
             for k in (
                 "XDG_RUNTIME_DIR",
-                "DISTRO_SIGNAL_ENQUEUE_SOCKET",
-                "DISTRO_SIGNAL_PANEL_SOCKET",
+                "SPACES_SIGNAL_ENQUEUE_SOCKET",
+                "SPACES_SIGNAL_PANEL_SOCKET",
             )
         }
         os.environ["XDG_RUNTIME_DIR"] = "/run/user/1234"
         for k in (
-            "DISTRO_SIGNAL_ENQUEUE_SOCKET",
-            "DISTRO_SIGNAL_PANEL_SOCKET",
+            "SPACES_SIGNAL_ENQUEUE_SOCKET",
+            "SPACES_SIGNAL_PANEL_SOCKET",
         ):
             os.environ.pop(k, None)
 
@@ -992,31 +992,31 @@ class TestSocketPathDefaults(unittest.TestCase):
     def test_enqueue_default_lives_inside_sandbox_subdir(self) -> None:
         self.assertEqual(
             bridge_mod._default_enqueue_socket(),
-            "/run/user/1234/distro-signal/sandbox/enqueue.sock",
+            "/run/user/1234/spaces-signal/sandbox/enqueue.sock",
         )
 
     def test_panel_default_lives_outside_sandbox_subdir(self) -> None:
-        # Panel must NOT be under `.../distro-signal/sandbox/`; a
+        # Panel must NOT be under `.../spaces-signal/sandbox/`; a
         # sibling of the sandbox dir is fine, anything below it is
         # a security regression.
         panel = bridge_mod._default_panel_socket()
-        self.assertEqual(panel, "/run/user/1234/distro-signal/panel.sock")
+        self.assertEqual(panel, "/run/user/1234/spaces-signal/panel.sock")
         self.assertFalse(
-            panel.startswith("/run/user/1234/distro-signal/sandbox/"),
+            panel.startswith("/run/user/1234/spaces-signal/sandbox/"),
             f"panel socket leaked into sandbox-bound dir: {panel}",
         )
 
     def test_env_override_wins_for_enqueue(self) -> None:
-        os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = "/custom/enq.sock"
+        os.environ["SPACES_SIGNAL_ENQUEUE_SOCKET"] = "/custom/enq.sock"
         self.assertEqual(bridge_mod._default_enqueue_socket(), "/custom/enq.sock")
 
     def test_env_override_wins_for_panel(self) -> None:
-        os.environ["DISTRO_SIGNAL_PANEL_SOCKET"] = "/custom/pan.sock"
+        os.environ["SPACES_SIGNAL_PANEL_SOCKET"] = "/custom/pan.sock"
         self.assertEqual(bridge_mod._default_panel_socket(), "/custom/pan.sock")
 
 
 class TestServeSocketCreatesParentDir(unittest.TestCase):
-    """Bridge binds inside `%t/distro-signal/sandbox/`, a dir created
+    """Bridge binds inside `%t/spaces-signal/sandbox/`, a dir created
     by user-tmpfiles in a deployed system. For ad-hoc runs and tests
     that aren't going through systemd, the bridge must still cope
     with a missing parent — otherwise it dies on first start and the
@@ -1028,9 +1028,9 @@ class TestServeSocketCreatesParentDir(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         daemon_sock = str(base / "signal.sock")
-        nested = base / "distro-signal" / "sandbox"
+        nested = base / "spaces-signal" / "sandbox"
         enqueue_sock = str(nested / "enqueue.sock")
-        panel_sock = str(base / "distro-signal" / "panel.sock")
+        panel_sock = str(base / "spaces-signal" / "panel.sock")
         db_path = base / "messages.db"
 
         self.assertFalse(nested.exists(), "test precondition: nested dir missing")

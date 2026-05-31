@@ -3,7 +3,7 @@
 //
 // Replicates _just_ the subscriber/push/retract/submit logic from
 // PiChatBackend.qml so the test catches wiring bugs in the daemon
-// protocol without pulling in noctalia or /etc/distro/pi-chat.json.
+// protocol without pulling in noctalia or /etc/spaces/pi-chat.json.
 import QtQuick
 import Quickshell
 import Quickshell.Io

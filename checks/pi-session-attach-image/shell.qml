@@ -5,7 +5,7 @@
 // Why no PiChatBackend / noctalia at all: the bug we're chasing is in
 // PiSession.qml's `_readImage` → `_appendMessage` path. Loading the
 // full backend (which requires noctalia singletons, a configured
-// /etc/distro/pi-chat.json, and a live systemd user manager for
+// /etc/spaces/pi-chat.json, and a live systemd user manager for
 // per-session sandboxing) just to drive `sendFile()` would multiply
 // the failure surface a hundredfold. Mounting PiSession directly with
 // stubbed env keeps the test honed on the actual contract.

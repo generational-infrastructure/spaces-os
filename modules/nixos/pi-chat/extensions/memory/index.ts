@@ -1,5 +1,5 @@
 /**
- * Memory Extension — cross-session recall for distro's pi-chat.
+ * Memory Extension — cross-session recall for spaces's pi-chat.
  *
  * Ported from opencrow's extensions/memory/index.ts. Captures durable
  * facts from conversations into sediment (a local semantic vector
@@ -79,14 +79,14 @@ const AUTO_RECALL_LIMIT = 3;
  * via `touch`/`rm` whenever the user flips the toggle button in the
  * header — so the kill switch takes effect on the very next prompt
  * without restarting the pi RPC process. Missing env (running outside
- * the distro sandbox, e.g. an upstream pi session, or tests that don't
+ * the spaces sandbox, e.g. an upstream pi session, or tests that don't
  * stage the state dir) is treated as "memory enabled" — the marker
  * convention is opt-out, not opt-in, and we'd rather over-capture than
  * silently swallow facts because of a misconfigured env.
  */
 function isMemoryDisabled(): boolean {
-  const stateDir = process.env.DISTRO_PI_CHAT_STATE_DIR;
-  const sessionId = process.env.DISTRO_SESSION_ID;
+  const stateDir = process.env.SPACES_PI_CHAT_STATE_DIR;
+  const sessionId = process.env.SPACES_SESSION_ID;
   if (!stateDir || !sessionId) return false;
   try {
     return existsSync(join(stateDir, "sessions", sessionId, "memory-off"));
@@ -99,7 +99,7 @@ function isMemoryDisabled(): boolean {
  * scrubPrompt reduces a user prompt to its semantic payload so
  * recall/extract key on content, not boilerplate.
  *
- * Distro's pi-chat hands the user's text directly to pi — there is
+ * Spaces's pi-chat hands the user's text directly to pi — there is
  * no trigger pipe, no heartbeat wrapper, no retry-empty preamble
  * the way opencrow has. The only thing we still filter out is
  * empty/whitespace-only input, where there is nothing to recall or
@@ -143,7 +143,7 @@ function scrubTurn(text: string): string {
   );
 
   // Nix store paths rot on every deploy. Keep the human-readable name
-  // suffix so "distro-skills/calendar/SKILL.md" still embeds usefully,
+  // suffix so "spaces-skills/calendar/SKILL.md" still embeds usefully,
   // but drop the hash that would otherwise be recalled and fed back to
   // the model as a path it can no longer read.
   out = out.replace(/\/nix\/store\/[a-z0-9]{32}-/g, "<nix>/");
@@ -436,7 +436,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Recall: inject relevant memories before each prompt, keyed on the
-  // *payload* (which in distro is just the user text — scrubPrompt is
+  // *payload* (which in spaces is just the user text — scrubPrompt is
   // a no-op beyond the empty check).
   pi.on("before_agent_start", async (event) => {
     const key = scrubPrompt(event.prompt ?? "");

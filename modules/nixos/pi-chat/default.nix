@@ -1,6 +1,6 @@
 # Pi-chat NixOS module.
 #
-# Standalone Quickshell chat panel for the distro AI agent
+# Standalone Quickshell chat panel for the spaces AI agent
 # (pi --mode rpc). Each chat session spawns its own pi process under
 # a per-session systemd-run --user transient service, so multiple
 # conversations stream in parallel and each lives in its own
@@ -15,16 +15,16 @@
 #
 # Files this module owns:
 #   ~/.config/quickshell/pi-chat/              (materialized shell config, fresh mtimes for Qt qmlcache)
-#   ~/.local/state/distro/pi/pi-agent/         (pi config dir, settings.json + auth.json + models.json)
-#   ~/.local/state/distro/pi/sessions/         (one subdir per chat — pi --session-dir target)
-#   ~/.local/share/distro/workspaces/          (default per-chat cwd, picked by the shell)
-#   /run/distro-secrets/openrouter-api-key     (when openrouter.enable = true; user-readable)
+#   ~/.local/state/spaces/pi/pi-agent/         (pi config dir, settings.json + auth.json + models.json)
+#   ~/.local/state/spaces/pi/sessions/         (one subdir per chat — pi --session-dir target)
+#   ~/.local/share/spaces/workspaces/          (default per-chat cwd, picked by the shell)
+#   /run/spaces-secrets/openrouter-api-key     (when openrouter.enable = true; user-readable)
 #
 # User systemd units:
 #   pi-chat.service                            (materializes shell config, then runs `quickshell -c pi-chat`)
-#   distro-skill-config-daemon.service         (skill-config IPC, $XDG_RUNTIME_DIR/distro-skill-config.sock)
-#   distro-notify-forward.service              (D-Bus notifications -> pi-chat shell IPC)
-#   distro-location-update.service + timer     (geoclue -> $XDG_RUNTIME_DIR/distro/location.json)
+#   spaces-skill-config-daemon.service         (skill-config IPC, $XDG_RUNTIME_DIR/spaces-skill-config.sock)
+#   spaces-notify-forward.service              (D-Bus notifications -> pi-chat shell IPC)
+#   spaces-location-update.service + timer     (geoclue -> $XDG_RUNTIME_DIR/spaces/location.json)
 { inputs, ... }:
 {
   config,
@@ -75,8 +75,8 @@ let
   # State paths use systemd tmpfiles' %h/%t substitutions when written
   # via systemd.user.tmpfiles. For module-internal use we keep the
   # literal expansions that tmpfiles understands.
-  stateRel = ".local/state/distro/pi";
-  workspacesRel = ".local/share/distro/workspaces";
+  stateRel = ".local/state/spaces/pi";
+  workspacesRel = ".local/share/spaces/workspaces";
   piAgentRel = "${stateRel}/pi-agent";
   sessionsRel = "${stateRel}/sessions";
   sessionsIndexRel = "${stateRel}/sessions.json";
@@ -101,7 +101,7 @@ let
   # into one linked-farm so the plugin can pass a single dir or pi
   # can read each one by absolute path from settings.json.
   #
-  # The signal skill follows services.distro-signal.enable (which in
+  # The signal skill follows services.spaces-signal.enable (which in
   # turn defaults to services.pi-chat.enable). When opted out, the
   # SKILL.md does not reach the agent — it advertises a CLI the
   # sandbox can't actually reach, so dropping it avoids confusing
@@ -116,7 +116,7 @@ let
     email = "${skillsDir}/email";
     google = "${skillsDir}/google";
   }
-  // lib.optionalAttrs (config.services.distro-signal.enable or false) {
+  // lib.optionalAttrs (config.services.spaces-signal.enable or false) {
     signal = "${skillsDir}/signal";
   };
   allSkills = builtinSkills // cfg.skills;
@@ -183,7 +183,7 @@ let
   # plugin → standalone cutover; only the way we reach it differs:
   # noctalia plugin used `noctalia-shell ipc call plugin:pi-chat send`,
   # standalone uses `quickshell ipc -c pi-chat call pi-chat send`.
-  notifScript = pkgs.writeShellScript "distro-notify-forward" ''
+  notifScript = pkgs.writeShellScript "spaces-notify-forward" ''
     set -u
     export PATH="${
       lib.makeBinPath [
@@ -234,7 +234,7 @@ let
     done
   '';
 
-  locationScript = pkgs.writeShellScript "distro-location-update" ''
+  locationScript = pkgs.writeShellScript "spaces-location-update" ''
     set -eu
     export PATH="${
       lib.makeBinPath [
@@ -246,7 +246,7 @@ let
     }:$PATH"
     where_am_i="${pkgs.geoclue2}/libexec/geoclue-2.0/demos/where-am-i"
 
-    out_dir="''${XDG_RUNTIME_DIR}/distro"
+    out_dir="''${XDG_RUNTIME_DIR}/spaces"
     mkdir -p "$out_dir"
     out="$out_dir/location.json"
 
@@ -289,7 +289,7 @@ in
   ];
 
   options.services.pi-chat = {
-    enable = lib.mkEnableOption "pi-chat: standalone Quickshell chat panel for the distro AI agent (pi --mode rpc)";
+    enable = lib.mkEnableOption "pi-chat: standalone Quickshell chat panel for the spaces AI agent (pi --mode rpc)";
 
     llmUrl = lib.mkOption {
       type = lib.types.str;
@@ -332,7 +332,7 @@ in
       default = { };
       description = ''
         Additional skill directories for pi, keyed by name. Merged
-        with the built-in distro skills (datetime, location, maps,
+        with the built-in spaces skills (datetime, location, maps,
         skill-config, calendar, google, notifications).
       '';
     };
@@ -402,7 +402,7 @@ in
       example = lib.literalExpression ''
         [
           { source = "%t/signal-cli/socket"; mode = "rw"; }
-          { source = "%h/.local/state/distro/signal"; mode = "rw"; }
+          { source = "%h/.local/state/spaces/signal"; mode = "rw"; }
           { source = "%h/.local/share/signal-cli/attachments"; mode = "ro"; }
         ]
       '';
@@ -460,7 +460,7 @@ in
         default = null;
         description = ''
           Host path to a file containing the OpenRouter API key (single
-          line). Loaded into /run/distro-secrets/openrouter-api-key by
+          line). Loaded into /run/spaces-secrets/openrouter-api-key by
           a root-only system service, then bound into each pi-chat
           scope via systemd-run's LoadCredential= so the key never
           touches user-readable storage.
@@ -474,7 +474,7 @@ in
         type = lib.types.listOf lib.types.str;
         default = [
           "pi-chat"
-          "distro-chat"
+          "spaces-chat"
         ];
         description = "App names whose notifications are not forwarded (exact match, case-insensitive).";
       };
@@ -558,7 +558,7 @@ in
       # helper, the notification forwarder, and the test harnesses.
       pkgs.quickshell
       # `notify-send` so users + the agent can post desktop
-      # notifications. distro-notify-forward then bridges those
+      # notifications. spaces-notify-forward then bridges those
       # straight back into the chat panel via the IPC `send` verb.
       pkgs.libnotify
       # Convenience wrapper for compositor keybinds:
@@ -585,12 +585,12 @@ in
     systemd.user.tmpfiles.rules = [
       "d %h/.local 0755 - - -"
       "d %h/.local/state 0755 - - -"
-      "d %h/.local/state/distro 0755 - - -"
+      "d %h/.local/state/spaces 0755 - - -"
       "d %h/${stateRel} 0755 - - -"
       "d %h/${piAgentRel} 0755 - - -"
       "d %h/${sessionsRel} 0755 - - -"
       "d %h/.local/share 0755 - - -"
-      "d %h/.local/share/distro 0755 - - -"
+      "d %h/.local/share/spaces 0755 - - -"
       "d %h/${workspacesRel} 0755 - - -"
       # An empty sessions.json so the plugin can read it on first
       # launch without a special-case branch.
@@ -662,15 +662,15 @@ in
     };
 
     # Skill-config IPC daemon. Lives as a regular user systemd unit;
-    # each pi-chat scope bind-mounts its socket at /run/distro/skill-config.sock.
-    systemd.user.services.distro-skill-config-daemon = {
+    # each pi-chat scope bind-mounts its socket at /run/spaces/skill-config.sock.
+    systemd.user.services.spaces-skill-config-daemon = {
       description = "skill-config IPC daemon (pi-chat)";
       after = [ "default.target" ];
       wantedBy = [ "default.target" ];
       environment = {
         # Default socket lives in $XDG_RUNTIME_DIR so it's torn down
         # when the user session ends.
-        SKILL_CONFIG_SOCKET = "%t/distro-skill-config.sock";
+        SKILL_CONFIG_SOCKET = "%t/spaces-skill-config.sock";
       };
       serviceConfig = {
         ExecStart = lib.getExe skillConfigDaemonPkg;
@@ -679,7 +679,7 @@ in
       };
     };
 
-    systemd.user.services.distro-notify-forward = lib.mkIf cfg.notificationForwarding.enable {
+    systemd.user.services.spaces-notify-forward = lib.mkIf cfg.notificationForwarding.enable {
       description = "Forward desktop notifications to the pi-chat panel";
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
@@ -690,14 +690,14 @@ in
       };
     };
 
-    systemd.user.services.distro-location-update = lib.mkIf cfg.locationUpdates.enable {
+    systemd.user.services.spaces-location-update = lib.mkIf cfg.locationUpdates.enable {
       description = "Update pi-chat location via GeoClue";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = locationScript;
       };
     };
-    systemd.user.timers.distro-location-update = lib.mkIf cfg.locationUpdates.enable {
+    systemd.user.timers.spaces-location-update = lib.mkIf cfg.locationUpdates.enable {
       description = "Periodically update pi-chat location";
       wantedBy = [ "timers.target" ];
       timerConfig = {
@@ -718,7 +718,7 @@ in
     # then copies it into $CREDENTIALS_DIRECTORY for the pi process,
     # which `!cat $CREDENTIALS_DIRECTORY/openrouter-api-key` resolves
     # at request time. Pi reads the credential at request time.
-    systemd.services.distro-secrets-load = lib.mkIf cfg.openrouter.enable {
+    systemd.services.spaces-secrets-load = lib.mkIf cfg.openrouter.enable {
       description = "Stage pi-chat secrets for the user manager";
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" ];
@@ -729,17 +729,17 @@ in
       };
       script = ''
         set -eu
-        install -d -m 0750 -o root -g users /run/distro-secrets
+        install -d -m 0750 -o root -g users /run/spaces-secrets
         install -m 0640 -o root -g users \
           ${cfg.openrouter.apiKeyFile} \
-          /run/distro-secrets/openrouter-api-key
+          /run/spaces-secrets/openrouter-api-key
       '';
     };
 
     # Shell config file. The QML side reads this on startup so we
     # don't have to thread a dozen env vars through the user manager.
     # Symlink from a generation-pinned store path.
-    environment.etc."distro/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
+    environment.etc."spaces/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
       inherit (cfg) llmUrl;
       inherit (cfg) defaultModel;
       inherit (cfg) defaultProvider;
@@ -771,7 +771,7 @@ in
       [Desktop Entry]
       Type=Application
       Name=pi-chat
-      Comment=Standalone Quickshell chat panel for the distro AI agent
+      Comment=Standalone Quickshell chat panel for the spaces AI agent
       Exec=${pkgs.systemd}/bin/systemctl --user start pi-chat.service
       X-GNOME-Autostart-enabled=true
       OnlyShowIn=niri;sway;Hyprland;river;KDE;

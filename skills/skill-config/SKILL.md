@@ -82,7 +82,7 @@ chat clean and the flow consistent.
 ## Notes
 
 - All `skill-config` commands run inside the user's session against
-  the per-user `distro-skill-config-daemon` socket. No `sudo`, no
+  the per-user `spaces-skill-config-daemon` socket. No `sudo`, no
   `--instance` flag — the environment is already correct.
 - Field names in `request-input`, `set`, and `get` are exactly as they
   appear in the schema output.

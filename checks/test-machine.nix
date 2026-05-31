@@ -30,7 +30,7 @@
 #     openrouter, depending on mode)
 #   - the memory extension stores facts in one session and recalls
 #     them in another (cross-session sediment round-trip)
-#   - distro-notify-forward bridges a desktop notification into the
+#   - spaces-notify-forward bridges a desktop notification into the
 #     active chat session via the new `quickshell ipc -c pi-chat`
 #     invocation
 #
@@ -70,7 +70,7 @@ else
         { lib, pkgs, ... }:
         {
           imports = [
-            inputs.self.nixosModules.distro
+            inputs.self.nixosModules.spaces
             ../hosts/test-machine/configuration.nix
           ];
 
@@ -229,20 +229,20 @@ else
 
           with subtest("pi-chat sidecar services come up"):
               machine.wait_until_succeeds(
-                  "systemctl --user --machine=test@.host is-active distro-skill-config-daemon.service",
+                  "systemctl --user --machine=test@.host is-active spaces-skill-config-daemon.service",
                   timeout=30,
               )
               machine.wait_for_file(
-                  "/run/user/${uid}/distro-skill-config.sock", timeout=30
+                  "/run/user/${uid}/spaces-skill-config.sock", timeout=30
               )
 
           with subtest("pi-agent config dir is materialized"):
               machine.wait_until_succeeds(
-                  "test -f /home/test/.local/state/distro/pi/pi-agent/settings.json",
+                  "test -f /home/test/.local/state/spaces/pi/pi-agent/settings.json",
                   timeout=30,
               )
               machine.succeed(
-                  "grep -q 'llama-swap-discover' /home/test/.local/state/distro/pi/pi-agent/settings.json"
+                  "grep -q 'llama-swap-discover' /home/test/.local/state/spaces/pi/pi-agent/settings.json"
               )
 
           with subtest("llama-swap is up"):
@@ -324,9 +324,9 @@ else
                   )
                   machine.log("== quickshell plaintext log ==\n" + qs_log)
                   _, cfg_dump = machine.execute(
-                      "cat /etc/distro/pi-chat.json 2>&1"
+                      "cat /etc/spaces/pi-chat.json 2>&1"
                   )
-                  machine.log("== /etc/distro/pi-chat.json ==\n" + cfg_dump)
+                  machine.log("== /etc/spaces/pi-chat.json ==\n" + cfg_dump)
                   raise Exception(
                       "chat round-trip failed (exit={}):\n{}".format(code, ptest_out)
                   )
@@ -380,11 +380,11 @@ else
                   # and HF_HOME default to sediment's own ~/.sediment/data
                   # (empty) and trigger a HF download the sandbox is not on
                   # the hook for. Splice both straight from the same Nix
-                  # values the pi-chat module writes into /etc/distro/pi-chat.json
+                  # values the pi-chat module writes into /etc/spaces/pi-chat.json
                   # so diagnostics hit the live agent DB, and pass --scope all
                   # so globally-scoped writes from the agent actually show up.
                   sed_env = (
-                      "SEDIMENT_DB=/home/test/.local/state/distro/pi/sediment/data "
+                      "SEDIMENT_DB=/home/test/.local/state/spaces/pi/sediment/data "
                       "HF_HOME=${
                         inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment.modelCache
                       } "
@@ -410,7 +410,7 @@ else
                   )
                   machine.log("== quickshell log (memory) ==\n" + qs_log)
                   _, db_tree = machine.execute(
-                      "ls -laR /home/test/.local/state/distro/pi/sediment "
+                      "ls -laR /home/test/.local/state/spaces/pi/sediment "
                       "2>&1 || true"
                   )
                   machine.log("== sediment db tree ==\n" + db_tree)
@@ -418,7 +418,7 @@ else
                       "memory e2e failed (exit={}):\n{}".format(code, mem_out)
                   )
 
-          with subtest("distro-notify-forward unit comes up"):
+          with subtest("spaces-notify-forward unit comes up"):
               # Full e2e (notify-send → forwarder → quickshell IPC → chat)
               # was attempted here but the dbus-monitor shell scraper at
               # the heart of the forwarder turns out to be the wrong
@@ -429,7 +429,7 @@ else
               # commit; until then this subtest only asserts the unit
               # starts.
               machine.wait_until_succeeds(
-                  "systemctl --user --machine=test@.host is-active distro-notify-forward.service",
+                  "systemctl --user --machine=test@.host is-active spaces-notify-forward.service",
                   timeout=30,
               )
               machine.wait_until_succeeds(

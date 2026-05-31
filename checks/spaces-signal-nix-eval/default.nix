@@ -1,22 +1,22 @@
-# Cheap nix-eval contract for the distro-signal NixOS module.
+# Cheap nix-eval contract for the spaces-signal NixOS module.
 #
 # Verifies:
-#   1. Enabling services.distro-signal materialises the right
-#      systemd.user.distro-signal-cli unit (ExecStart contains the
+#   1. Enabling services.spaces-signal materialises the right
+#      systemd.user.spaces-signal-cli unit (ExecStart contains the
 #      daemon args we promise; RuntimeDirectory is set).
 #   2. The module publishes the signal-cli socket + store dirs into
 #      services.pi-chat.sandboxBinds, so the agent's read CLI can
 #      reach the daemon and the message DB through the per-session
 #      sandbox.
-#   3. Enabling distro-signal without pi-chat trips the module's own
+#   3. Enabling spaces-signal without pi-chat trips the module's own
 #      assertion (the integration is meaningless without the agent).
-#   4. Default-on follows pi-chat: an unconfigured distro host
+#   4. Default-on follows pi-chat: an unconfigured spaces host
 #      (which auto-enables pi-chat) ships the signal-cli infra by
-#      default; an explicit `services.distro-signal.enable = false`
+#      default; an explicit `services.spaces-signal.enable = false`
 #      strips it back out.
 #   5. Both user services carry ConditionPathExistsGlob so they
 #      silently no-op until the user runs `signal-cli link`; a
-#      systemd.user.paths.distro-signal-link unit watches for the
+#      systemd.user.paths.spaces-signal-link unit watches for the
 #      account dir and triggers the daemon on first link; the bridge
 #      follows the daemon via wantedBy so it auto-starts in lockstep.
 #
@@ -25,10 +25,10 @@
 let
   inherit (inputs.nixpkgs) lib;
   baseModules = [
-    # distro -> pi-chat imports the signal-cli module
+    # spaces -> pi-chat imports the signal-cli module
     # transitively, so the eval here exercises the same import
-    # graph distro users get.
-    inputs.self.nixosModules.distro
+    # graph spaces users get.
+    inputs.self.nixosModules.spaces
     {
       nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
       fileSystems."/" = {
@@ -40,8 +40,8 @@ let
     }
   ];
 
-  # Default deployment shape: distro module (which auto-enables
-  # pi-chat) plus an explicit `enable = true` on distro-signal. The
+  # Default deployment shape: spaces module (which auto-enables
+  # pi-chat) plus an explicit `enable = true` on spaces-signal. The
   # explicit set is redundant with the new pi-chat-tracking default
   # but keeps the intent obvious next to the assertions below.
   enabledSystem = inputs.nixpkgs.lib.nixosSystem {
@@ -52,13 +52,13 @@ let
     modules = baseModules ++ [
       {
         networking.hostName = "signal-enabled";
-        services.distro-signal.enable = true;
+        services.spaces-signal.enable = true;
       }
     ];
   };
 
   # Opt-out path: same imports, explicit `enable = false`. Must
-  # leave NO distro-signal-* user units, NO sandbox binds, and the
+  # leave NO spaces-signal-* user units, NO sandbox binds, and the
   # signal skill must not reach the agent's skills-defs farm.
   disabledSystem = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
@@ -68,12 +68,12 @@ let
     modules = baseModules ++ [
       {
         networking.hostName = "signal-disabled";
-        services.distro-signal.enable = false;
+        services.spaces-signal.enable = false;
       }
     ];
   };
 
-  # No distro / pi-chat in the import chain — distro-signal
+  # No spaces / pi-chat in the import chain — spaces-signal
   # alone should trip its own assertion.
   brokenSystem = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
@@ -92,7 +92,7 @@ let
         boot.loader.grub.enable = false;
         system.stateVersion = "26.05";
 
-        services.distro-signal.enable = true;
+        services.spaces-signal.enable = true;
       }
     ];
   };
@@ -101,13 +101,13 @@ let
     builtins.deepSeq brokenSystem.config.system.build.toplevel.drvPath null
   );
 
-  service = enabledSystem.config.systemd.user.services.distro-signal-cli;
-  bridge = enabledSystem.config.systemd.user.services.distro-signal-bridge;
-  pathUnit = enabledSystem.config.systemd.user.paths.distro-signal-link;
-  pichatConfig = enabledSystem.config.environment.etc."distro/pi-chat.json".source;
-  disabledPichatCfg = disabledSystem.config.environment.etc."distro/pi-chat.json";
+  service = enabledSystem.config.systemd.user.services.spaces-signal-cli;
+  bridge = enabledSystem.config.systemd.user.services.spaces-signal-bridge;
+  pathUnit = enabledSystem.config.systemd.user.paths.spaces-signal-link;
+  pichatConfig = enabledSystem.config.environment.etc."spaces/pi-chat.json".source;
+  disabledPichatCfg = disabledSystem.config.environment.etc."spaces/pi-chat.json";
 in
-pkgs.runCommand "distro-signal-nix-eval-test"
+pkgs.runCommand "spaces-signal-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
     inherit pichatConfig;
@@ -141,13 +141,13 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     # Bridge follows daemon: when the daemon is path-triggered, the
     # bridge must start too. wantedBy on the unit edge does that.
     bridgeWantedBy = lib.concatStringsSep " " (bridge.wantedBy or [ ]);
-    # When the user opts out, distro-signal-cli must NOT be declared
+    # When the user opts out, spaces-signal-cli must NOT be declared
     # at all (not "declared but disabled"). Empty string = absent.
     disabledHasSignalUnits =
       let
         names = builtins.attrNames disabledSystem.config.systemd.user.services;
       in
-      if builtins.elem "distro-signal-cli" names then "yes" else "no";
+      if builtins.elem "spaces-signal-cli" names then "yes" else "no";
     # Likewise sandboxBinds must not carry signal entries when opted
     # out — we surface the raw JSON for a jq check.
     disabledPichatConfig = disabledPichatCfg.source;
@@ -196,7 +196,7 @@ pkgs.runCommand "distro-signal-nix-eval-test"
 
     jq -e '
       .sandboxBinds
-      | any(.source == "%h/.local/state/distro/signal" and .mode == "ro" and .optional == false)
+      | any(.source == "%h/.local/state/spaces/signal" and .mode == "ro" and .optional == false)
     ' "$pichatConfig" >/dev/null \
       || fail "signal store dir must be RO in sandboxBinds (sandbox writes would forge messages / fake approvals): $binds"
 
@@ -208,16 +208,16 @@ pkgs.runCommand "distro-signal-nix-eval-test"
 
     # ── 2b. bridge unit shape ────────────────────────────────────────
     case "$bridgeExecStart" in
-      */bin/distro-signal-bridge) ;;
-      *) fail "bridge ExecStart must be /…/bin/distro-signal-bridge, got '$bridgeExecStart'" ;;
+      */bin/spaces-signal-bridge) ;;
+      *) fail "bridge ExecStart must be /…/bin/spaces-signal-bridge, got '$bridgeExecStart'" ;;
     esac
     case " $bridgeRequires " in
-      *" distro-signal-cli.service "*) ;;
-      *) fail "bridge must require distro-signal-cli.service, got '$bridgeRequires'" ;;
+      *" spaces-signal-cli.service "*) ;;
+      *) fail "bridge must require spaces-signal-cli.service, got '$bridgeRequires'" ;;
     esac
     case " $bridgeAfter " in
-      *" distro-signal-cli.service "*) ;;
-      *) fail "bridge must come after distro-signal-cli.service, got '$bridgeAfter'" ;;
+      *" spaces-signal-cli.service "*) ;;
+      *) fail "bridge must come after spaces-signal-cli.service, got '$bridgeAfter'" ;;
     esac
     [ "$bridgeRestart" = "always" ] || fail "bridge Restart must be 'always', got '$bridgeRestart'"
 
@@ -231,23 +231,23 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     # the silent-skip race.
     jq -e '
       .sandboxBinds
-      | any(.source == "%t/distro-signal/sandbox" and .mode == "rw" and (.optional // false) == false)
+      | any(.source == "%t/spaces-signal/sandbox" and .mode == "rw" and (.optional // false) == false)
     ' "$pichatConfig" >/dev/null \
-      || fail "distro-signal sandbox subdir must be in sandboxBinds (rw, mandatory): $binds"
+      || fail "spaces-signal sandbox subdir must be in sandboxBinds (rw, mandatory): $binds"
 
     # ── 2d. The panel socket — and the parent dir that contains it —
     # MUST stay out of the sandbox. That's the security boundary: a
     # prompt-injected agent can post to enqueue.sock but cannot mint
     # an approval on panel.sock. Reject any bind whose source could
-    # expose the panel socket, including the parent `distro-signal/`
+    # expose the panel socket, including the parent `spaces-signal/`
     # dir, the panel file itself, or the legacy flat names.
     jq -e '
       .sandboxBinds
-      | all(.source != "%t/distro-signal"
-            and .source != "%t/distro-signal/panel.sock"
-            and .source != "%t/distro-signal/sandbox/panel.sock"
-            and .source != "%t/distro-signal-panel.sock"
-            and .source != "%t/distro-signal-enqueue.sock")
+      | all(.source != "%t/spaces-signal"
+            and .source != "%t/spaces-signal/panel.sock"
+            and .source != "%t/spaces-signal/sandbox/panel.sock"
+            and .source != "%t/spaces-signal-panel.sock"
+            and .source != "%t/spaces-signal-enqueue.sock")
     ' "$pichatConfig" >/dev/null \
       || fail "sandboxBinds exposes the panel socket or its parent dir (security regression — agent could self-approve sends): $binds"
 
@@ -257,12 +257,12 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     # holds the host-only panel socket, the child is the sandbox bind
     # source.
     case "$enabledTmpfiles" in
-      *"d %t/distro-signal 0700"*) ;;
-      *) fail "user-tmpfiles must create %t/distro-signal 0700 unconditionally: $enabledTmpfiles" ;;
+      *"d %t/spaces-signal 0700"*) ;;
+      *) fail "user-tmpfiles must create %t/spaces-signal 0700 unconditionally: $enabledTmpfiles" ;;
     esac
     case "$enabledTmpfiles" in
-      *"d %t/distro-signal/sandbox 0700"*) ;;
-      *) fail "user-tmpfiles must create %t/distro-signal/sandbox 0700 unconditionally (sandbox bind source): $enabledTmpfiles" ;;
+      *"d %t/spaces-signal/sandbox 0700"*) ;;
+      *) fail "user-tmpfiles must create %t/spaces-signal/sandbox 0700 unconditionally (sandbox bind source): $enabledTmpfiles" ;;
     esac
 
     # ── 2f. signal SKILL.md is included by default (since enable
@@ -272,10 +272,10 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     # the user-tmpfiles rules.
     case "$enabledTmpfiles" in
       *"/skills-defs/signal "*) ;;
-      *) fail "signal SKILL.md never reached pi-chat skills-defs when distro-signal is enabled." ;;
+      *) fail "signal SKILL.md never reached pi-chat skills-defs when spaces-signal is enabled." ;;
     esac
     case "$disabledTmpfiles" in
-      *"/skills-defs/signal "*) fail "signal SKILL.md still present after services.distro-signal.enable = false." ;;
+      *"/skills-defs/signal "*) fail "signal SKILL.md still present after services.spaces-signal.enable = false." ;;
       *) ;;
     esac
 
@@ -290,14 +290,14 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     [ "$bridgeCondition" = "$expectedGlob" ] \
       || fail "bridge ConditionPathExistsGlob must be '$expectedGlob', got '$bridgeCondition'"
 
-    # ── 2h. systemd.user.paths.distro-signal-link auto-starts the
+    # ── 2h. systemd.user.paths.spaces-signal-link auto-starts the
     # daemon when the account dir is created by `signal-cli link`.
     # Without this the first link requires a manual `systemctl
     # --user start` — defeats the auto-onboarding goal.
     [ "$pathExistsGlob" = "$expectedGlob" ] \
       || fail "path-unit PathExistsGlob must be '$expectedGlob', got '$pathExistsGlob'"
-    [ "$pathUnitTarget" = "distro-signal-cli.service" ] \
-      || fail "path-unit must target distro-signal-cli.service, got '$pathUnitTarget'"
+    [ "$pathUnitTarget" = "spaces-signal-cli.service" ] \
+      || fail "path-unit must target spaces-signal-cli.service, got '$pathUnitTarget'"
     case " $pathUnitWantedBy " in
       *" default.target "*) ;;
       *) fail "path-unit must be wantedBy=default.target so login arms it, got '$pathUnitWantedBy'" ;;
@@ -307,26 +307,26 @@ pkgs.runCommand "distro-signal-nix-eval-test"
     # daemon; the bridge must be wantedBy that daemon so it comes
     # up in lockstep when the first link happens.
     case " $bridgeWantedBy " in
-      *" distro-signal-cli.service "*) ;;
-      *) fail "bridge must be wantedBy=distro-signal-cli.service (so path-activation propagates), got '$bridgeWantedBy'" ;;
+      *" spaces-signal-cli.service "*) ;;
+      *) fail "bridge must be wantedBy=spaces-signal-cli.service (so path-activation propagates), got '$bridgeWantedBy'" ;;
     esac
 
     # ── 2j. Opt-out path: explicit `enable = false` strips every
     # signal-cli-shaped artifact from the system, including the user
     # units and the pi-chat sandbox binds.
     [ "$disabledHasSignalUnits" = "no" ] \
-      || fail "distro-signal-cli unit still declared after explicit enable = false"
+      || fail "spaces-signal-cli unit still declared after explicit enable = false"
     jq -e '
       .sandboxBinds
       | all(.source | startswith("%t/signal-cli/") | not)
-      and all(.source | startswith("%h/.local/state/distro/signal") | not)
-      and all(.source | startswith("%t/distro-signal") | not)
+      and all(.source | startswith("%h/.local/state/spaces/signal") | not)
+      and all(.source | startswith("%t/spaces-signal") | not)
     ' "$disabledPichatConfig" >/dev/null \
       || fail "sandboxBinds still carry signal-cli entries after explicit enable = false: $(jq -c '.sandboxBinds' "$disabledPichatConfig")"
 
-    # ── 3. distro-signal without pi-chat must fail eval ──────────────
+    # ── 3. spaces-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then
-      fail "distro-signal evaluated cleanly without pi-chat; the assertion is missing or stopped catching this combo."
+      fail "spaces-signal evaluated cleanly without pi-chat; the assertion is missing or stopped catching this combo."
     fi
 
     echo "OK"

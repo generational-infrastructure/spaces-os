@@ -42,6 +42,6 @@ Only driving directions are available.
 
 ### Tips
 
-- The `nearby` command reads `$XDG_RUNTIME_DIR/distro/location.json` automatically when no `--location` is given.
+- The `nearby` command reads `$XDG_RUNTIME_DIR/spaces/location.json` automatically when no `--location` is given.
 - For travel planning, chain: `osm-cli nearby "train station"` → `db-cli` for train connections.
 - Use `osm-cli search` to geocode a place name into coordinates for other tools.

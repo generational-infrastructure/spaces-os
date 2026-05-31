@@ -1,4 +1,4 @@
-# distro
+# Spaces OS
 
 AI agent desktop integration for NixOS. Chat with a local AI agent
 from a layer-shell panel summoned by a global keybind, with full
@@ -38,20 +38,20 @@ avoid building dependencies from source.
 
 ### 1. Full desktop
 
-Import `nixosModules.distro` for the complete experience: niri compositor, noctalia bar, pi-chat Quickshell panel, AI agent, local LLM server. The module enables the AI agent and greetd auto-login into niri by default.
+Import `nixosModules.spaces` for the complete experience: niri compositor, noctalia bar, pi-chat Quickshell panel, AI agent, local LLM server. The module enables the AI agent and greetd auto-login into niri by default.
 
 ```nix
 # flake.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    distro.url = "github:generational-infrastructure/distro";
+    spaces.url = "github:generational-infrastructure/spaces-os";
   };
 
-  outputs = { nixpkgs, distro, ... }: {
+  outputs = { nixpkgs, spaces, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
-        distro.nixosModules.distro
+        spaces.nixosModules.spaces
         {
           # Override the default greetd auto-login user.
           services.greetd.settings.default_session.user = "alice";
@@ -71,7 +71,7 @@ This gives you:
 - **Mod+Shift+N** — restart the pi-chat panel (live-reload after rebuild)
 
 See [docs/keybindings.md](docs/keybindings.md) for the full list of
-keyboard shortcuts (distro additions plus the inherited niri defaults).
+keyboard shortcuts (spaces additions plus the inherited niri defaults).
 
 #### Voice-to-text
 
@@ -91,13 +91,13 @@ You keep your compositor.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    distro.url = "github:generational-infrastructure/distro";
+    spaces.url = "github:generational-infrastructure/spaces-os";
   };
 
-  outputs = { nixpkgs, distro, ... }: {
+  outputs = { nixpkgs, spaces, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
-        distro.nixosModules.pi-chat
+        spaces.nixosModules.pi-chat
         ./configuration.nix
       ];
     };

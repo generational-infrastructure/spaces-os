@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal fake of distro-signal-bridge's panel-socket protocol.
+"""Minimal fake of spaces-signal-bridge's panel-socket protocol.
 
 The real bridge is exercised by packages/signal-cli/test_bridge.py.
 This fake only needs to drive SignalConfirm.qml's subscribe/approve

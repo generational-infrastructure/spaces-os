@@ -1,6 +1,6 @@
-# Test/debug support module for distro VMs.
+# Test/debug support module for spaces VMs.
 #
-# Bundles everything needed to verify a distro install runs correctly
+# Bundles everything needed to verify a spaces install runs correctly
 # without test-instrumentation:
 #
 #   - Serial console (ttyS0) for boot/journal output, so external
@@ -49,11 +49,11 @@
   # Guest's Super grab fights with the host compositor (which
   # captures Super for its own keybinds). Use Alt instead so VM-
   # based tests can drive niri keybinds via virtio keyboard input.
-  services.distro.niri.modKey = "Alt";
+  services.spaces.niri.modKey = "Alt";
 
   # ── Test wallpaper for OCR detection ────────────────────────────
   # The compositor starts with no default wallpaper renderer.  Spawn
-  # swaybg with a pre-rendered wallpaper tiled with "DISTRO_TEST_OK"
+  # swaybg with a pre-rendered wallpaper tiled with "SPACES_TEST_OK"
   # so VM tests can detect via OCR that niri actually drew something
   # to its outputs (proves the compositor is alive end-to-end, not
   # just that niri.service started).
@@ -71,7 +71,7 @@
     };
   };
 
-  # noctalia is no longer bundled with distro. If a downstream test
+  # noctalia is no longer bundled with spaces. If a downstream test
   # opts into noctalia separately and runs into its first-launch
   # wizards blocking OCR, restore the settings.json + shell-state.json
   # pre-seeds here (see git history pre-cutover for the exact JSON).

@@ -3,7 +3,7 @@
 
 Spawns pi --mode rpc with the bash-confirm extension loaded, the
 `notifications` CLI on PATH, and a seeded notifications history file
-under DISTRO_NOTIFICATIONS_FILE. The mock LLM issues a single
+under SPACES_NOTIFICATIONS_FILE. The mock LLM issues a single
 `notifications list --json --limit 2` bash call and then echoes the
 tool output back as the assistant reply.
 
@@ -204,7 +204,7 @@ def main():
         json.dump({"allowPatterns": ["^notifications(\\s|$)"]}, fh)
 
     # Seed the notifications history file in a location the CLI can read
-    # via DISTRO_NOTIFICATIONS_FILE.
+    # via SPACES_NOTIFICATIONS_FILE.
     notifications_file = os.path.join(work_dir, "notifications", "history.json")
     seed_notifications(notifications_file)
 
@@ -227,7 +227,7 @@ def main():
                 "PI_OFFLINE": "1",
                 "PI_TELEMETRY": "0",
                 "HOME": work_dir,
-                "DISTRO_NOTIFICATIONS_FILE": notifications_file,
+                "SPACES_NOTIFICATIONS_FILE": notifications_file,
                 "PATH": bin_dir + os.pathsep + env.get("PATH", ""),
             }
         )

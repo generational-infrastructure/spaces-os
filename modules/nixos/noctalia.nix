@@ -1,14 +1,14 @@
 # Vanilla noctalia-shell bar as a graphical-session user service,
 # plus a purge that cleans up leftover state from the prior
-# patched-build / distro-plugin era.
+# patched-build / spaces-plugin era.
 { pkgs, ... }:
 let
-  # Removes leftover distro-owned plugin state on every nixos-rebuild
+  # Removes leftover spaces-owned plugin state on every nixos-rebuild
   # / boot activation: the patched-build `plugins-autoload/` dir, any
-  # symlink under `plugins/` (distro materialised plugins as symlinks,
+  # symlink under `plugins/` (spaces materialised plugins as symlinks,
   # marketplace installs are real dirs), and matching `plugins.json`
   # entries (by unlinked id, by autoload:true flag, or by historical
-  # distro id for hosts where the symlink was already gone).
+  # spaces id for hosts where the symlink was already gone).
   purgeStalePlugins = pkgs.writeShellApplication {
     name = "noctalia-purge-stale-plugins";
     runtimeInputs = [

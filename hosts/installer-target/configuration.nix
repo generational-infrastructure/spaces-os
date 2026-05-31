@@ -6,7 +6,7 @@
 # the same way: same user groups, same greetd default-session user,
 # same explicit bootloader, no DE module imports.
 #
-# Pure config — no module imports. The distro module + (for tests)
+# Pure config — no module imports. The spaces module + (for tests)
 # test-support are wired in by default.nix (blueprint host) or the
 # debug session test directly.
 _:
@@ -50,7 +50,7 @@ _:
     ];
   };
 
-  # Override distro's `lib.mkDefault "alice"` greetd autologin user.
+  # Override spaces's `lib.mkDefault "alice"` greetd autologin user.
   services.greetd.settings.default_session.user = "installed";
 
   system.stateVersion = "26.05";

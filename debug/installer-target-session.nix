@@ -3,7 +3,7 @@
 # Boots a system whose configuration mirrors what the patched
 # Calamares main.py emits at install time (Calamares-shape user with
 # extraGroups = [ wheel networkmanager ], greetd autologin via
-# distro module's default_session, no DE imports beyond the distro
+# spaces module's default_session, no DE imports beyond the spaces
 # module) and verifies the full user-session path:
 #   greetd → niri → wayland socket → pi-chat.service
 #   → compositor actually paints frames (OCR of test wallpaper).
@@ -23,7 +23,7 @@ pkgs.testers.runNixOSTest {
     { lib, ... }:
     {
       imports = [
-        inputs.self.nixosModules.distro
+        inputs.self.nixosModules.spaces
         ../hosts/installer-target/configuration.nix
         ../modules/nixos/test-support
       ];
@@ -76,7 +76,7 @@ pkgs.testers.runNixOSTest {
           )
 
       with subtest("pi-chat shell config is materialized"):
-          # distro-pi-chat-sync.service copies the shell from /nix/store
+          # spaces-pi-chat-sync.service copies the shell from /nix/store
           # into ~/.config/quickshell/pi-chat with fresh mtimes (Qt
           # qmlcache invalidation). Assert the materialized copy exists
           # and has the entry point.
@@ -87,7 +87,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("compositor renders the test wallpaper"):
           # test-support.nix configures swaybg with a wallpaper containing
-          # tiled "DISTRO_TEST_OK" text. OCR detection proves the
+          # tiled "SPACES_TEST_OK" text. OCR detection proves the
           # compositor is alive and rendering to its outputs — systemd
           # unit state alone can't catch a wedged compositor.
           # Dismiss niri's "Important Hotkeys" overlay shown on first launch.
@@ -100,13 +100,13 @@ pkgs.testers.runNixOSTest {
               target.screenshot(f"frame-{attempt:02d}")
               text = target.get_screen_text()
               print(f"OCR attempt {attempt}: {text[:200]}")
-              if re.search(r"DISTRO[_\s]+TEST[_\s]+OK", text):
+              if re.search(r"SPACES[_\s]+TEST[_\s]+OK", text):
                   print(f"Wallpaper marker detected on attempt {attempt}")
                   found = True
                   break
 
           assert found, (
-              "'DISTRO_TEST_OK' wallpaper text not detected in OCR. "
+              "'SPACES_TEST_OK' wallpaper text not detected in OCR. "
               "niri may not be rendering, or swaybg failed to start. "
               "Check frame-*.png screenshots in test output."
           )

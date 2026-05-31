@@ -14,9 +14,9 @@ import urllib.request
 BASE_NOMINATIM = "https://nominatim.openstreetmap.org"
 BASE_OVERPASS = "https://overpass-api.de/api/interpreter"
 BASE_OSRM = "https://router.project-osrm.org"
-USER_AGENT = "distro-pi-chat"
+USER_AGENT = "spaces-pi-chat"
 _runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-LOCATION_FILE = f"{_runtime_dir}/distro/location.json"
+LOCATION_FILE = f"{_runtime_dir}/spaces/location.json"
 
 # Maps common English terms to OSM key=value tags.
 TAG_MAP = {

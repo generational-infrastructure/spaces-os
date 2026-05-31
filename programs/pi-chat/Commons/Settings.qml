@@ -8,7 +8,7 @@
 //   ~/.config/pi-chat/settings.json
 //
 // Plain `FileView` + `JsonAdapter` — same machinery PiChatBackend
-// already uses for `/etc/distro/pi-chat.json`. The file is created
+// already uses for `/etc/spaces/pi-chat.json`. The file is created
 // on first write; missing keys fall back to defaults declared on
 // the adapter.
 //

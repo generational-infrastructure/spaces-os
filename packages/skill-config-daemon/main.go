@@ -12,7 +12,7 @@ import (
 	"syscall"
 )
 
-const defaultSocket = "/run/distro-skill-config-default.sock"
+const defaultSocket = "/run/spaces-skill-config-default.sock"
 
 func main() {
 	socketPath := os.Getenv("SKILL_CONFIG_SOCKET")
@@ -30,7 +30,7 @@ func main() {
 	defer l.Close()
 
 	// Mode 0666: the parent dir's permissions (0777, root-owned tmpfiles
-	// rule from distro/pi-chat module) are the actual access boundary. The trust
+	// rule from spaces/pi-chat module) are the actual access boundary. The trust
 	// model is "anything that can act as the user or root", which is the
 	// same as for secrets.toml itself.
 	if err := os.Chmod(socketPath, 0o666); err != nil {
@@ -45,7 +45,7 @@ func main() {
 		l.Close()
 	}()
 
-	instance := os.Getenv("DISTRO_PI_CHAT_INSTANCE")
+	instance := os.Getenv("SPACES_PI_CHAT_INSTANCE")
 	if instance == "" {
 		instance = "unknown"
 	}

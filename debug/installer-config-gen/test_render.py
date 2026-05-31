@@ -103,7 +103,7 @@ class RenderConfigurationTests(unittest.TestCase):
     def test_emits_thin_overlay_module_header(self):
         cfg = self.render()
         self.assertIn("{ ... }:", cfg)
-        # No standalone-mode imports — distro module + hardware-config come
+        # No standalone-mode imports — spaces module + hardware-config come
         # in via the wrapper flake.
         self.assertNotIn("./hardware-configuration.nix", cfg)
         self.assertNotIn("imports", cfg)
@@ -213,20 +213,20 @@ class RenderFlakeNixTests(unittest.TestCase):
     def setUp(self):
         libcalamares.globalstorage.reset(BASE_GS)
 
-    def test_distro_input_points_at_upstream_github(self):
-        # The wrapper flake's `inputs.distro.url` is canonical upstream;
+    def test_spaces_input_points_at_upstream_github(self):
+        # The wrapper flake's `inputs.spaces.url` is canonical upstream;
         # the lock pins it to a local store path. Verifying the URL
         # here keeps the production-vs-test framing visible at the unit
         # level.
         expr = main.render_flake_nix(libcalamares.globalstorage)
         self.assertIn(
-            'inputs.distro.url = "github:generational-infrastructure/distro";',
+            'inputs.spaces.url = "github:generational-infrastructure/spaces-os";',
             expr,
         )
 
-    def test_calls_distro_lib_mksystem(self):
+    def test_calls_spaces_lib_mksystem(self):
         expr = main.render_flake_nix(libcalamares.globalstorage)
-        self.assertIn("inputs.distro.lib.mkSystem", expr)
+        self.assertIn("inputs.spaces.lib.mkSystem", expr)
         self.assertIn('hostName = "ai-desktop";', expr)
 
     def test_emits_named_nixos_configuration(self):

@@ -1,6 +1,6 @@
 # Test-machine host configuration.
 #
-# Pure config — no module imports. Modules come from distro.nix,
+# Pure config — no module imports. Modules come from spaces.nix,
 # wired in by default.nix (blueprint) or the test harness.
 { config, pkgs, ... }:
 
@@ -31,13 +31,13 @@ in
     extraGroups = [ "wheel" ];
   };
 
-  # Override distro default user for greetd auto-login.
+  # Override spaces default user for greetd auto-login.
   services.greetd.settings.default_session.user = "test";
 
   # test-machine is always run as a QEMU VM (via `nix build .#test-vm`
   # or `checks/test-machine.nix`'s runNixOSTest). Use Alt so the guest
   # doesn't fight the host compositor's Super grab.
-  services.distro.niri.modKey = "Alt";
+  services.spaces.niri.modKey = "Alt";
 
   # Expose a second model so the chat dropdown has more than one entry.
   # The full list shown by `!models` is discovered at runtime from

@@ -3,7 +3,7 @@
 # This host is never booted directly. Its purpose is to give
 # `installer-iso.nix` something to point `storeContents` at so a
 # Calamares-driven `nixos-install --system <toplevel>` finds every
-# distro store path already present on the live medium.
+# spaces store path already present on the live medium.
 #
 # The corresponding test (`debug/installer-target-session.nix`) boots
 # the same shape as a VM and asserts niri + pi-chat start, so a
@@ -22,7 +22,7 @@
     };
     modules = [
       { nixpkgs.hostPlatform = "x86_64-linux"; }
-      inputs.self.nixosModules.distro
+      inputs.self.nixosModules.spaces
       ./configuration.nix
     ];
   };

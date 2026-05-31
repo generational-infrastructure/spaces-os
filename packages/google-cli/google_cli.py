@@ -272,7 +272,7 @@ def _open_url(url: str) -> None:
     Firefox/Chromium inside the sandbox where it cannot see the real
     user profile (Firefox: "Profile Missing"). The pi-chat Quickshell
     panel runs in the user's session and listens on a unix socket
-    bind-mounted into the sandbox at $DISTRO_OPEN_URL_SOCKET; writing a
+    bind-mounted into the sandbox at $SPACES_OPEN_URL_SOCKET; writing a
     single JSON line there delegates the open to the real session via
     `Qt.openUrlExternally`.
 
@@ -281,7 +281,7 @@ def _open_url(url: str) -> None:
     back to `webbrowser.open` so the helper stays useful outside the
     pi-chat sandbox.
     """
-    sock_path = os.environ.get("DISTRO_OPEN_URL_SOCKET")
+    sock_path = os.environ.get("SPACES_OPEN_URL_SOCKET")
     if sock_path:
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:

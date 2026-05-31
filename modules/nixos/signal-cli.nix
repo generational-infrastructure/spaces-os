@@ -1,4 +1,4 @@
-# signal-cli daemon for the distro AI agent.
+# signal-cli daemon for the spaces AI agent.
 #
 # Runs `signal-cli daemon` as a long-lived user systemd service that
 # exposes a JSON-RPC interface over a unix socket at
@@ -22,13 +22,13 @@
 # Files this module owns:
 #   $XDG_RUNTIME_DIR/signal-cli/socket             (daemon JSON-RPC socket)
 #   ~/.local/share/signal-cli/                     (signal-cli identity state — created by `signal-cli link`)
-#   ~/.local/state/distro/signal/                  (distro-side store: message DB + forwarder state)
+#   ~/.local/state/spaces/signal/                  (spaces-side store: message DB + forwarder state)
 #
 # Linking flow (one-time, must be done by the human; the agent never
 # runs this):
 #   $ signal-cli link -n "$(hostname)-pi"
 #   <scan the printed tsdevice:/?... URL with primary Signal device>
-#   $ systemctl --user restart distro-signal-cli
+#   $ systemctl --user restart spaces-signal-cli
 #
 # After linking, signal-cli's data dir holds the linked-device keys
 # and the daemon will see every message the primary device sees.
@@ -40,17 +40,17 @@
   ...
 }:
 let
-  cfg = config.services.distro-signal;
+  cfg = config.services.spaces-signal;
 
   signalCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.signal-cli;
 
   identityRel = ".local/share/signal-cli";
-  storeRel = ".local/state/distro/signal";
+  storeRel = ".local/state/spaces/signal";
 
   # Signal runtime layout under $XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR ==
   # %t in user-systemd specifier-speak):
   #
-  #   %t/distro-signal/                  (parent, host-only)
+  #   %t/spaces-signal/                  (parent, host-only)
   #     ├── sandbox/                     (bind-mounted into pi-chat)
   #     │     └── enqueue.sock           (sandbox ↔ bridge: agent sends)
   #     └── panel.sock                   (bridge ↔ chat panel: approval)
@@ -66,7 +66,7 @@ let
   # sandbox-bound directory: that's the security boundary. A
   # prompt-injected agent can write into enqueue.sock but cannot
   # reach panel.sock to mint its own approval.
-  runtimeRoot = "distro-signal";
+  runtimeRoot = "spaces-signal";
   runtimeSandboxSubdir = "${runtimeRoot}/sandbox";
 
   # systemd condition + path-unit glob. signal-cli writes per-account
@@ -79,9 +79,9 @@ let
   linkedAccountGlob = "%h/${identityRel}/data/*.d";
 in
 {
-  options.services.distro-signal = {
-    enable = lib.mkEnableOption "signal-cli daemon backing the distro AI agent's Signal skill" // {
-      # Default tracks pi-chat: anything pulling the distro bundle
+  options.services.spaces-signal = {
+    enable = lib.mkEnableOption "signal-cli daemon backing the spaces AI agent's Signal skill" // {
+      # Default tracks pi-chat: anything pulling the spaces bundle
       # gets the signal infrastructure for free, but the *units*
       # stay condition-gated below so a fresh system pays nothing
       # until the user runs `signal-cli link`. Standalone imports
@@ -108,7 +108,7 @@ in
         # weight and the user almost certainly misconfigured.
         assertion = config.services.pi-chat.enable;
         message = ''
-          services.distro-signal.enable = true requires services.pi-chat.enable = true.
+          services.spaces-signal.enable = true requires services.pi-chat.enable = true.
 
           The signal-cli daemon exists to back the Signal skill the
           agent invokes inside the pi-chat sandbox. If you want
@@ -134,7 +134,7 @@ in
       # signal-cli will create it itself on first link; we pre-create
       # so the mode is correct from the start.
       "d %h/${identityRel} 0700 - - -"
-      # distro-side store dir: holds messages.db (the bridge writes,
+      # spaces-side store dir: holds messages.db (the bridge writes,
       # the agent's `signal` CLI reads via a bind-mounted RW path).
       "d %h/${storeRel} 0700 - - -"
       # Signal runtime dirs. Both created unconditionally at session
@@ -155,8 +155,8 @@ in
     # exits 0 immediately. Once the user runs `signal-cli link`,
     # the path-activation unit below triggers this service and the
     # condition passes on every subsequent login.
-    systemd.user.services.distro-signal-cli = {
-      description = "signal-cli daemon (distro AI agent Signal backend)";
+    systemd.user.services.spaces-signal-cli = {
+      description = "signal-cli daemon (spaces AI agent Signal backend)";
       wantedBy = [ "default.target" ];
       after = [ "default.target" ];
 
@@ -192,8 +192,8 @@ in
     # pi-chat sandbox; the panel socket is NOT — that split is the
     # security boundary that keeps prompt-injected sends from
     # auto-approving themselves.
-    systemd.user.services.distro-signal-bridge = {
-      description = "distro signal bridge (forwarder + send broker)";
+    systemd.user.services.spaces-signal-bridge = {
+      description = "spaces signal bridge (forwarder + send broker)";
       # wantedBy includes the daemon service so path-activation
       # propagates: when the daemon is started by the path unit on
       # first link, systemd pulls the bridge in too. The
@@ -201,19 +201,19 @@ in
       # for already-linked systems.
       wantedBy = [
         "default.target"
-        "distro-signal-cli.service"
+        "spaces-signal-cli.service"
       ];
       after = [
         "default.target"
-        "distro-signal-cli.service"
+        "spaces-signal-cli.service"
       ];
-      requires = [ "distro-signal-cli.service" ];
+      requires = [ "spaces-signal-cli.service" ];
 
       unitConfig.ConditionPathExistsGlob = linkedAccountGlob;
 
       serviceConfig = {
         Type = "exec";
-        ExecStart = "${signalCliPkg}/bin/distro-signal-bridge";
+        ExecStart = "${signalCliPkg}/bin/spaces-signal-bridge";
         Restart = "always";
         RestartSec = 3;
       };
@@ -223,14 +223,14 @@ in
     # the account file into ~/.local/share/signal-cli/data/+<phone>;
     # this unit watches for that and triggers the daemon
     # automatically on first link. Without it the user would have
-    # to run `systemctl --user start distro-signal-cli` themselves.
+    # to run `systemctl --user start spaces-signal-cli` themselves.
     # The bridge follows via wantedBy on the daemon above.
-    systemd.user.paths.distro-signal-link = {
+    systemd.user.paths.spaces-signal-link = {
       description = "Trigger signal-cli daemon when a Signal account is linked";
       wantedBy = [ "default.target" ];
       pathConfig = {
         PathExistsGlob = linkedAccountGlob;
-        Unit = "distro-signal-cli.service";
+        Unit = "spaces-signal-cli.service";
       };
     };
 

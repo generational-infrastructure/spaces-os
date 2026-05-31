@@ -30,7 +30,7 @@ let
     };
   };
 
-  cfg = config.distro.voxtype;
+  cfg = config.spaces.voxtype;
 
   defaultSettings = builtins.fromTOML (builtins.readFile "${inputs.voxtype}/config/default.toml");
 
@@ -50,7 +50,7 @@ let
   );
 in
 {
-  options.distro.voxtype = {
+  options.spaces.voxtype = {
     whisperModel = lib.mkOption {
       type = lib.types.enum (builtins.attrNames models);
       default = "small";

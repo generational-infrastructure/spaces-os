@@ -1,4 +1,4 @@
-# Distro module bundle: every NixOS module the distro ships, plus a
+# Spaces module bundle: every NixOS module Spaces ships, plus a
 # greetd auto-login into niri.
 { inputs, ... }:
 { config, lib, ... }:

@@ -238,7 +238,7 @@ def main():
 
     sediment_log = os.path.join(work_dir, "sediment.log")
     request_log = os.path.join(work_dir, "mock-requests.log")
-    # Mirror the distro sandbox env so the extension's per-session
+    # Mirror the spaces sandbox env so the extension's per-session
     # opt-out marker resolves. Pre-create the session dir because the
     # marker check has to find an existing directory to stat against.
     pi_state_dir = os.path.join(work_dir, "pi-state")
@@ -258,8 +258,8 @@ def main():
                 "PI_TELEMETRY": "0",
                 "HOME": work_dir,
                 "SEDIMENT_STUB_LOG": sediment_log,
-                "DISTRO_PI_CHAT_STATE_DIR": pi_state_dir,
-                "DISTRO_SESSION_ID": session_id,
+                "SPACES_PI_CHAT_STATE_DIR": pi_state_dir,
+                "SPACES_SESSION_ID": session_id,
             }
         )
 

@@ -1,7 +1,7 @@
 # End-to-end graphical installer test.
 #
 # Boots a live environment identical to the installer ISO (GNOME +
-# Calamares with our distro overlay), drives the full Calamares wizard
+# Calamares with our spaces overlay), drives the full Calamares wizard
 # via OCR + keyboard, then reboots into the installed system and
 # verifies that the niri compositor and pi-chat panel actually launched.
 #
@@ -26,18 +26,18 @@
 }:
 let
   inherit (pkgs) lib;
-  inherit (flake.lib) distroSrc;
+  inherit (flake.lib) spacesSrc;
 
   # Mirror the override-map computation done by modules/nixos/installer-iso.nix
   # so this VM's calamares main.py sees the same install-time config.
-  distroLock = builtins.fromJSON (builtins.readFile "${distroSrc}/flake.lock");
-  distroDirectInputNames = builtins.attrNames distroLock.nodes.root.inputs;
-  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) distroDirectInputNames) (
+  spacesLock = builtins.fromJSON (builtins.readFile "${spacesSrc}/flake.lock");
+  spacesDirectInputNames = builtins.attrNames spacesLock.nodes.root.inputs;
+  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) spacesDirectInputNames) (
     n: builtins.toString inputs.${n}.outPath
   );
-  installConfig = pkgs.writeText "calamares-distro-install.json" (
+  installConfig = pkgs.writeText "calamares-spaces-install.json" (
     builtins.toJSON {
-      distroFlake = toString distroSrc;
+      spacesFlake = toString spacesSrc;
       inherit inputOverrides;
     }
   );
@@ -64,16 +64,16 @@ let
         # mkForce to override the installation-device profile's overlay.
         nixpkgs.overlays = lib.mkForce [
           (final: prev: {
-            calamares-nixos-extensions = final.callPackage ../packages/calamares-distro-extensions {
+            calamares-nixos-extensions = final.callPackage ../packages/calamares-spaces-extensions {
               base = prev.calamares-nixos-extensions;
             };
           })
         ];
 
-        # Install-time config for the patched main.py (distroSrc store
+        # Install-time config for the patched main.py (spacesSrc store
         # path + per-input overrides). Lives outside the calamares
         # package so package builds aren't invalidated by repo edits.
-        environment.etc."calamares-distro/install.json".source = installConfig;
+        environment.etc."calamares-spaces/install.json".source = installConfig;
 
         # EFI so Calamares detects firmwareType=efi → systemd-boot.
         virtualisation.useEFIBoot = true;
@@ -90,11 +90,11 @@ let
           };
         };
 
-        # Pre-stage the distro flake + installer-target closure into the
+        # Pre-stage the spaces flake + installer-target closure into the
         # VM's nix store so Calamares's `nix-build` + `nixos-install`
         # can resolve everything without network access.
         environment.etc."installer-store-paths".text = builtins.concatStringsSep "\n" [
-          "${distroSrc}"
+          "${spacesSrc}"
           "${flake.nixosConfigurations.installer-target.config.system.build.toplevel}"
           "${inputs.nixpkgs.outPath}"
           # Flake input outPaths for evaluation.
@@ -103,13 +103,13 @@ let
           "${inputs.llm-agents.outPath}"
         ];
 
-        # Tell Calamares's main.py to include distro.nixosModules.test-support
+        # Tell Calamares's main.py to include spaces.nixosModules.test-support
         # in the installed system's default.nix.  This adds serial console +
         # patched niri (software EGL rendering) so Phase 2 can verify niri
         # actually renders a desktop on the freshly booted disk.
-        # File-based sentinel: main.py checks /etc/distro-test-support because
+        # File-based sentinel: main.py checks /etc/spaces-test-support because
         # GDM/GNOME sessions don't reliably inherit environment.variables.
-        environment.etc."distro-test-support".text = "1";
+        environment.etc."spaces-test-support".text = "1";
 
         # Forward kernel + journal to ttyS0 so the test sees nix-build
         # progress (pkexec captures stdout, otherwise invisible).
@@ -532,7 +532,7 @@ let
             print(f"Phase 2 screenshot dir: {phase2_dir}")
             # niri shows an "Important Hotkeys" overlay on first launch that
             # covers the wallpaper.  Dismiss it with Escape via the QEMU
-            # monitor so OCR can see the DISTRO_TEST_OK marker behind it.
+            # monitor so OCR can see the SPACES_TEST_OK marker behind it.
             # Same trick as checks/niri-render-smoke.nix.
             dismissed_overlay = False
             found_marker = False
@@ -555,7 +555,7 @@ let
                     dismissed_overlay = True
                     time.sleep(2)
                     continue
-                if re.search(r"DISTRO[_\s]+TEST[_\s]+OK", text):
+                if re.search(r"SPACES[_\s]+TEST[_\s]+OK", text):
                     print(f"Wallpaper marker detected (attempt {attempt})")
                     found_marker = True
                     break
@@ -566,7 +566,7 @@ let
             if not found_marker:
                 print(f"Serial log tail:\n{read_serial()[-5000:]}")
                 print("=" * 70)
-                print("Phase 2 boot timeout — DISTRO_TEST_OK marker not detected in 90s.")
+                print("Phase 2 boot timeout — SPACES_TEST_OK marker not detected in 90s.")
                 print(f"Last screenshot: {last_ppm}")
                 print(f"All Phase 2 screenshots: {phase2_dir}/phase2-*.ppm")
                 print("")
@@ -577,7 +577,7 @@ let
                 print("  ls /tmp/nix-build-vm-test-run-installer-gui-end-to-end.drv-*/installer-gui-end-to-end-phase2-*/")
                 print("=" * 70)
             assert found_marker, (
-                "DISTRO_TEST_OK wallpaper marker not detected within 90s. "
+                "SPACES_TEST_OK wallpaper marker not detected within 90s. "
                 f"Last screenshot: {last_ppm}. "
                 "See log above for re-run hint."
             )

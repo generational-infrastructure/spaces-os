@@ -197,7 +197,7 @@ class OpenUrlTests(unittest.TestCase):
     sandbox. The panel then calls Qt.openUrlExternally in the real user
     session.
 
-    When DISTRO_OPEN_URL_SOCKET is unset (CI, the unit-test harness,
+    When SPACES_OPEN_URL_SOCKET is unset (CI, the unit-test harness,
     headless setups, …) we fall back to webbrowser.open so the helper
     stays useful outside pi-chat.
     """
@@ -228,7 +228,7 @@ class OpenUrlTests(unittest.TestCase):
             t.start()
             ready.wait(timeout=2)
 
-            with mock.patch.dict(os.environ, {"DISTRO_OPEN_URL_SOCKET": sock_path}):
+            with mock.patch.dict(os.environ, {"SPACES_OPEN_URL_SOCKET": sock_path}):
                 google_cli._open_url("https://example.com/auth?x=1")
 
             t.join(timeout=2)
@@ -240,7 +240,7 @@ class OpenUrlTests(unittest.TestCase):
             self.assertEqual(payload, {"url": "https://example.com/auth?x=1"})
 
     def test_open_url_falls_back_to_webbrowser_when_env_unset(self) -> None:
-        env = {k: v for k, v in os.environ.items() if k != "DISTRO_OPEN_URL_SOCKET"}
+        env = {k: v for k, v in os.environ.items() if k != "SPACES_OPEN_URL_SOCKET"}
         opened: list[str] = []
         with (
             mock.patch.dict(os.environ, env, clear=True),
@@ -256,7 +256,7 @@ class OpenUrlTests(unittest.TestCase):
         opened: list[str] = []
         with (
             mock.patch.dict(
-                os.environ, {"DISTRO_OPEN_URL_SOCKET": "/nonexistent/x.sock"}
+                os.environ, {"SPACES_OPEN_URL_SOCKET": "/nonexistent/x.sock"}
             ),
             mock.patch(
                 "webbrowser.open", side_effect=lambda u, **_: opened.append(u) or True
@@ -269,7 +269,7 @@ class OpenUrlTests(unittest.TestCase):
 class CmdAuthBrowserTests(unittest.TestCase):
     """End-to-end: cmd_auth must route the consent URL through _open_url
     (not call webbrowser directly), so the socket path is exercised when
-    pi-chat sets DISTRO_OPEN_URL_SOCKET inside the sandbox."""
+    pi-chat sets SPACES_OPEN_URL_SOCKET inside the sandbox."""
 
     def setUp(self) -> None:
         self.sc = StubSkillConfig()
