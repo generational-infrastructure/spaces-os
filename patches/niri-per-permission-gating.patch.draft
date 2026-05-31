@@ -1,0 +1,216 @@
+From: spaces
+Subject: per-permission gating for restricted Wayland globals
+
+Today niri gates restricted protocols (wlr-screencopy, foreign-toplevel,
+data-control, layer-shell, virtual-keyboard, etc.) on a single binary
+`client_is_unrestricted` flag — a client created via security-context-v1
+either sees ALL of them or NONE.
+
+This patch makes the gating per-protocol, keyed on the app-id from the
+security-context handshake against a permission map loaded from a file
+on startup (default `/etc/spaces/wayland-permissions.txt`; override
+via `NIRI_PERMISSION_MAP`).
+
+File format: one "<app-id> <permission>" line per grant, blank/`#`
+comment lines ignored. A restricted client is allowed to bind a
+restricted protocol iff its app-id has the matching permission name
+in the map. Non-restricted clients pass every filter as before.
+
+Permission names this patch wires:
+  wayland.layer-shell
+  wayland.session-lock
+  wayland.data-control                (covers both wlr- and ext- data-control)
+  wayland.input-method
+  wayland.virtual-keyboard
+  wayland.virtual-pointer
+  wayland.foreign-toplevel-management
+  wayland.ext-workspace
+  wayland.output-management
+  wayland.screen-capture
+
+`wp_security_context_manager_v1` itself stays binary-gated — sandboxed
+clients must never be able to nest sandboxes.
+
+diff --git a/src/niri.rs b/src/niri.rs
+--- a/src/niri.rs
++++ b/src/niri.rs
+@@ -9,1 +9,1 @@
+-use std::sync::{Arc, Mutex};
++use std::sync::{Arc, Mutex, OnceLock};
+@@ -2254,3 +2254,46 @@
+         fn client_is_unrestricted(client: &Client) -> bool {
+             !client.get_data::<ClientState>().unwrap().restricted
+         }
++
++        // Per-permission permission map for security-context clients,
++        // loaded lazily from a file on first access. Format: one line
++        // per grant, "<app-id> <permission>", blank/'#'-comment lines
++        // skipped. Path comes from $NIRI_PERMISSION_MAP, defaulting
++        // to /etc/spaces/wayland-permissions.txt.
++        static PERMISSION_MAP: OnceLock<HashMap<String, HashSet<String>>> = OnceLock::new();
++        fn permission_map() -> &'static HashMap<String, HashSet<String>> {
++            PERMISSION_MAP.get_or_init(|| {
++                let path = std::env::var("NIRI_PERMISSION_MAP")
++                    .unwrap_or_else(|_| "/etc/spaces/wayland-permissions.txt".into());
++                let mut map: HashMap<String, HashSet<String>> = HashMap::new();
++                if let Ok(contents) = std::fs::read_to_string(&path) {
++                    for line in contents.lines() {
++                        let line = line.trim();
++                        if line.is_empty() || line.starts_with('#') {
++                            continue;
++                        }
++                        if let Some((id, perm)) = line.split_once(' ') {
++                            map.entry(id.to_string())
++                                .or_default()
++                                .insert(perm.trim().to_string());
++                        }
++                    }
++                }
++                map
++            })
++        }
++
++        // Granular gate. A non-restricted client always passes (matches
++        // the original behaviour). A restricted client passes iff its
++        // app-id has the named permission in the map; missing app-id
++        // or empty map = deny.
++        fn client_can(client: &Client, permission: &str) -> bool {
++            let state = client.get_data::<ClientState>().unwrap();
++            if !state.restricted {
++                return true;
++            }
++            state.app_id.as_ref()
++                .and_then(|id| permission_map().get(id))
++                .is_some_and(|perms| perms.contains(permission))
++        }
+@@ -2281,4 +2324,4 @@
+         let layer_shell_state = WlrLayerShellState::new_with_filter::<State, _>(
+             &display_handle,
+-            client_is_unrestricted,
++            |c| client_can(c, "wayland.layer-shell"),
+         );
+@@ -2285,2 +2328,4 @@
+         let session_lock_state =
+-            SessionLockManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            SessionLockManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.session-lock")
++            });
+@@ -2311,5 +2356,5 @@
+         let wlr_data_control_state = WlrDataControlState::new::<State, _>(
+             &display_handle,
+             Some(&primary_selection_state),
+-            client_is_unrestricted,
++            |c| client_can(c, "wayland.data-control"),
+         );
+@@ -2316,5 +2361,5 @@
+         let ext_data_control_state = ExtDataControlState::new::<State, _>(
+             &display_handle,
+             Some(&primary_selection_state),
+-            client_is_unrestricted,
++            |c| client_can(c, "wayland.data-control"),
+         );
+@@ -2327,2 +2372,4 @@
+         let input_method_state =
+-            InputMethodManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            InputMethodManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.input-method")
++            });
+@@ -2331,2 +2378,4 @@
+         let virtual_keyboard_state =
+-            VirtualKeyboardManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            VirtualKeyboardManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.virtual-keyboard")
++            });
+@@ -2333,2 +2382,4 @@
+         let virtual_pointer_state =
+-            VirtualPointerManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            VirtualPointerManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.virtual-pointer")
++            });
+@@ -2335,2 +2386,4 @@
+         let foreign_toplevel_state =
+-            ForeignToplevelManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            ForeignToplevelManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.foreign-toplevel-management")
++            });
+@@ -2337,2 +2390,4 @@
+         let ext_workspace_state =
+-            ExtWorkspaceManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            ExtWorkspaceManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.ext-workspace")
++            });
+@@ -2340,2 +2395,4 @@
+         let mut output_management_state =
+-            OutputManagementManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            OutputManagementManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.output-management")
++            });
+@@ -2342,2 +2399,4 @@
+         let screencopy_state =
+-            ScreencopyManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
++            ScreencopyManagerState::new::<State, _>(&display_handle, |c| {
++                client_can(c, "wayland.screen-capture")
++            });
+@@ -2441,1 +2500,2 @@
+                     state.niri.insert_client(NewClient {
+                         client,
+                         restricted: false,
+                         credentials_unknown: false,
++                        app_id: None,
+                     });
+@@ -2635,4 +2695,4 @@
+     pub fn insert_client(&mut self, client: NewClient) {
+         let NewClient {
+             client,
+             restricted,
+             credentials_unknown,
++            app_id,
+         } = client;
+@@ -2643,1 +2703,2 @@
+         let data = Arc::new(ClientState {
+             compositor_state: Default::default(),
+             can_view_decoration_globals: config.prefer_no_csd,
+             primary_selection_disabled: config.clipboard.disable_primary,
+             restricted,
++            app_id,
+             credentials_unknown,
+         });
+@@ -6462,3 +6525,4 @@
+ pub struct NewClient {
+     pub client: UnixStream,
+     pub restricted: bool,
+     pub credentials_unknown: bool,
++    pub app_id: Option<String>,
+ }
+@@ -6468,4 +6532,6 @@
+ pub struct ClientState {
+     pub compositor_state: CompositorClientState,
+     pub can_view_decoration_globals: bool,
+     pub primary_selection_disabled: bool,
+     /// Whether this client is denied from the restricted protocols such as security-context.
+     pub restricted: bool,
++    /// App-id from the security-context-v1 handshake. None for clients that did not come in via security-context.
++    pub app_id: Option<String>,
+     /// We cannot retrieve this client's socket credentials.
+     pub credentials_unknown: bool,
+ }
+
+diff --git a/src/handlers/mod.rs b/src/handlers/mod.rs
+--- a/src/handlers/mod.rs
++++ b/src/handlers/mod.rs
+@@ -501,11 +501,13 @@
+     fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
++        let app_id = context.app_id.clone();
+         self.niri
+             .event_loop
+             .insert_source(source, move |client, _, state| {
+                 trace!("inserting a new restricted client, context={context:?}");
+                 state.niri.insert_client(NewClient {
+                     client,
+                     restricted: true,
+                     credentials_unknown: false,
++                    app_id: app_id.clone(),
+                 });
+             })
+             .unwrap();
+     }
