@@ -63,16 +63,67 @@ caldav list <profile> 20260509T000000Z 20260516T235959Z
 ```
 
 Repeat per profile when listing across all calendars. The response is
-the raw multi-status XML from the CalDAV server with each event's
-iCalendar data inside `<c:calendar-data>` elements — parse those to
-extract titles, times, descriptions, locations, UIDs.
+the raw multi-status XML from the CalDAV server. Each event is one
+`<d:response>` block containing:
+
+- a `<d:href>` element — the event's **CalDAV resource path**, and
+- a `<c:calendar-data>` element — the iCalendar body (parse this for
+  titles, times, descriptions, locations, and the `UID:` property).
+
+---
+
+### Resource names vs. UIDs (important)
+
+`get`, `etag`, `delete`, and edits (`put` with an ETag) address an
+event by its **CalDAV resource**, not by the iCalendar `UID:` property.
+These are *not* the same string:
+
+- The **resource name** is the last path segment of `<d:href>`, e.g.
+  `BE11B01C-2D5F-4A1C-9E0A-1234567890AB.ics`.
+- The **UID** is the `UID:` line inside `<c:calendar-data>`, e.g.
+  `7db7874e-...`.
+
+CalDAV decouples the two on purpose. Servers like Nextcloud/SabreDAV
+assign a *random* resource name, so for any event created via the
+Nextcloud web UI, a phone, or another client the resource name has
+nothing to do with the UID. (Events this skill creates happen to use
+the UID as the resource name — see "Add an event" — but never rely on
+that for events you didn't create.)
+
+`get`/`etag`/`delete`/edit accept **either** form:
+
+- Pass the **UID** and the wrapper resolves it to the right resource
+  with a `calendar-query` REPORT before issuing the request.
+- Or pass the **resource name** directly (slightly faster, and the only
+  option if a UID matches zero or multiple resources).
+
+**Extracting the resource name from `list` output.** Find the
+`<d:href>` for the event and take the segment after the last `/`:
+
+```
+<d:response>
+  <d:href>/remote.php/dav/calendars/alice/personal/BE11B01C-2D5F-4A1C-9E0A-1234567890AB.ics</d:href>
+  ...
+  <c:calendar-data>BEGIN:VCALENDAR...UID:7db7874e-...END:VCALENDAR</c:calendar-data>
+</d:response>
+```
+
+→ resource name = `BE11B01C-2D5F-4A1C-9E0A-1234567890AB.ics`
+(here the UID is the unrelated `7db7874e-...`).
+
+If a UID resolves to more than one resource the wrapper refuses to
+guess and prints the candidates — pass the exact resource name in that
+case.
 
 ---
 
 ### Get a single event
 
 ```bash
-caldav get <profile> <event-uid>
+# By UID (auto-resolved):
+caldav get <profile> 7db7874e-...
+# Or by resource name from <d:href>:
+caldav get <profile> BE11B01C-2D5F-4A1C-9E0A-1234567890AB.ics
 ```
 
 Returns the raw `.ics` body for that event.
@@ -113,16 +164,20 @@ EOF
 ### Edit an event
 
 Two-step: fetch the current ETag, then `put` with that ETag to prevent
-overwriting concurrent changes. Keep the same UID.
+overwriting concurrent changes. Address the event by the same
+identifier for both calls — a UID (auto-resolved) or the resource name
+from `<d:href>` (see "Resource names vs. UIDs"). Keep the event's own
+`UID:` property unchanged in the body.
 
 ```bash
-ETAG="$(caldav etag <profile> <event-uid>)"
-caldav put <profile> <event-uid> "$ETAG" <<EOF
+EVENT="<uid-or-resource>"   # e.g. a UID, or BE11B01C-....ics
+ETAG="$(caldav etag <profile> "$EVENT")"
+caldav put <profile> "$EVENT" "$ETAG" <<EOF
 BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Crow//Calendar Skill//EN
 BEGIN:VEVENT
-UID:<event-uid>
+UID:<unchanged-event-uid>
 DTSTART:20260217T140000Z
 DTEND:20260217T150000Z
 SUMMARY:Updated Meeting Title
@@ -143,7 +198,8 @@ If `caldav put` returns HTTP 412, the event was modified between the
 ### Delete an event
 
 ```bash
-caldav delete <profile> <event-uid>
+# By UID (auto-resolved) or by resource name from <d:href>:
+caldav delete <profile> <uid-or-resource>
 ```
 
 Returns 204 No Content on success.
@@ -158,8 +214,11 @@ Returns 204 No Content on success.
 
 ### Tips
 
-- Always `list` first to find UIDs before editing or deleting — the
-  response includes the UID for every event.
+- Always `list` first before editing or deleting — the response gives
+  you both each event's `<d:href>` (resource name) and its `UID:`. You
+  can pass either to `get`/`etag`/`put`/`delete`, but prefer the
+  resource name when a UID might be ambiguous (see "Resource names vs.
+  UIDs").
 - For schedule overviews and conflict checks, query **every** configured
   profile and merge the results.
 - Generate a fresh UUID for the UID on every new event. Don't reuse.
