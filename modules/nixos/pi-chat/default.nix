@@ -46,6 +46,7 @@ let
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
   osmCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli;
   caldavCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli;
+  contactsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.contacts-cli;
   mailCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.mail-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   piPkg = cfg.piPackage;
@@ -113,6 +114,7 @@ let
     notifications = "${skillsDir}/notifications";
     skill-config = "${skillsDir}/skill-config";
     calendar = "${skillsDir}/calendar";
+    contacts = "${skillsDir}/contacts";
     email = "${skillsDir}/email";
     google = "${skillsDir}/google";
   }
@@ -551,6 +553,7 @@ in
       googleCliPkg
       osmCliPkg
       caldavCliPkg
+      contactsCliPkg
       mailCliPkg
       sedimentPkg
       # Quickshell ships the `quickshell` binary used by the user

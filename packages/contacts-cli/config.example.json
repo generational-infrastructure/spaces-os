@@ -1,0 +1,6 @@
+{
+  "server": "dav.example.com",
+  "username": "alice",
+  "passwordCmd": "passage show carddav/example",
+  "addressbook": ""
+}

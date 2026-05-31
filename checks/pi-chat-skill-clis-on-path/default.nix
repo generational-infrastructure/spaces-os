@@ -56,6 +56,7 @@ let
     google = [ "google-cli" ];
     maps = [ "osm-cli" ];
     calendar = [ "caldav" ];
+    contacts = [ "contacts" ];
     email = [ "mail" ];
     skill-config = [ "skill-config" ];
   };
