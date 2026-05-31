@@ -42,5 +42,12 @@
   "menu": {
     "open-chat": "Abrir chat",
     "settings": "Configurações"
+  },
+  "quickbar": {
+    "placeholder": "Iniciar um agente…  ( / para opções )",
+    "launch-hint": "↵ iniciar",
+    "no-matches": "nenhum modelo correspondente",
+    "unknown-directive": "diretiva desconhecida",
+    "loading-models": "carregando modelos…"
   }
 }

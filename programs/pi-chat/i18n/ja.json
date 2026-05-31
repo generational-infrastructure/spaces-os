@@ -42,5 +42,12 @@
   "menu": {
     "open-chat": "チャットを開く",
     "settings": "設定"
+  },
+  "quickbar": {
+    "placeholder": "エージェントを起動…  ( / でオプション )",
+    "launch-hint": "↵ 起動",
+    "no-matches": "一致するモデルがありません",
+    "unknown-directive": "不明なディレクティブ",
+    "loading-models": "モデルを読み込み中…"
   }
 }

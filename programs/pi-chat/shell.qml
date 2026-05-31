@@ -63,6 +63,14 @@ PanelWindow {
     backend: backend
   }
 
+  // Second layer-shell surface in this same process: the bottom-center
+  // quick-launch bar (Mod+/). Shares the one backend so a session it
+  // fires lands in the same index the chat panel reads.
+  QuickBar {
+    id: quickBar
+    backend: backend
+  }
+
   // Persistent settings window. Lives outside the layer-shell
   // surface (FloatingWindow) so it has a normal title bar, focus,
   // and dismissal — what users expect of a settings dialog.
@@ -97,6 +105,8 @@ PanelWindow {
     function show() { shell.visible = true; }
     function hide() { shell.visible = false; }
     function settings() { shell.openSettings(); }
+    // Toggle the quick-launch bar (Mod+/ via `pi-chat-toggle quickLaunch`).
+    function quickLaunch() { quickBar.visible = !quickBar.visible; }
 
     function send(text: string) { backend.chat?.send(text); }
     function sendFile(path: string) { backend.chat?.sendFile(path, true); }

@@ -224,9 +224,13 @@ Item {
 
   // ── public IPC surface (used by Main.qml's IpcHandler) ──
 
-  function newSession(name) {
+  function newSession(name, opts) {
     const id = _newId();
     const entry = _freshSessionEntry(id, (name && String(name).trim()) || ("Chat " + (sessionsList.length + 1)));
+    // opts.model is "provider/id"; persisted on the entry so the
+    // reconciler binds it to the PiSession's modelPref. Shape is
+    // extensible (cwd, skill) without touching callers.
+    entry.model = (opts && opts.model) || "";
     _ensureSessionDirs(entry.id, entry.workspacePath);
     sessionsList = sessionsList.concat([entry]);
     activeSessionId = id;
@@ -238,6 +242,141 @@ Item {
     if (!id || !sessionsList.some(s => s.id === id)) return;
     activeSessionId = id;
     _touchActive();
+  }
+
+  // ── model cache (for the quick-launch bar) ──
+  //
+  // The bar offers model completion *before* any PiSession exists, but
+  // the model list is otherwise a per-session RPC. Cache it on the
+  // backend: filled cheaply by a one-shot GET of /v1/models (covers the
+  // default local-only llama-swap deployment with zero spawned agent)
+  // and topped up from any live session's richer list. Entries are
+  // { provider, id }.
+  property var modelsList: []
+  property bool modelsLoaded: false
+
+  // One-shot GET of llmUrl/v1/models. curl --fail is the proven call in
+  // this tree (no XMLHttpRequest precedent); StdioCollector is the
+  // stdout-capture idiom. /v1/models returns bare ids, so each is keyed
+  // to the configured default provider.
+  function refreshModels() {
+    const proc = _modelsProbeComponent.createObject(root);
+    proc.command = ["curl", "--fail", "--silent", "--max-time", "5", root.llmUrl + "/v1/models"];
+    proc.running = true;
+  }
+
+  // Merge entries into modelsList, deduped on provider+"/"+id. The
+  // /v1/models cache and a live session's forwarded models collide on
+  // the same id (both provider "local") and would otherwise double-list.
+  // Entries without a provider (bare /v1/models ids) take the default.
+  function _mergeModels(incoming) {
+    if (!Array.isArray(incoming)) return;
+    const seen = {};
+    const out = [];
+    for (const m of modelsList.concat(incoming)) {
+      if (!m || !m.id) continue;
+      const provider = m.provider || root._cfg.defaultProvider;
+      const key = provider + "/" + m.id;
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push({ provider: provider, id: m.id });
+    }
+    modelsList = out;
+  }
+
+  readonly property Component _modelsProbeComponent: Component {
+    Process {
+      id: probe
+      property string _out: ""
+      stdout: StdioCollector { onStreamFinished: probe._out = text }
+      onExited: code => {
+        if (code === 0 && probe._out) {
+          try {
+            const payload = JSON.parse(probe._out);
+            const data = Array.isArray(payload.data) ? payload.data : [];
+            root._mergeModels(data.map(m => ({ id: m.id })));
+          } catch (e) {
+            Logger.w("PiChat", "refreshModels parse failed", e);
+          }
+        }
+        root.modelsLoaded = true;
+        destroy(2000);
+      }
+    }
+  }
+
+  // ── quick-launch (fire-and-forget background agent) ──
+  //
+  // Sessions pending a completion notification: id → prompt summary.
+  // A session lands here when launched from the quick bar while the
+  // chat panel is closed; the reaper exempts it and the per-session
+  // busy→idle hook fires the "Agent finished" toast off it.
+  property var _pendingBg: ({})
+
+  // First line of the prompt, trimmed to ~40 chars — the session title
+  // and the completion-notification body.
+  function promptSummary(prompt) {
+    const first = String(prompt || "").split("\n")[0].trim();
+    return first.length > 40 ? first.slice(0, 40) : first;
+  }
+
+  // Launch an agent in the background: create a normal session, spawn
+  // its pi worker *directly* (bypassing the panel-open gate in
+  // _maybeSpawn, which would otherwise refuse to spawn while the panel
+  // is closed), send the prompt, and mark it pending so the reaper
+  // leaves it alone and completion notifies. The session is a
+  // first-class index entry, continuable later via the chat panel.
+  function launchBackground(prompt, opts) {
+    if (!prompt || !String(prompt).trim()) return "";
+    const summary = promptSummary(prompt);
+    const id = newSession(summary, opts);
+    const obj = _sessionObjs[id];
+    if (!obj) return id;
+    const map = Object.assign({}, _pendingBg);
+    map[id] = summary;
+    _pendingBg = map;
+    // Spawn here so the worker comes up while the panel is hidden;
+    // spawn() is idempotent, so setModelAndWait()/send() re-calling it
+    // for the cold-session case is a harmless no-op.
+    obj.spawn();
+    const model = (opts && opts.model) || "";
+    const slash = model.indexOf("/");
+    if (slash > 0) {
+      // Await pi's set_model before the prompt — a fire-and-forget
+      // setModel would race and the turn could run on the default model
+      // (see PiSession.setModelAndWait). On failure abort rather than
+      // silently launch on the wrong model, and clear the background
+      // pending mark (no turn will run, so onBusyChanged won't) so the
+      // idle worker becomes reapable instead of leaking.
+      obj.setModelAndWait(model.slice(0, slash), model.slice(slash + 1))
+        .then(() => obj.send(prompt))
+        .catch(e => {
+          Logger.w("PiChat", "launch set_model failed; prompt not sent", e);
+          const m2 = Object.assign({}, _pendingBg);
+          delete m2[id];
+          _pendingBg = m2;
+          obj.stop();
+        });
+    } else {
+      obj.send(prompt);
+    }
+    return id;
+  }
+
+  // A pending background session finished its turn (busy true→false).
+  // Notify unless the user is already watching it (panel open + active),
+  // then drop the pending mark — from here it's just a normal session.
+  function _onBackgroundTurnFinished(id) {
+    if (!_pendingBg.hasOwnProperty(id)) return;
+    const summary = _pendingBg[id];
+    const map = Object.assign({}, _pendingBg);
+    delete map[id];
+    _pendingBg = map;
+    if (_panelOpen && activeSessionId === id) return;
+    const proc = _oneShotProcess.createObject(root);
+    proc.command = ["notify-send", "-a", "pi-chat", "-c", "im.received",
+      "Agent finished", summary];
+    proc.running = true;
   }
 
   function removeSession(id) {
@@ -339,11 +478,21 @@ Item {
   Timer {
     id: idleTimer
     interval: root.idleTimeoutMin * 60 * 1000
-    onTriggered: {
-      for (const id in root._sessionObjs) {
-        const o = root._sessionObjs[id];
-        if (o && o.streaming) o.stop();
-      }
+    onTriggered: root._reapIdle()
+  }
+
+  // Stop running sessions that are sitting idle to free their pi
+  // worker. A session actively generating (busy) — or a pending
+  // background launch — must SURVIVE: a fire-and-forget task that runs
+  // for 30 min can't be killed 10 min after the panel closes. Cold
+  // sessions (streaming false) have nothing to reap.
+  function _reapIdle() {
+    for (const id in root._sessionObjs) {
+      const o = root._sessionObjs[id];
+      if (!o || !o.streaming) continue;
+      if (o.busy) continue;
+      if (root._pendingBg.hasOwnProperty(id)) continue;
+      o.stop();
     }
   }
 
@@ -534,6 +683,10 @@ Item {
     PiSession {
       onNeedsPersist: backend._persist()
       onIncomingNotification: t => backend._notify(sessionId, t)
+      onBusyChanged: { if (!busy) backend._onBackgroundTurnFinished(sessionId); }
+      // A live session enumerates the authoritative list (e.g. OpenRouter
+      // models /v1/models won't surface); fold it into the bar's cache.
+      onModelsChanged: backend._mergeModels(models)
     }
   }
 

@@ -56,6 +56,10 @@ let
     ' $out
         # Mod+A toggles the standalone pi-chat panel.
         sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "pi-chat-toggle"; }' $out
+        # Mod+/ summons the quick-launch agent bar (fire-and-forget). The
+        # `quickLaunch` arg is forwarded verbatim by pi-chat-toggle to the
+        # shell's IPC verb. XKB keysym for `/` is Slash.
+        sed -i '/^binds {$/a\    Mod+Slash hotkey-overlay-title="Quick-launch Agent" { spawn "pi-chat-toggle" "quickLaunch"; }' $out
         # Mod+S toggles voice-to-text recording.
         sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
         # Mod+Shift+N reloads the noctalia bar. Mod+Shift+A reloads

@@ -72,6 +72,7 @@ QtObject {
   // ── live state observable by Panel.qml via PiChatBackend.chat ──
   property string peerName: sessionName
   property bool   streaming: false   // process is up & RPC-ready
+  property bool   busy: false        // a prompt turn is in flight (send → agent_end)
   property bool   typing: false      // agent_start → first delta
   property string lastError: ""
   property var    messages: []
@@ -153,6 +154,7 @@ QtObject {
     });
     replyTarget = null;
     typing = true;
+    busy = true;
     _send({ type: "prompt", message: text, streamingBehavior: "steer" });
     needsPersist();
   }
@@ -254,6 +256,20 @@ QtObject {
     if (_shouldRun) {
       _send({ type: "set_model", provider: provider, modelId: modelId });
     }
+  }
+
+  // Like setModel, but resolves only once pi acknowledges the change.
+  // The background-launch path needs this: pi dispatches stdin lines as
+  // fire-and-forget async tasks (see restart()), so the fire-and-forget
+  // setModel() above followed immediately by send() races — the turn can
+  // start on the default model. Awaiting the set_model response pins the
+  // model before the prompt goes out. spawn() so a cold session has a
+  // process for the request to land in.
+  function setModelAndWait(provider, modelId) {
+    modelPref = provider + "/" + modelId;
+    needsPersist();
+    spawn();
+    return _request({ type: "set_model", provider: provider, modelId: modelId });
   }
 
   // Backend-facing lifecycle.
@@ -510,6 +526,7 @@ QtObject {
 
     case "agent_end":
       typing = false;
+      busy = false;
       _finalizeStreaming();
       _existingSessionFlag = true;
       if (lastError) lastError = "";
@@ -874,6 +891,7 @@ QtObject {
       stderr: SplitParser { onRead: line => Logger.w("PiSession", session.sessionId, "stderr", line) }
       onExited: code => {
         session.streaming = false;
+        session.busy = false;
         session.typing = false;
         session._streamingId = "";
         // Decline any in-flight extension UI so the agent loop doesn't
@@ -924,6 +942,7 @@ QtObject {
             streamingBehavior: "steer",
           });
           session.typing = true;
+          session.busy = true;
         }
       }
     }
