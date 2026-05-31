@@ -16,6 +16,8 @@
     inputs.self.nixosModules.noctalia
     # niri scrollable-tiling Wayland compositor
     inputs.self.nixosModules.niri
+    # manifest-driven per-app sandbox subsystem (services.spaces.apps)
+    inputs.self.nixosModules.apps
     # QEMU display/audio/clipboard/SSH for nix build .#test-vm
     inputs.self.nixosModules.vm-debug
     # nix daemon settings (flakes, experimental features)
