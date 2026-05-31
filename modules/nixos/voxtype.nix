@@ -94,6 +94,11 @@ in
         "${configToml}"
         "daemon"
       ];
+      # voxtype writes its pid / voxtype.lock / cancel / trigger files to
+      # $XDG_RUNTIME_DIR/voxtype (hardcoded in the daemon). It must be a
+      # real, writable, host-shared dir: the Mod+S `voxtype record toggle`
+      # CLI runs outside the sandbox and signals the daemon through it.
+      runtimeDir = "voxtype";
       permissions.granted = [
         "audio.record"
         "wayland"

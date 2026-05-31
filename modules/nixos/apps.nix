@@ -131,6 +131,22 @@ let
           '';
         };
 
+        runtimeDir = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "voxtype";
+          description = ''
+            Name of a per-app runtime directory under `$XDG_RUNTIME_DIR`.
+            When set, the launcher creates `$XDG_RUNTIME_DIR/<name>` on the
+            host and bind-mounts it read-write into the sandbox — punching
+            through the `ProtectHome=tmpfs` that otherwise leaves
+            `/run/user` read-only. Because it is the *real* host directory
+            (not a private namespace), an out-of-sandbox control CLI can
+            share it with the daemon (e.g. `voxtype record toggle` reaching
+            the daemon's pid/lock/trigger files in `$XDG_RUNTIME_DIR/voxtype`).
+          '';
+        };
+
         appId = lib.mkOption {
           type = lib.types.str;
           default = "spaces.app.${name}";

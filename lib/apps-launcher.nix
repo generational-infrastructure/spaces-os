@@ -150,6 +150,7 @@ let
       denied = [ ];
     };
     stateDir = ".local/share/spaces/apps/${name}";
+    runtimeDir = null;
     appId = "spaces.app.${name}";
     allowedArgs = [ ];
     dbusSession = {
@@ -381,135 +382,146 @@ let
       staticDeniedShell = lib.concatStringsSep " " (map lib.escapeShellArg app.permissions.denied);
     in
     pkgs.writeShellScriptBin "app-run-${name}" ''
-      set -eu
+            set -eu
 
-      : "''${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
-      export XDG_RUNTIME_DIR
+            : "''${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+            export XDG_RUNTIME_DIR
 
-      if [ -z "''${WAYLAND_DISPLAY:-}" ]; then
-        for sock in "$XDG_RUNTIME_DIR"/wayland-?; do
-          [ -S "$sock" ] || continue
-          WAYLAND_DISPLAY=$(basename "$sock")
-          break
-        done
-      fi
-      export WAYLAND_DISPLAY
+            if [ -z "''${WAYLAND_DISPLAY:-}" ]; then
+              for sock in "$XDG_RUNTIME_DIR"/wayland-?; do
+                [ -S "$sock" ] || continue
+                WAYLAND_DISPLAY=$(basename "$sock")
+                break
+              done
+            fi
+            export WAYLAND_DISPLAY
 
-      install -d -m 0700 "''${HOME}/${app.stateDir}"
-
-      # ── Effective permission resolution ─────────────────────
-      # STATIC grants (baked) ∪ RUNTIME grants (from grants file)
-      # minus STATIC denies. Denies applied LAST so the operator's
-      # hard deny can never be bypassed by `spaces-apps grant`.
-      declare -A EFFECTIVE_PERMS
-      for p in ${staticGrantedShell}; do
-        EFFECTIVE_PERMS["$p"]=1
-      done
-      grants_file="''${HOME}/.local/state/spaces/grants/${app.appId}.json"
-      if [ -r "$grants_file" ]; then
-        while IFS= read -r p; do
-          [ -n "$p" ] && EFFECTIVE_PERMS["$p"]=1
-        done < <(${pkgs.jq}/bin/jq -r '.granted[]?' "$grants_file" 2>/dev/null || true)
-      fi
-      for p in ${staticDeniedShell}; do
-        unset "EFFECTIVE_PERMS[$p]"
-      done
-
-      has_perm() { [ -n "''${EFFECTIVE_PERMS[$1]+x}" ]; }
-
-      # Audit-line effective list (sorted for stability).
-      eff_list=""
-      for p in $(printf '%s\n' "''${!EFFECTIVE_PERMS[@]}" | sort); do
-        if [ -n "$eff_list" ]; then eff_list+=","; fi
-        eff_list+="$p"
-      done
-
-      printf '{"event":"app-run","app":"${name}","appId":"${app.appId}","granted":%s,"denied":%s,"effective":"%s"}\n' \
-        '${builtins.toJSON app.permissions.granted}' \
-        '${builtins.toJSON app.permissions.denied}' \
-        "$eff_list" >&2
-
-      # ── Build property argv ──────────────────────────────────
-      args=(
-        ${staticPropsBody}
-      )
-
-      # Permission-dependent flags — at runtime so grants engage.
-      if ! has_perm network; then
-        args+=("--property=PrivateNetwork=true")
-      fi
-
-      if has_perm dri; then
-        args+=("--property=DeviceAllow=char-drm")
-      else
-        args+=("--property=PrivateDevices=true")
-      fi
-
-      if has_perm "audio.playback" || has_perm "audio.record"; then
-        args+=("--property=BindReadOnlyPaths=-''${XDG_RUNTIME_DIR}/pipewire-0")
-        args+=("--property=BindReadOnlyPaths=-''${XDG_RUNTIME_DIR}/pulse")
-      fi
-
-      if has_perm wayland; then
-        args+=("--property=BindReadOnlyPaths=''${XDG_RUNTIME_DIR}/''${WAYLAND_DISPLAY:-wayland-0}")
-        args+=("--setenv=WAYLAND_DISPLAY=''${WAYLAND_DISPLAY:-wayland-0}")
-      else
-        args+=("--property=UnsetEnvironment=WAYLAND_DISPLAY")
-      fi
-
-      if has_perm xwayland; then
-        args+=("--property=BindReadOnlyPaths=-/tmp/.X11-unix")
-        args+=("--setenv=DISPLAY=''${DISPLAY:-:0}")
-      else
-        args+=("--property=UnsetEnvironment=DISPLAY")
-      fi
-
-      if has_perm "fs.user-files"; then
-        args+=("--property=BindReadOnlyPaths=-''${HOME}/Documents:/home/app/Documents")
-        args+=("--property=BindReadOnlyPaths=-''${HOME}/Pictures:/home/app/Pictures")
-        args+=("--property=BindReadOnlyPaths=-''${HOME}/Downloads:/home/app/Downloads")
-      fi
-
-      if has_perm "wm.spawn-named-tasks"; then
-        args+=("--property=BindPaths=''${XDG_RUNTIME_DIR}/${coordinatorSocketRel}")
-        args+=("--setenv=APP_COORDINATOR_SOCKET=''${XDG_RUNTIME_DIR}/${coordinatorSocketRel}")
-      fi
-
-      # ── Build target argv chain (wrappers + binary) ──────────
-      target=(${execPath} ${lib.escapeShellArgs app.args})
-
-      # wayland-app-context wrap — depends on RUNTIME wayland
-      # permission AND the static waylandSandbox knob.
-      if has_perm wayland && [ "${if app.waylandSandbox then "1" else "0"}" = "1" ]; then
-        target=(
-          "${waylandContextPkg}/bin/wayland-app-context"
-          "--engine=${sandboxEngine}"
-          "--app-id=${app.appId}"
-          "--instance-id=app-${name}-$$"
-          "--"
-          "''${target[@]}"
-        )
-      fi
-
-      # dbus bridge wrap — STATIC (gated on dbusSession non-empty).
-      ${lib.optionalString dbusEnabled ''
-        target=(
-          "${dbusBridge}"
-          ${lib.concatMapStringsSep "\n          " (n: ''"--talk=${n}"'') app.dbusSession.talk}
-          ${lib.concatMapStringsSep "\n          " (n: ''"--own=${n}"'') app.dbusSession.own}
-          ${lib.concatMapStringsSep "\n          " (n: ''"--see=${n}"'') app.dbusSession.see}
-          ${lib.concatMapStringsSep "\n          " (n: ''"--call=${n}"'') app.dbusSession.call}
-          ${lib.concatMapStringsSep "\n          " (n: ''"--broadcast=${n}"'') app.dbusSession.broadcast}
-          "--"
-          "''${target[@]}"
-        )
+            install -d -m 0700 "''${HOME}/${app.stateDir}"
+      ${lib.optionalString (app.runtimeDir != null) ''
+        # Per-app runtime dir on the host, shared into the sandbox below.
+        install -d -m 0700 "''${XDG_RUNTIME_DIR}/${app.runtimeDir}"
       ''}
 
-      exec ${pkgs.systemd}/bin/systemd-run --user --no-block --collect \
-        --unit="app-${name}-$$" \
-        --description="spaces app: ${name}" \
-        "''${args[@]}" \
-        -- "''${target[@]}" "$@"
+            # ── Effective permission resolution ─────────────────────
+            # STATIC grants (baked) ∪ RUNTIME grants (from grants file)
+            # minus STATIC denies. Denies applied LAST so the operator's
+            # hard deny can never be bypassed by `spaces-apps grant`.
+            declare -A EFFECTIVE_PERMS
+            for p in ${staticGrantedShell}; do
+              EFFECTIVE_PERMS["$p"]=1
+            done
+            grants_file="''${HOME}/.local/state/spaces/grants/${app.appId}.json"
+            if [ -r "$grants_file" ]; then
+              while IFS= read -r p; do
+                [ -n "$p" ] && EFFECTIVE_PERMS["$p"]=1
+              done < <(${pkgs.jq}/bin/jq -r '.granted[]?' "$grants_file" 2>/dev/null || true)
+            fi
+            for p in ${staticDeniedShell}; do
+              unset "EFFECTIVE_PERMS[$p]"
+            done
+
+            has_perm() { [ -n "''${EFFECTIVE_PERMS[$1]+x}" ]; }
+
+            # Audit-line effective list (sorted for stability).
+            eff_list=""
+            for p in $(printf '%s\n' "''${!EFFECTIVE_PERMS[@]}" | sort); do
+              if [ -n "$eff_list" ]; then eff_list+=","; fi
+              eff_list+="$p"
+            done
+
+            printf '{"event":"app-run","app":"${name}","appId":"${app.appId}","granted":%s,"denied":%s,"effective":"%s"}\n' \
+              '${builtins.toJSON app.permissions.granted}' \
+              '${builtins.toJSON app.permissions.denied}' \
+              "$eff_list" >&2
+
+            # ── Build property argv ──────────────────────────────────
+            args=(
+              ${staticPropsBody}
+            )
+      ${lib.optionalString (app.runtimeDir != null) ''
+        # Bind the real $XDG_RUNTIME_DIR/<runtimeDir> rw into the sandbox.
+        # Applied after ProtectHome=tmpfs, so it overrides the read-only
+        # tmpfs on /run/user; the daemon and any out-of-sandbox control
+        # CLI share the same directory.
+        args+=("--property=BindPaths=''${XDG_RUNTIME_DIR}/${app.runtimeDir}")
+      ''}
+
+            # Permission-dependent flags — at runtime so grants engage.
+            if ! has_perm network; then
+              args+=("--property=PrivateNetwork=true")
+            fi
+
+            if has_perm dri; then
+              args+=("--property=DeviceAllow=char-drm")
+            else
+              args+=("--property=PrivateDevices=true")
+            fi
+
+            if has_perm "audio.playback" || has_perm "audio.record"; then
+              args+=("--property=BindReadOnlyPaths=-''${XDG_RUNTIME_DIR}/pipewire-0")
+              args+=("--property=BindReadOnlyPaths=-''${XDG_RUNTIME_DIR}/pulse")
+            fi
+
+            if has_perm wayland; then
+              args+=("--property=BindReadOnlyPaths=''${XDG_RUNTIME_DIR}/''${WAYLAND_DISPLAY:-wayland-0}")
+              args+=("--setenv=WAYLAND_DISPLAY=''${WAYLAND_DISPLAY:-wayland-0}")
+            else
+              args+=("--property=UnsetEnvironment=WAYLAND_DISPLAY")
+            fi
+
+            if has_perm xwayland; then
+              args+=("--property=BindReadOnlyPaths=-/tmp/.X11-unix")
+              args+=("--setenv=DISPLAY=''${DISPLAY:-:0}")
+            else
+              args+=("--property=UnsetEnvironment=DISPLAY")
+            fi
+
+            if has_perm "fs.user-files"; then
+              args+=("--property=BindReadOnlyPaths=-''${HOME}/Documents:/home/app/Documents")
+              args+=("--property=BindReadOnlyPaths=-''${HOME}/Pictures:/home/app/Pictures")
+              args+=("--property=BindReadOnlyPaths=-''${HOME}/Downloads:/home/app/Downloads")
+            fi
+
+            if has_perm "wm.spawn-named-tasks"; then
+              args+=("--property=BindPaths=''${XDG_RUNTIME_DIR}/${coordinatorSocketRel}")
+              args+=("--setenv=APP_COORDINATOR_SOCKET=''${XDG_RUNTIME_DIR}/${coordinatorSocketRel}")
+            fi
+
+            # ── Build target argv chain (wrappers + binary) ──────────
+            target=(${execPath} ${lib.escapeShellArgs app.args})
+
+            # wayland-app-context wrap — depends on RUNTIME wayland
+            # permission AND the static waylandSandbox knob.
+            if has_perm wayland && [ "${if app.waylandSandbox then "1" else "0"}" = "1" ]; then
+              target=(
+                "${waylandContextPkg}/bin/wayland-app-context"
+                "--engine=${sandboxEngine}"
+                "--app-id=${app.appId}"
+                "--instance-id=app-${name}-$$"
+                "--"
+                "''${target[@]}"
+              )
+            fi
+
+            # dbus bridge wrap — STATIC (gated on dbusSession non-empty).
+            ${lib.optionalString dbusEnabled ''
+              target=(
+                "${dbusBridge}"
+                ${lib.concatMapStringsSep "\n          " (n: ''"--talk=${n}"'') app.dbusSession.talk}
+                ${lib.concatMapStringsSep "\n          " (n: ''"--own=${n}"'') app.dbusSession.own}
+                ${lib.concatMapStringsSep "\n          " (n: ''"--see=${n}"'') app.dbusSession.see}
+                ${lib.concatMapStringsSep "\n          " (n: ''"--call=${n}"'') app.dbusSession.call}
+                ${lib.concatMapStringsSep "\n          " (n: ''"--broadcast=${n}"'') app.dbusSession.broadcast}
+                "--"
+                "''${target[@]}"
+              )
+            ''}
+
+            exec ${pkgs.systemd}/bin/systemd-run --user --no-block --collect \
+              --unit="app-${name}-$$" \
+              --description="spaces app: ${name}" \
+              "''${args[@]}" \
+              -- "''${target[@]}" "$@"
     '';
 in
 {
