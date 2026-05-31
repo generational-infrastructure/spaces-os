@@ -9,7 +9,7 @@ desktop has received, capped at the 100 most recent entries, ordered
 newest-first). It does not capture notifications itself — a separate
 notification-history daemon must write the file.
 
-On distro the writer is not bundled out of the box. If the user runs
+On spaces the writer is not bundled out of the box. If the user runs
 [noctalia](https://github.com/noctalia-dev/noctalia-shell) the skill
 auto-picks up its history file (`~/.cache/noctalia/notifications.json`).
 Otherwise the CLI returns `(no notifications)` and you should tell the user

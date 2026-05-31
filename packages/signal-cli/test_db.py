@@ -1,4 +1,4 @@
-"""Tests for distro_signal.db — schema, idempotency, thread/queue queries."""
+"""Tests for spaces_signal.db — schema, idempotency, thread/queue queries."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from distro_signal import db as dbmod
+from spaces_signal import db as dbmod
 
 
 def _msg(uid: str, **kwargs) -> dict:
@@ -46,7 +46,7 @@ class TestSchema(DbBase):
         self.assertIn("pending_sends", names)
 
     def test_default_db_path_honours_env(self) -> None:
-        with mock.patch.dict(os.environ, {"DISTRO_SIGNAL_DB": "/x/y.db"}):
+        with mock.patch.dict(os.environ, {"SPACES_SIGNAL_DB": "/x/y.db"}):
             self.assertEqual(dbmod.default_db_path(), Path("/x/y.db"))
 
 

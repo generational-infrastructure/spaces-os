@@ -217,7 +217,7 @@ have both.
 
 4. **Use the `signal` CLI only. Never write Python, shell, or any
    other code that talks to a `signal*` socket, `messages.db`,
-   `signal-cli`, or anything in `~/.local/state/distro/signal`
+   `signal-cli`, or anything in `~/.local/state/spaces/signal`
    directly.** Those endpoints exist *only* to back the `signal`
    CLI; calling them yourself would bypass the human-in-the-loop
    approval gate and is a security violation, equivalent to
@@ -244,7 +244,7 @@ have both.
   Same fix as above.
 
 * `error: bridge unreachable` → bridge crashed. Tell the user to
-  check `systemctl --user status distro-signal-bridge`. Usually
+  check `systemctl --user status spaces-signal-bridge`. Usually
   transient — restarts on next login.
 
 * `(no threads)` / `(no messages in thread …)` / `(no matches for

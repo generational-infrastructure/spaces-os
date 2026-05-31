@@ -8,8 +8,8 @@ API beyond "give me the recent entries, maybe filtered".
 The schema this CLI reads is the one noctalia ships
 (`~/.cache/noctalia/notifications.json`); when noctalia is running
 the CLI auto-picks up its file, otherwise the user wires their own
-writer and points `DISTRO_NOTIFICATIONS_FILE` at the output path.
-Pi's sandboxed scope sets `DISTRO_NOTIFICATIONS_FILE` to a
+writer and points `SPACES_NOTIFICATIONS_FILE` at the output path.
+Pi's sandboxed scope sets `SPACES_NOTIFICATIONS_FILE` to a
 bind-mounted copy regardless, so the agent always sees the same data
 the user does.
 """
@@ -31,14 +31,14 @@ URGENCY_VALUE = {label: value for value, label in URGENCY_LABEL.items()}
 
 def _default_history_path() -> Path:
     # Order of precedence — first hit wins:
-    #   1. DISTRO_NOTIFICATIONS_FILE — pi-chat sandbox export, pinned to
+    #   1. SPACES_NOTIFICATIONS_FILE — pi-chat sandbox export, pinned to
     #      the bind-mounted path inside the scope. Also the right knob for
     #      a user pointing at a non-noctalia writer.
     #   2. NOCTALIA_NOTIF_HISTORY_FILE — honored when noctalia is the
     #      writer and its history was redirected elsewhere.
     #   3. ~/.cache/noctalia/notifications.json — noctalia's hardcoded
     #      default; works out of the box when noctalia is running.
-    for var in ("DISTRO_NOTIFICATIONS_FILE", "NOCTALIA_NOTIF_HISTORY_FILE"):
+    for var in ("SPACES_NOTIFICATIONS_FILE", "NOCTALIA_NOTIF_HISTORY_FILE"):
         value = os.environ.get(var)
         if value:
             return Path(value)
@@ -175,14 +175,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Read-only access to a desktop notification history file in "
             "the schema noctalia ships. The default path can be overridden "
-            "with DISTRO_NOTIFICATIONS_FILE."
+            "with SPACES_NOTIFICATIONS_FILE."
         ),
     )
     parser.add_argument(
         "--file",
         type=Path,
         default=None,
-        help="Override the history file path (default: $DISTRO_NOTIFICATIONS_FILE or ~/.cache/noctalia/notifications.json)",
+        help="Override the history file path (default: $SPACES_NOTIFICATIONS_FILE or ~/.cache/noctalia/notifications.json)",
     )
     sub = parser.add_subparsers(dest="command")
     sub.required = True

@@ -21,7 +21,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
 # Default paths — overridable via env vars for ad-hoc runs.
-WORKDIR=${WORKDIR:-"/tmp/distro-installer-vm"}
+WORKDIR=${WORKDIR:-"/tmp/spaces-installer-vm"}
 DISK=${DISK:-"$WORKDIR/disk.qcow2"}
 DISK_SIZE=${DISK_SIZE:-20G}
 MEMORY=${MEMORY:-8192} # MiB; GNOME live + Calamares + niri toplevel realising during install needs headroom
@@ -31,7 +31,7 @@ mkdir -p "$WORKDIR"
 
 # --- ISO ---------------------------------------------------------------
 # If $ISO isn't pre-set, build via the flake. The first run takes a
-# while (full GNOME live env + distro closure); subsequent runs are
+# while (full GNOME live env + spaces closure); subsequent runs are
 # cached unless the flake source changed.
 if [[ -z ${ISO:-} ]]; then
   echo ">> Building installer ISO via nix..."
@@ -88,4 +88,4 @@ exec nix shell nixpkgs#qemu -c qemu-system-x86_64 \
   -device virtio-net-pci,netdev=n0 \
   -netdev user,id=n0 \
   -device intel-hda -device hda-output \
-  -name "distro-installer"
+  -name "spaces-installer"

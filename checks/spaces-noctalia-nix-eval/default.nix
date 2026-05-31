@@ -1,4 +1,4 @@
-# Cheap nix-eval contract for the noctalia bar shipped by the distro
+# Cheap nix-eval contract for the noctalia bar shipped by the spaces
 # bundle.
 #
 # Two things actually need testing here:
@@ -7,7 +7,7 @@
 #     under plugins/, the patched-era plugins-autoload/ dir, and
 #     ghost entries in plugins.json), without touching user-installed
 #     marketplace plugins or other state;
-#   - the bundle boundary is intact: nixosModules.distro ships the
+#   - the bundle boundary is intact: nixosModules.spaces ships the
 #     bar, nixosModules.pi-chat does not.
 #
 # Everything else (ExecStart shape, partOf/wantedBy, package list,
@@ -37,9 +37,9 @@ let
       modules = baseModules ++ extra;
     };
 
-  distroSystem = mkSystem [
-    inputs.self.nixosModules.distro
-    { networking.hostName = "noctalia-distro"; }
+  spacesSystem = mkSystem [
+    inputs.self.nixosModules.spaces
+    { networking.hostName = "noctalia-spaces"; }
   ];
 
   panelOnlySystem = mkSystem [
@@ -47,10 +47,10 @@ let
     { networking.hostName = "noctalia-absent"; }
   ];
 
-  userActivation = distroSystem.config.system.userActivationScripts.script or "";
+  userActivation = spacesSystem.config.system.userActivationScripts.script or "";
 
 in
-pkgs.runCommand "distro-noctalia-nix-eval-test"
+pkgs.runCommand "spaces-noctalia-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
     inherit userActivation;
@@ -59,15 +59,15 @@ pkgs.runCommand "distro-noctalia-nix-eval-test"
         "no"
       else
         "yes";
-    distroHasNoctalia =
-      if (distroSystem.config.systemd.user.services.noctalia-shell or null) == null then "no" else "yes";
+    spacesHasNoctalia =
+      if (spacesSystem.config.systemd.user.services.noctalia-shell or null) == null then "no" else "yes";
   }
   ''
     set -euo pipefail
     fail() { echo "FAIL: $*" >&2; exit 1; }
 
     # ── 1. Bundle boundary ──────────────────────────────────────────
-    [ "$distroHasNoctalia"    = "yes" ] || fail "nixosModules.distro must declare the noctalia-shell user unit"
+    [ "$spacesHasNoctalia"    = "yes" ] || fail "nixosModules.spaces must declare the noctalia-shell user unit"
     [ "$panelOnlyHasNoctalia" = "no"  ] || fail "nixosModules.pi-chat alone must not pull noctalia in"
 
     # ── 2. Purge is wired into per-user activation (so nixos-rebuild
@@ -134,7 +134,7 @@ pkgs.runCommand "distro-noctalia-nix-eval-test"
         || fail "purge left states.$ghost in plugins.json"
     done
     jq -e '.states["user-weather"].enabled == true' "$cfg/plugins.json" >/dev/null \
-      || fail "purge dropped user-installed plugins.json entry (must only drop distro-owned ids)"
+      || fail "purge dropped user-installed plugins.json entry (must only drop spaces-owned ids)"
 
     # ── 4. Fresh host is a no-op. Catches a regression where the
     # purge errors when ~/.config/noctalia does not exist yet.

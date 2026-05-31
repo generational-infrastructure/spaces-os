@@ -1,6 +1,6 @@
 { pkgs, ... }:
 pkgs.python3Packages.buildPythonApplication {
-  pname = "distro-signal-cli";
+  pname = "spaces-signal-cli";
   version = "0.1.0";
   pyproject = true;
   src = ./.;
@@ -13,7 +13,7 @@ pkgs.python3Packages.buildPythonApplication {
     "test_cli.py"
   ];
   meta = {
-    description = "Signal skill for the distro AI agent (CLI + bridge daemon)";
+    description = "Signal skill for the spaces AI agent (CLI + bridge daemon)";
     mainProgram = "signal";
   };
 }

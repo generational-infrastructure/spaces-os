@@ -43,7 +43,7 @@ QtObject {
   // ── deployment env (set by the backend before spawn) ──
   property var    backend: null      // PiChatBackend, used for skill-config socket sends
   property string piBin              // /nix/store/.../bin/pi
-  property string stateDir           // ~/.local/state/distro/pi
+  property string stateDir           // ~/.local/state/spaces/pi
   property string piAgentDir         // <stateDir>/pi-agent
   property string llmUrl: "http://127.0.0.1:8012"
   property string memoryHigh: "4G"
@@ -278,7 +278,7 @@ QtObject {
   //
   // The marker convention is opt-out: file present → disabled. The
   // memory extension reads this from
-  // $DISTRO_PI_CHAT_STATE_DIR/sessions/<id>/memory-off at each hook
+  // $SPACES_PI_CHAT_STATE_DIR/sessions/<id>/memory-off at each hook
   // entry, so flipping the bit here propagates to the next prompt
   // without a respawn. Reapplied on every spawn (and on startup) so
   // the marker matches the persisted intent even after the session
@@ -351,8 +351,8 @@ QtObject {
   function _buildCommand() {
     const xdgRuntime = String(Quickshell.env("XDG_RUNTIME_DIR"));
     const sessionState = stateDir + "/sessions/" + sessionId;
-    const skillSockHost = xdgRuntime + "/distro-skill-config.sock";
-    const openUrlSockHost = xdgRuntime + "/distro-pi-open-url.sock";
+    const skillSockHost = xdgRuntime + "/spaces-skill-config.sock";
+    const openUrlSockHost = xdgRuntime + "/spaces-pi-open-url.sock";
     const skillsDefs = stateDir + "/skills-defs";
     const skillConfigStore = stateDir + "/skill-config";
     // Dedicated dir for the desktop notification-history file. Whatever
@@ -360,7 +360,7 @@ QtObject {
     // standalone bridge, etc.) writes its history JSON to
     // <notificationsDir>/history.json so we can bind this single dir
     // read-only without exposing any wider cache. The `notifications`
-    // skill reads the file via DISTRO_NOTIFICATIONS_FILE.
+    // skill reads the file via SPACES_NOTIFICATIONS_FILE.
     const notificationsDir = stateDir + "/notifications";
     const notificationsFile = notificationsDir + "/history.json";
 
@@ -375,13 +375,13 @@ QtObject {
       "--slice=pi-chat.slice",
       "--service-type=exec",
       "--working-directory=" + workspacePath,
-      "--setenv=DISTRO_SESSION_ID=" + sessionId,
+      "--setenv=SPACES_SESSION_ID=" + sessionId,
       "--setenv=PI_CODING_AGENT_DIR=" + piAgentDir,
       "--setenv=LLAMA_SWAP_BASE_URL=" + llmUrl,
       "--setenv=SKILL_CONFIG_SOCKET=" + skillSockHost,
-      "--setenv=DISTRO_OPEN_URL_SOCKET=" + openUrlSockHost,
-      "--setenv=DISTRO_PI_CHAT_STATE_DIR=" + stateDir,
-      "--setenv=DISTRO_NOTIFICATIONS_FILE=" + notificationsFile,
+      "--setenv=SPACES_OPEN_URL_SOCKET=" + openUrlSockHost,
+      "--setenv=SPACES_PI_CHAT_STATE_DIR=" + stateDir,
+      "--setenv=SPACES_NOTIFICATIONS_FILE=" + notificationsFile,
       "--setenv=PI_TELEMETRY=0",
       "--setenv=PI_OFFLINE=0",
       // Propagate the chat shell's PATH into the transient unit.
@@ -437,7 +437,7 @@ QtObject {
       cmd.push("--property=BindPaths=" + piAgentDir + ":" + piAgentDir);
     }
     if (openrouterEnabled) {
-      cmd.push("--property=LoadCredential=openrouter-api-key:/run/distro-secrets/openrouter-api-key");
+      cmd.push("--property=LoadCredential=openrouter-api-key:/run/spaces-secrets/openrouter-api-key");
     }
     if (memoryDbDir && memoryHfHome) {
       // SEDIMENT_DB is the vector store (bind-mounted RW so the

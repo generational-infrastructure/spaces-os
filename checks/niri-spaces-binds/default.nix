@@ -1,4 +1,4 @@
-# Cheap nix-eval contract for the distro-specific niri keybinds.
+# Cheap nix-eval contract for the spaces-specific niri keybinds.
 #
 # The standalone-chat migration once silently repurposed Mod+Shift+N
 # (noctalia bar reload) to pi-chat. This pins the two reload binds so a
@@ -25,7 +25,7 @@ let
   };
   niriConfig = system.config.environment.etc."niri/config.kdl".source;
 in
-pkgs.runCommand "niri-distro-binds-test" { inherit niriConfig; } ''
+pkgs.runCommand "niri-spaces-binds-test" { inherit niriConfig; } ''
   set -euo pipefail
   fail() { echo "FAIL: $*" >&2; exit 1; }
 

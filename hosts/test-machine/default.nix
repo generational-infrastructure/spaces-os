@@ -15,7 +15,7 @@
     };
     modules = [
       { nixpkgs.hostPlatform = "x86_64-linux"; }
-      flake.nixosModules.distro
+      flake.nixosModules.spaces
       ./configuration.nix
     ];
   };

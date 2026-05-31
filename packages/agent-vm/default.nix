@@ -35,7 +35,7 @@ else
       ((inputs.self.nixosConfigurations.test-machine.extendModules {
         modules = [
           inputs.self.nixosModules.test-support
-          { services.distro.vm-debug.headless = true; }
+          { services.spaces.vm-debug.headless = true; }
         ];
       }).config.system.build
       )

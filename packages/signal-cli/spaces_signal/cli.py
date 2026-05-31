@@ -1,6 +1,6 @@
 """Agent-facing `signal` command.
 
-The CLI is the only `distro_signal` entry point visible from inside
+The CLI is the only `spaces_signal` entry point visible from inside
 the pi-chat sandbox. It speaks three protocols:
 
 * **SQLite (RO)** for read commands: `threads`, `read`, `search`.
@@ -33,7 +33,7 @@ from typing import Sequence
 
 from . import db as dbmod
 
-DEFAULT_ENQUEUE_SOCKET_ENV = "DISTRO_SIGNAL_ENQUEUE_SOCKET"
+DEFAULT_ENQUEUE_SOCKET_ENV = "SPACES_SIGNAL_ENQUEUE_SOCKET"
 
 
 # ── socket-path helpers ─────────────────────────────────────────────
@@ -45,7 +45,7 @@ def _runtime_dir() -> str:
 
 def _enqueue_socket_path() -> str:
     env = os.environ.get(DEFAULT_ENQUEUE_SOCKET_ENV)
-    return env or f"{_runtime_dir()}/distro-signal/sandbox/enqueue.sock"
+    return env or f"{_runtime_dir()}/spaces-signal/sandbox/enqueue.sock"
 
 
 _ONBOARDING_HINT = (
@@ -325,7 +325,7 @@ def _enqueue_call(payload: dict, *, timeout: float = 5.0) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="signal",
-        description="Agent-facing CLI for the distro Signal skill.",
+        description="Agent-facing CLI for the spaces Signal skill.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

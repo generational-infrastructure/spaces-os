@@ -12,7 +12,7 @@ Behaviour under test:
   * Missing file is **not** an error — pi must be able to call this on a
     fresh session before any notification has been delivered.
   * Malformed JSON exits non-zero with a single-line message on stderr.
-  * `DISTRO_NOTIFICATIONS_FILE` overrides the default path.
+  * `SPACES_NOTIFICATIONS_FILE` overrides the default path.
 """
 
 from __future__ import annotations
@@ -78,14 +78,14 @@ class CliHarness(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "notifications.json"
-        self._old_env = os.environ.get("DISTRO_NOTIFICATIONS_FILE")
-        os.environ["DISTRO_NOTIFICATIONS_FILE"] = str(self.path)
+        self._old_env = os.environ.get("SPACES_NOTIFICATIONS_FILE")
+        os.environ["SPACES_NOTIFICATIONS_FILE"] = str(self.path)
 
     def tearDown(self) -> None:
         if self._old_env is None:
-            os.environ.pop("DISTRO_NOTIFICATIONS_FILE", None)
+            os.environ.pop("SPACES_NOTIFICATIONS_FILE", None)
         else:
-            os.environ["DISTRO_NOTIFICATIONS_FILE"] = self._old_env
+            os.environ["SPACES_NOTIFICATIONS_FILE"] = self._old_env
 
     def write(self, payload: dict | str) -> None:
         if isinstance(payload, dict):
@@ -236,7 +236,7 @@ class Robustness(CliHarness):
     def test_env_var_overrides_default_path(self) -> None:
         # Already exercised implicitly by CliHarness — pin it explicitly.
         self.write(sample_payload())
-        self.assertEqual(os.environ["DISTRO_NOTIFICATIONS_FILE"], str(self.path))
+        self.assertEqual(os.environ["SPACES_NOTIFICATIONS_FILE"], str(self.path))
         code, out, _ = self.run_cli("list")
         self.assertEqual(code, 0)
         self.assertIn("Ferdium", out)
@@ -258,12 +258,12 @@ class HelpAndUsage(unittest.TestCase):
 
 
 class FallbackPathResolution(unittest.TestCase):
-    """The CLI looks at DISTRO_NOTIFICATIONS_FILE first, then NOCTALIA_NOTIF_HISTORY_FILE."""
+    """The CLI looks at SPACES_NOTIFICATIONS_FILE first, then NOCTALIA_NOTIF_HISTORY_FILE."""
 
     def setUp(self) -> None:
         self._snapshot = {
             k: os.environ.pop(k, None)
-            for k in ("DISTRO_NOTIFICATIONS_FILE", "NOCTALIA_NOTIF_HISTORY_FILE")
+            for k in ("SPACES_NOTIFICATIONS_FILE", "NOCTALIA_NOTIF_HISTORY_FILE")
         }
 
     def tearDown(self) -> None:
@@ -286,7 +286,7 @@ class FallbackPathResolution(unittest.TestCase):
             sys.argv = old_argv
         return code, stdout.getvalue()
 
-    def test_noctalia_env_used_when_distro_var_missing(self) -> None:
+    def test_noctalia_env_used_when_spaces_var_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "from-noctalia.json"
             path.write_text(json.dumps(sample_payload()))
@@ -295,13 +295,13 @@ class FallbackPathResolution(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("Ferdium", out)
 
-    def test_distro_var_takes_precedence_over_noctalia(self) -> None:
+    def test_spaces_var_takes_precedence_over_noctalia(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            primary = Path(tmp) / "distro.json"
+            primary = Path(tmp) / "spaces.json"
             secondary = Path(tmp) / "noctalia.json"
             primary.write_text(json.dumps(sample_payload()))
             secondary.write_text(json.dumps({"notifications": []}))
-            os.environ["DISTRO_NOTIFICATIONS_FILE"] = str(primary)
+            os.environ["SPACES_NOTIFICATIONS_FILE"] = str(primary)
             os.environ["NOCTALIA_NOTIF_HISTORY_FILE"] = str(secondary)
             code, out = self._drive("list", "--limit", "1")
             self.assertEqual(code, 0)

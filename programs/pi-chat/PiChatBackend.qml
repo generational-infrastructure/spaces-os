@@ -25,7 +25,7 @@ Item {
   // Per-user preferences (maxHistory, defaultWorkspaceRoot, …) come
   // from the same Settings singleton the rest of the app uses. The
   // module-derived deployment knobs (pi binary path, sandbox limits,
-  // openrouter flag) still come from /etc/distro/pi-chat.json via
+  // openrouter flag) still come from /etc/spaces/pi-chat.json via
   // the FileView below — those are root-owned and don't belong in
   // the user-writable settings file.
   function cfg(key) {
@@ -33,14 +33,14 @@ Item {
   }
 
   // ── module-derived config ──
-  // The NixOS pi-chat module writes /etc/distro/pi-chat.json with all
+  // The NixOS pi-chat module writes /etc/spaces/pi-chat.json with all
   // the deployment-specific knobs (pi binary path, sandbox limits,
   // openrouter flag). Reading it via FileView keeps the QML
   // self-contained without forcing the user manager's
   // DefaultEnvironment to be wired up correctly.
   FileView {
     id: configFile
-    path: "/etc/distro/pi-chat.json"
+    path: "/etc/spaces/pi-chat.json"
     printErrors: false
     JsonAdapter {
       id: configAdapter
@@ -72,9 +72,9 @@ Item {
 
   readonly property string homeDir: String(Quickshell.env("HOME"))
   readonly property string runtimeDir: String(Quickshell.env("XDG_RUNTIME_DIR"))
-  readonly property string stateDir: homeDir + "/.local/state/distro/pi"
+  readonly property string stateDir: homeDir + "/.local/state/spaces/pi"
   readonly property string piAgentDir: stateDir + "/pi-agent"
-  readonly property string workspacesDir: homeDir + "/.local/share/distro/workspaces"
+  readonly property string workspacesDir: homeDir + "/.local/share/spaces/workspaces"
   readonly property string sessionsIndexPath: stateDir + "/sessions.json"
   readonly property string piBin: root._cfg.piBin
   readonly property string llmUrl: root._cfg.llmUrl
@@ -95,11 +95,11 @@ Item {
     if (typeof c === "number" && c > 0) return c;
     return root._cfg.idleTimeoutMinutes > 0 ? root._cfg.idleTimeoutMinutes : 10;
   }
-  readonly property string skillConfigSockPath: runtimeDir + "/distro-skill-config.sock"
-  readonly property string openUrlSockPath: runtimeDir + "/distro-pi-open-url.sock"
-  readonly property string signalPanelSockPath: runtimeDir + "/distro-signal/panel.sock"
+  readonly property string skillConfigSockPath: runtimeDir + "/spaces-skill-config.sock"
+  readonly property string openUrlSockPath: runtimeDir + "/spaces-pi-open-url.sock"
+  readonly property string signalPanelSockPath: runtimeDir + "/spaces-signal/panel.sock"
 
-  // Bridge between the distro-signal panel socket and the chat UI.
+  // Bridge between the spaces-signal panel socket and the chat UI.
   // The panel sits *outside* the pi-chat sandbox, so it (not the
   // agent) is the only thing that can mint approvals on outbound
   // Signal sends. `pending` and `approve(token)` / `deny(token)`
@@ -350,7 +350,7 @@ Item {
   // ── skill-config sidecar socket ──
   // Same NDJSON protocol as the chat socket; only the socket path
   // changes. Bubbles land in the session whose id matches the daemon
-  // event's `instance` field (set from DISTRO_SESSION_ID inside the
+  // event's `instance` field (set from SPACES_SESSION_ID inside the
   // scope), falling back to the active session.
 
   Socket {

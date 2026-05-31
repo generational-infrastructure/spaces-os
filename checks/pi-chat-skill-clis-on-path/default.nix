@@ -10,7 +10,7 @@
 #      terminal — debug a skill, script around it, use it without the
 #      chat panel.
 #
-# This check evaluates a default distro host (which imports pi-chat
+# This check evaluates a default spaces host (which imports pi-chat
 # + signal-cli via the bundle), walks every enabled built-in skill's
 # SKILL.md, extracts the
 # CLI binary names mentioned in fenced bash blocks, and asserts each
@@ -21,7 +21,7 @@
 let
   inherit (inputs.nixpkgs) lib;
 
-  # Default distro shape: the bundle auto-enables pi-chat and (via
+  # Default spaces shape: the bundle auto-enables pi-chat and (via
   # pi-chat's own dep) signal-cli. Both default-on; nothing extra to set.
   system = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
@@ -29,7 +29,7 @@ let
       flake = inputs.self;
     };
     modules = [
-      inputs.self.nixosModules.distro
+      inputs.self.nixosModules.spaces
       {
         nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "skill-clis-fixture";

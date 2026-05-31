@@ -5,7 +5,7 @@
 # system. Two display modes:
 #   - GTK (default): virtio-vga-gl + interactive window, spice-vdagent
 #     host↔guest clipboard, intel-hda duplex audio via host PipeWire.
-#   - headless (services.distro.vm-debug.headless = true): no window,
+#   - headless (services.spaces.vm-debug.headless = true): no window,
 #     QMP control socket on /tmp/agent-vm-qmp.sock, VNC on
 #     127.0.0.1:5999, serial on stdio. Intended for agent-driven dev
 #     loops that send synthetic keys + grab screenshots over QMP.
@@ -17,7 +17,7 @@
   ...
 }:
 let
-  cfg = config.services.distro.vm-debug;
+  cfg = config.services.spaces.vm-debug;
   guiOpts = [
     "-device virtio-vga-gl"
     "-display gtk,gl=on,show-menubar=off"
@@ -47,7 +47,7 @@ let
   ];
 in
 {
-  options.services.distro.vm-debug.headless = lib.mkEnableOption ''
+  options.services.spaces.vm-debug.headless = lib.mkEnableOption ''
     headless run of the test VM: no GTK window, QMP control socket
     at $AGENT_VM_QMP, VNC at $AGENT_VM_VNC (default 127.0.0.1:5999),
     serial on stdio. Used by `nix build .#agent-vm` for agent-driven
@@ -80,8 +80,8 @@ in
     users.users.root.initialPassword = "root";
 
     # Use smallest English-only model for faster transcription in VM.
-    distro.voxtype.whisperModel = "tiny.en";
-    distro.voxtype.whisperLanguage = "en";
+    spaces.voxtype.whisperModel = "tiny.en";
+    spaces.voxtype.whisperLanguage = "en";
 
     # Guest-side clipboard agent only makes sense with the GUI display
     # — headless has no spice channel to attach to.

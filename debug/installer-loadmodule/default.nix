@@ -6,11 +6,11 @@
 # `installer-config-gen` unit test stubs out. We:
 #
 #   1. Boot a small NixOS VM with calamares-with-tests +
-#      calamares-distro-extensions installed.
+#      calamares-spaces-extensions installed.
 #   2. Mount a fresh ext4 disk at `/mnt` so `nixos-generate-config`
 #      and the file-write side-effects in `run()` have a writable
 #      target. (The script no longer needs anything staged on the
-#      live medium — the distro flake store path is baked into
+#      live medium — the spaces flake store path is baked into
 #      `main.py` at extensions-package build time.)
 #   3. Stub `nix-build` and `nixos-install` to no-ops — we're
 #      verifying main.py's config-generation path, not realising the
@@ -20,7 +20,7 @@
 #      Calamares writes into globalstorage during a real GUI session.
 #   5. Assert every expected output file exists, that the generated
 #      Nix parses, and that `default.nix` references the expected
-#      distro store path.
+#      spaces store path.
 {
   pkgs,
   flake,
@@ -31,20 +31,20 @@ let
   inherit (pkgs) lib;
 
   cwt = pkgs.callPackage ./calamares-with-tests { };
-  ext = pkgs.callPackage ../../packages/calamares-distro-extensions { };
+  ext = pkgs.callPackage ../../packages/calamares-spaces-extensions { };
 
-  # Direct inputs distro declares, read straight out of distro's
+  # Direct inputs spaces declares, read straight out of spaces's
   # flake.lock so the test mirrors what installer-iso.nix computes.
-  # Hardcoding the list here would silently rot when distro grows or
+  # Hardcoding the list here would silently rot when spaces grows or
   # drops an input.
-  distroLock = builtins.fromJSON (builtins.readFile "${flake.lib.distroSrc}/flake.lock");
-  distroDirectInputs = builtins.attrNames distroLock.nodes.root.inputs;
-  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) distroDirectInputs) (
+  spacesLock = builtins.fromJSON (builtins.readFile "${flake.lib.spacesSrc}/flake.lock");
+  spacesDirectInputs = builtins.attrNames spacesLock.nodes.root.inputs;
+  inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) spacesDirectInputs) (
     n: builtins.toString inputs.${n}.outPath
   );
-  installConfig = pkgs.writeText "calamares-distro-install.json" (
+  installConfig = pkgs.writeText "calamares-spaces-install.json" (
     builtins.toJSON {
-      distroFlake = toString flake.lib.distroSrc;
+      spacesFlake = toString flake.lib.spacesSrc;
       inherit inputOverrides;
     }
   );
@@ -128,11 +128,11 @@ pkgs.testers.runNixOSTest {
     ];
 
     # Stage the install-config JSON main.py reads at runtime. Putting
-    # it under /etc/calamares-distro means the package itself stays
-    # independent of the distro flake source path; pulling distroSrc
+    # it under /etc/calamares-spaces means the package itself stays
+    # independent of the spaces flake source path; pulling spacesSrc
     # in via this etc entry keeps it alive in the VM's nix store
     # without going through the calamares derivation.
-    environment.etc."calamares-distro/install.json".source = installConfig;
+    environment.etc."calamares-spaces/install.json".source = installConfig;
 
     # `pkexec` invoked by root just runs the command, so we don't
     # need a polkit rule — the test drives loadmodule as root.
@@ -181,28 +181,28 @@ pkgs.testers.runNixOSTest {
     machine.fail("test -e /mnt/etc/nixos/default.nix")  # superseded by wrapper flake
     machine.succeed("test -f /mnt/etc/nixos/flake.lock")
 
-    # Wrapper flake.lock pins distro AND distro's direct inputs to
+    # Wrapper flake.lock pins spaces AND spaces's direct inputs to
     # staged store paths. If the lock graph is malformed, eval breaks
     # with a confusing "attribute … missing" later; a structural check
     # here catches the wiring at the unit level.
     machine.succeed("jq . /mnt/etc/nixos/flake.lock > /dev/null")
     machine.succeed(
-      "test \"$(jq -r .nodes.distro.locked.path /mnt/etc/nixos/flake.lock)\" "
-      "= '${flake.lib.distroSrc}'"
+      "test \"$(jq -r .nodes.spaces.locked.path /mnt/etc/nixos/flake.lock)\" "
+      "= '${flake.lib.spacesSrc}'"
     )
     machine.succeed(
-      "test \"$(jq -r .nodes.distro.original.type /mnt/etc/nixos/flake.lock)\" "
+      "test \"$(jq -r .nodes.spaces.original.type /mnt/etc/nixos/flake.lock)\" "
       "= 'github'"
     )
-    # Every direct input distro declares MUST appear as a path-locked
-    # node. The list is derived from distro's own flake.lock at Nix
+    # Every direct input spaces declares MUST appear as a path-locked
+    # node. The list is derived from spaces's own flake.lock at Nix
     # eval time so it stays in sync. Look up each input via
-    # `.nodes.distro.inputs.<name>` to handle node renames (e.g.
+    # `.nodes.spaces.inputs.<name>` to handle node renames (e.g.
     # `treefmt-nix_2` for follow-deduplicated nodes).
-    for inp in [${lib.concatMapStringsSep ", " (n: ''"${n}"'') distroDirectInputs}]:
+    for inp in [${lib.concatMapStringsSep ", " (n: ''"${n}"'') spacesDirectInputs}]:
         machine.succeed(
             "node=$(jq -r --arg n " + f"\"{inp}\"" + " "
-            "'.nodes.distro.inputs[$n]' /mnt/etc/nixos/flake.lock); "
+            "'.nodes.spaces.inputs[$n]' /mnt/etc/nixos/flake.lock); "
             "test \"$(jq -r --arg n \"$node\" "
             "'.nodes[$n].locked.type' /mnt/etc/nixos/flake.lock)\" "
             "= 'path'"
@@ -212,10 +212,10 @@ pkgs.testers.runNixOSTest {
     # details exhaustively; here we only confirm the real-Calamares
     # path produced a config of the same family.
     machine.succeed(
-      "grep -q 'inputs.distro.url = \"github:generational-infrastructure/distro\"' "
+      "grep -q 'inputs.spaces.url = \"github:generational-infrastructure/spaces-os\"' "
       "/mnt/etc/nixos/flake.nix"
     )
-    machine.succeed("grep -q 'inputs.distro.lib.mkSystem' /mnt/etc/nixos/flake.nix")
+    machine.succeed("grep -q 'inputs.spaces.lib.mkSystem' /mnt/etc/nixos/flake.nix")
     machine.succeed("grep -q 'nixosConfigurations.ai-desktop' /mnt/etc/nixos/flake.nix")
     machine.succeed(
       "grep -q 'hostName = \"ai-desktop\"' /mnt/etc/nixos/flake.nix"
@@ -232,7 +232,7 @@ pkgs.testers.runNixOSTest {
     machine.fail("grep -q 'desktopManager.plasma6' /mnt/etc/nixos/configuration.nix")
 
     # Generated files are syntactically valid. Full evaluation would
-    # require every transitive input of the distro flake to be in the
+    # require every transitive input of the spaces flake to be in the
     # VM's store; here we settle for a parse check, which catches
     # template-substitution mishaps (stray @@@@, malformed multi-line
     # strings, etc.) without hauling nixpkgs into the VM closure.

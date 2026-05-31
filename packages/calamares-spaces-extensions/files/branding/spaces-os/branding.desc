@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: no
+# SPDX-License-Identifier: CC0-1.0
+#
+# Spaces OS branding for Calamares. Forked from the upstream
+# calamares-nixos-extensions `nixos` branding: only the product-name
+# strings and componentName are changed. Window layout, colors,
+# artwork and slideshow are reused from the copied `nixos` dir
+# (installer-iso/postPatch does `cp -r branding/nixos branding/spaces-os`),
+# so the welcome page reads "Spaces OS" while the logo/slideshow are still
+# the upstream NixOS artwork — swap those for real Spaces OS assets later.
+---
+componentName:  spaces-os
+
+### WELCOME / OVERALL WORDING
+welcomeStyleCalamares:   false
+welcomeExpandingLogo:   true
+
+### WINDOW CONFIGURATION
+windowExpanding:    normal
+windowSize: 800px,520px
+windowPlacement: center
+
+### PANELS CONFIGURATION
+sidebar: widget
+navigation: widget
+
+### STRINGS, IMAGES AND COLORS
+#
+# productName et al. are hardcoded to "Spaces OS" rather than the
+# os-release `${NAME}` substitution upstream uses: the installer runs
+# from a NixOS-based ISO whose /etc/os-release NAME is still "NixOS",
+# so substitution would mislabel the welcome page.
+strings:
+    productName:         "Spaces OS"
+    shortProductName:    "Spaces OS"
+    version:
+    shortVersion:
+    versionedName:       "Spaces OS"
+    shortVersionedName:  "Spaces OS"
+    bootloaderEntryName: "Spaces OS"
+    productUrl:          https://github.com/generational-infrastructure/spaces-os
+    supportUrl:          https://github.com/generational-infrastructure/spaces-os
+    knownIssuesUrl:      https://github.com/generational-infrastructure/spaces-os/issues
+    releaseNotesUrl:
+    donateUrl:
+
+images:
+    productIcon:         "nix-snowflake.svg"
+    productLogo:         "white.png"
+    productWelcome:      "nix-snowflake.svg"
+
+style:
+   SidebarBackground:        "#5277C3"
+   SidebarText:              "#FFFFFF"
+   SidebarTextCurrent:       "#292F34"
+   SidebarBackgroundCurrent: "#7EBAE4"
+
+### SLIDESHOW
+slideshow:               "show.qml"
+slideshowAPI: 2
+
+uploadServer :
+    type :    "fiche"
+    url :     "http://termbin.com:9999"
+    sizeLimit : -1

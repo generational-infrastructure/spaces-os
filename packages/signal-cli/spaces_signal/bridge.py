@@ -1,4 +1,4 @@
-"""Always-up bridge between signal-cli's daemon and the distro agent.
+"""Always-up bridge between signal-cli's daemon and the spaces agent.
 
 Three concurrent jobs in one process:
 
@@ -7,13 +7,13 @@ Three concurrent jobs in one process:
    `messages.db`. Subscription stays alive for the daemon's lifetime;
    if the socket drops, the supervisor reconnects on a short backoff.
 
-2. **Enqueue listener** — bound to `$XDG_RUNTIME_DIR/distro-signal/sandbox/enqueue.sock`
+2. **Enqueue listener** — bound to `$XDG_RUNTIME_DIR/spaces-signal/sandbox/enqueue.sock`
    and bind-mounted RW into the pi-chat sandbox. Sandbox-side CLIs
    (the `signal send` command) talk to this socket. Self-sends are
    dispatched immediately; everything else lands in `pending_sends`
    and returns a token the agent must hand back to the human.
 
-3. **Panel listener** — bound to `$XDG_RUNTIME_DIR/distro-signal/panel.sock`
+3. **Panel listener** — bound to `$XDG_RUNTIME_DIR/spaces-signal/panel.sock`
    and **NOT** bound into the sandbox. The pi-chat Quickshell panel reads
    `{op:"list"}` to render pending approval cards and posts
    `{op:"approve"/"deny"}` to dispatch or cancel them. The split-socket
@@ -45,11 +45,11 @@ from typing import Callable, Iterable
 from . import db as dbmod
 from .jsonrpc import JsonRpcClient, JsonRpcError
 
-log = logging.getLogger("distro_signal.bridge")
+log = logging.getLogger("spaces_signal.bridge")
 
-DEFAULT_DAEMON_SOCKET_ENV = "DISTRO_SIGNAL_DAEMON_SOCKET"
-DEFAULT_ENQUEUE_SOCKET_ENV = "DISTRO_SIGNAL_ENQUEUE_SOCKET"
-DEFAULT_PANEL_SOCKET_ENV = "DISTRO_SIGNAL_PANEL_SOCKET"
+DEFAULT_DAEMON_SOCKET_ENV = "SPACES_SIGNAL_DAEMON_SOCKET"
+DEFAULT_ENQUEUE_SOCKET_ENV = "SPACES_SIGNAL_ENQUEUE_SOCKET"
+DEFAULT_PANEL_SOCKET_ENV = "SPACES_SIGNAL_PANEL_SOCKET"
 
 # Resource caps on the sandbox-facing enqueue socket. The sandbox is
 # the lower-trust side of the bridge — these prevent a buggy or
@@ -109,7 +109,7 @@ def _default_enqueue_socket() -> str:
     if env:
         return env
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return f"{runtime}/distro-signal/sandbox/enqueue.sock"
+    return f"{runtime}/spaces-signal/sandbox/enqueue.sock"
 
 
 def _default_panel_socket() -> str:
@@ -117,7 +117,7 @@ def _default_panel_socket() -> str:
     if env:
         return env
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return f"{runtime}/distro-signal/panel.sock"
+    return f"{runtime}/spaces-signal/panel.sock"
 
 
 # ── helpers ─────────────────────────────────────────────────────────

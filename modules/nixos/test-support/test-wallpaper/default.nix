@@ -29,7 +29,7 @@ pkgs.runCommand "test-wallpaper"
           y=$((row * 130 + 30))
           for col in 0 1; do
             x=$((col * 640 + 20))
-            echo "-annotate +$x+$y DISTRO_TEST_OK"
+            echo "-annotate +$x+$y SPACES_TEST_OK"
           done
         done) \
       $out/wallpaper.png

@@ -1,7 +1,7 @@
 """SQLite schema + helpers shared by the signal CLI and bridge.
 
-The store lives at $DISTRO_SIGNAL_DB (default
-~/.local/state/distro/signal/messages.db). Two tables:
+The store lives at $SPACES_SIGNAL_DB (default
+~/.local/state/spaces/signal/messages.db). Two tables:
 
 * `messages` — append-only inbox. Idempotent on `(uid)`; the bridge
   may legitimately replay the same envelope (signal-cli ack semantics)
@@ -66,11 +66,11 @@ VALID_STATES = frozenset({"pending", "approved", "sent", "denied", "failed"})
 
 
 def default_db_path() -> Path:
-    env = os.environ.get("DISTRO_SIGNAL_DB")
+    env = os.environ.get("SPACES_SIGNAL_DB")
     if env:
         return Path(env)
     state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return Path(state) / "distro" / "signal" / "messages.db"
+    return Path(state) / "spaces" / "signal" / "messages.db"
 
 
 def connect(path: Path) -> sqlite3.Connection:

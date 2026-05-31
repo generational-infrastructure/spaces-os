@@ -129,7 +129,7 @@ def main():
     skill_config_store = os.path.join(state_dir, "skill-config")
     workspace = os.path.join(work_dir, "workspace")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    sock_path = os.path.join(xdg_runtime, "distro-skill-config.sock")
+    sock_path = os.path.join(xdg_runtime, "spaces-skill-config.sock")
     for d in [
         state_dir,
         agent_dir,
@@ -169,7 +169,7 @@ def main():
     # CLI env: daemon socket + state dir (so it finds skills-defs).
     cli_env = dict(env)
     cli_env["SKILL_CONFIG_SOCKET"] = sock_path
-    cli_env["DISTRO_PI_CHAT_STATE_DIR"] = state_dir
+    cli_env["SPACES_PI_CHAT_STATE_DIR"] = state_dir
 
     # 1. Start skill-config-daemon.
     daemon_env = dict(env)

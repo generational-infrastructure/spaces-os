@@ -1,4 +1,4 @@
-# NixOS option → /etc/distro/pi-chat.json wiring for sandboxBinds.
+# NixOS option → /etc/spaces/pi-chat.json wiring for sandboxBinds.
 #
 # Evaluates a NixOS system with services.pi-chat.sandboxBinds set to a
 # fixture list, materializes the etc-file the panel reads at startup,
@@ -16,7 +16,7 @@ let
       mode = "rw";
     }
     {
-      source = "%h/.local/state/distro/signal";
+      source = "%h/.local/state/spaces/signal";
       target = "/state/signal";
       mode = "rw";
     }
@@ -33,7 +33,7 @@ let
       flake = inputs.self;
     };
     modules = [
-      inputs.self.nixosModules.distro
+      inputs.self.nixosModules.spaces
       {
         nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         networking.hostName = "sandbox-binds-fixture";
@@ -48,13 +48,13 @@ let
         # signal-cli module would otherwise inject four entries of
         # its own (default-on with pi-chat) and the fixture counts
         # would lie.
-        services.distro-signal.enable = false;
+        services.spaces-signal.enable = false;
         services.pi-chat.sandboxBinds = fixture;
       }
     ];
   };
 
-  configFile = fixtureSystem.config.environment.etc."distro/pi-chat.json".source;
+  configFile = fixtureSystem.config.environment.etc."spaces/pi-chat.json".source;
 in
 pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
   {
@@ -91,7 +91,7 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
 
     # 4. Entry 1: explicit target, rw.
     jq -e '.sandboxBinds[1]
-      | .source == "%h/.local/state/distro/signal"
+      | .source == "%h/.local/state/spaces/signal"
       and .target == "/state/signal"
       and .mode == "rw"
       and .optional == false' "$configFile" >/dev/null || {
@@ -121,7 +121,7 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
           flake = inputs.self;
         };
         modules = [
-          inputs.self.nixosModules.distro
+          inputs.self.nixosModules.spaces
           {
             nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
             networking.hostName = "sandbox-binds-default";
@@ -132,12 +132,12 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
             boot.loader.grub.enable = false;
             system.stateVersion = "26.05";
 
-            # Same isolation as above: with distro-signal default-on
+            # Same isolation as above: with spaces-signal default-on
             # the "default" system would have four entries, not zero.
-            services.distro-signal.enable = false;
+            services.spaces-signal.enable = false;
           }
         ];
-      }).config.environment.etc."distro/pi-chat.json".source
+      }).config.environment.etc."spaces/pi-chat.json".source
     }")
     if [ "$default_count" != "0" ]; then
       echo "FAIL: default sandboxBinds should be empty, got $default_count entries"

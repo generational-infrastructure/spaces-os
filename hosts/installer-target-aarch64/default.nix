@@ -20,7 +20,7 @@
     };
     modules = [
       { nixpkgs.hostPlatform = "aarch64-linux"; }
-      inputs.self.nixosModules.distro
+      inputs.self.nixosModules.spaces
       ../installer-target/configuration.nix
     ];
   };

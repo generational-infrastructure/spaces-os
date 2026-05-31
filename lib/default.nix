@@ -1,18 +1,18 @@
-# Flake-level helpers exported as `distro.lib.<name>`.
+# Flake-level helpers exported as `spaces.lib.<name>`.
 #
 # Blueprint auto-imports `lib/default.nix` with specialArgs
 # `{ inputs, flake, ... }` and publishes the result as `flake.lib`.
 { inputs, flake, ... }:
 {
-  # Filtered store-path snapshot of the distro flake source.
+  # Filtered store-path snapshot of the spaces flake source.
   #
-  # Used as `inputs.distro.url = "path:<distroSrc>"` in the wrapper flake
+  # Used as `inputs.spaces.url = "path:<spacesSrc>"` in the wrapper flake
   # the Calamares installer generates, and as `isoImage.storeContents` /
   # `environment.etc."installer-store-paths"` so installs resolve offline.
   #
   # Excludes top-level dirs irrelevant to the installed system so edits to
   # tests, local notes, or VCS metadata don't trigger a calamares rebuild.
-  distroSrc =
+  spacesSrc =
     let
       inherit (inputs.nixpkgs) lib;
       excludedTopLevel = [
@@ -35,7 +35,7 @@
       ];
     in
     builtins.path {
-      name = "distro-flake-src";
+      name = "spaces-flake-src";
       path = flake.outPath;
       filter =
         path: _type:
@@ -48,14 +48,14 @@
         rel == toString path || !(builtins.elem top excludedTopLevel);
     };
 
-  # Build a NixOS system pre-wired with the distro module.
+  # Build a NixOS system pre-wired with the spaces module.
   #
   # Consumers (e.g. the Calamares-generated installed flake) only have to
   # supply hostName + host-specific modules; mkSystem injects:
-  #   - nixosModules.distro
-  #   - specialArgs.inputs = distro flake's own inputs (so distro modules
+  #   - nixosModules.spaces
+  #   - specialArgs.inputs = spaces flake's own inputs (so spaces modules
   #     can resolve their dependencies)
-  #   - specialArgs.flake  = the distro flake itself
+  #   - specialArgs.flake  = the spaces flake itself
   #   - nixpkgs.hostPlatform
   #   - networking.hostName
   mkSystem =
@@ -70,7 +70,7 @@
         flake = inputs.self or flake;
       };
       modules = [
-        flake.nixosModules.distro
+        flake.nixosModules.spaces
         {
           nixpkgs.hostPlatform = system;
           networking.hostName = hostName;

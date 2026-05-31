@@ -2,7 +2,7 @@
 """SignalConfirm contract test.
 
 Drives the QML SignalConfirm component against a hand-rolled fake of
-the distro-signal-bridge panel socket protocol. The real bridge is
+the spaces-signal-bridge panel socket protocol. The real bridge is
 covered by packages/signal-cli/test_bridge.py; this test isolates
 the QML state machine — subscribe, snapshot, added, removed, and
 approve/deny round-trip.

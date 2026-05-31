@@ -19,9 +19,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from distro_signal import bridge as bridge_mod
-from distro_signal import cli as cli_mod
-from distro_signal import db as dbmod
+from spaces_signal import bridge as bridge_mod
+from spaces_signal import cli as cli_mod
+from spaces_signal import db as dbmod
 from test_bridge import _wait_until
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -158,12 +158,12 @@ class CliBase(unittest.TestCase):
         self._old_env = {
             k: os.environ.get(k)
             for k in (
-                "DISTRO_SIGNAL_DB",
-                "DISTRO_SIGNAL_ENQUEUE_SOCKET",
+                "SPACES_SIGNAL_DB",
+                "SPACES_SIGNAL_ENQUEUE_SOCKET",
                 "XDG_RUNTIME_DIR",
             )
         }
-        os.environ["DISTRO_SIGNAL_DB"] = str(self.db_path)
+        os.environ["SPACES_SIGNAL_DB"] = str(self.db_path)
         os.environ["XDG_RUNTIME_DIR"] = str(self.runtime)
         # Default-shape: a configured-and-running system has the bridge
         # enqueue socket present (bind-mounted from outside the
@@ -171,7 +171,7 @@ class CliBase(unittest.TestCase):
         # stack up?" check passes — tests that need to simulate an
         # unconfigured host remove it explicitly.
         self.enqueue_sock_default = (
-            self.runtime / "distro-signal" / "sandbox" / "enqueue.sock"
+            self.runtime / "spaces-signal" / "sandbox" / "enqueue.sock"
         )
         self.enqueue_sock_default.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.enqueue_sock_default.touch()
@@ -374,7 +374,7 @@ class TestContactsGroups(CliBase):
 class TestSend(CliBase):
     def _start_stub(self, response_for):
         sock_path = str(Path(self.tmp.name) / "enqueue.sock")
-        os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = sock_path
+        os.environ["SPACES_SIGNAL_ENQUEUE_SOCKET"] = sock_path
         stub = _EnqueueStub(sock_path, response_for)
         self.addCleanup(stub.stop)
         if not _wait_until(lambda: os.path.exists(sock_path)):
@@ -466,7 +466,7 @@ class TestSend(CliBase):
         self.assertEqual(parsed["token"], "xyz")
 
     def test_bridge_unreachable_returns_error(self) -> None:
-        os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = "/nonexistent.sock"
+        os.environ["SPACES_SIGNAL_ENQUEUE_SOCKET"] = "/nonexistent.sock"
         rc, _, err = _run(["send", "+15559998888", "hi"])
         self.assertNotEqual(rc, 0)
         # Same onboarding hint as contacts/groups; the send path is
@@ -564,7 +564,7 @@ class TestParser(unittest.TestCase):
 class TestEnqueueSocketPathDefault(unittest.TestCase):
     """Couples the CLI's enqueue-socket default to signal-cli.nix.
 
-    The sandbox bind-mounts `$XDG_RUNTIME_DIR/distro-signal/sandbox`
+    The sandbox bind-mounts `$XDG_RUNTIME_DIR/spaces-signal/sandbox`
     (see modules/nixos/signal-cli.nix). The CLI's idea of where the
     enqueue socket lives MUST resolve inside that bind-mounted dir,
     otherwise the agent inside the sandbox would look for the socket
@@ -576,10 +576,10 @@ class TestEnqueueSocketPathDefault(unittest.TestCase):
     def setUp(self) -> None:
         self._saved = {
             k: os.environ.get(k)
-            for k in ("XDG_RUNTIME_DIR", "DISTRO_SIGNAL_ENQUEUE_SOCKET")
+            for k in ("XDG_RUNTIME_DIR", "SPACES_SIGNAL_ENQUEUE_SOCKET")
         }
         os.environ["XDG_RUNTIME_DIR"] = "/run/user/4242"
-        os.environ.pop("DISTRO_SIGNAL_ENQUEUE_SOCKET", None)
+        os.environ.pop("SPACES_SIGNAL_ENQUEUE_SOCKET", None)
 
     def tearDown(self) -> None:
         for k, v in self._saved.items():
@@ -591,11 +591,11 @@ class TestEnqueueSocketPathDefault(unittest.TestCase):
     def test_default_lives_inside_sandbox_subdir(self) -> None:
         self.assertEqual(
             cli_mod._enqueue_socket_path(),
-            "/run/user/4242/distro-signal/sandbox/enqueue.sock",
+            "/run/user/4242/spaces-signal/sandbox/enqueue.sock",
         )
 
     def test_env_override_wins(self) -> None:
-        os.environ["DISTRO_SIGNAL_ENQUEUE_SOCKET"] = "/elsewhere/sock"
+        os.environ["SPACES_SIGNAL_ENQUEUE_SOCKET"] = "/elsewhere/sock"
         self.assertEqual(cli_mod._enqueue_socket_path(), "/elsewhere/sock")
 
 

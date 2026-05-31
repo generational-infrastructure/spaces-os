@@ -6,8 +6,8 @@
 #
 # Also writes a deterministic /etc/niri/config.kdl derived from the
 # upstream default with two opinionated edits:
-#   1. drop spawn-at-startup "waybar" (distro hosts pick their own bar)
-#   2. set the modifier key from `services.distro.niri.modKey`
+#   1. drop spawn-at-startup "waybar" (spaces hosts pick their own bar)
+#   2. set the modifier key from `services.spaces.niri.modKey`
 #      (default "Super"; VM-based test runners flip it to "Alt" so
 #      the guest doesn't fight the host's Super grab — see
 #      `modules/nixos/test-support` and `checks/test-machine.nix`).
@@ -29,7 +29,7 @@
   ...
 }:
 let
-  cfg = config.services.distro.niri;
+  cfg = config.services.spaces.niri;
   niriConfig = pkgs.runCommand "niri-config.kdl" { } ''
         cp ${pkgs.niri.src}/resources/default-config.kdl $out
         chmod +w $out
@@ -74,7 +74,7 @@ let
   '';
 in
 {
-  options.services.distro.niri.modKey = lib.mkOption {
+  options.services.spaces.niri.modKey = lib.mkOption {
     type = lib.types.enum [
       "Super"
       "Alt"

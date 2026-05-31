@@ -21,7 +21,7 @@ Item {
   id: root
 
   // Full socket path the listener binds. Caller picks the location
-  // (typically `$XDG_RUNTIME_DIR/distro-pi-open-url.sock`).
+  // (typically `$XDG_RUNTIME_DIR/spaces-pi-open-url.sock`).
   required property string sockPath
 
   // Receives every validated http(s) URL. Override in tests.

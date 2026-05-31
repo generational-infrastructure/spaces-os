@@ -20,7 +20,7 @@ let
         flake = inputs.self;
       };
       modules = [
-        inputs.self.nixosModules.distro
+        inputs.self.nixosModules.spaces
         {
           nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = "signal-flags";
@@ -30,12 +30,12 @@ let
           };
           boot.loader.grub.enable = false;
           system.stateVersion = "26.05";
-          services.distro-signal.enable = true;
+          services.spaces-signal.enable = true;
         }
       ];
-    }).config.services.distro-signal.package;
+    }).config.services.spaces-signal.package;
 in
-pkgs.runCommand "distro-signal-cli-flags-test"
+pkgs.runCommand "spaces-signal-cli-flags-test"
   {
     inherit signalCli;
     # JVM needs a writable home; sandbox has $TMPDIR but no $HOME.

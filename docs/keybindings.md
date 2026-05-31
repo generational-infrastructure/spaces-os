@@ -1,11 +1,11 @@
 # Keyboard shortcuts
 
-Distro's full-desktop module (`nixosModules.distro`) wires a small set
+Spaces's full-desktop module (`nixosModules.spaces`) wires a small set
 of opinionated keybinds into niri on top of the upstream defaults.
 This page documents both. `Mod` is **Super** on bare metal and **Alt**
-inside the VM test runner (see `services.distro.niri.modKey`).
+inside the VM test runner (see `services.spaces.niri.modKey`).
 
-## Distro-specific binds
+## Spaces-specific binds
 
 Added in [`modules/nixos/niri.nix`](../modules/nixos/niri.nix).
 
@@ -24,7 +24,7 @@ action is still available on `Mod+Right`.
 ## Inherited niri defaults
 
 The shortcuts below come from niri's upstream `default-config.kdl`
-and are unchanged by distro. This is a curated summary; press
+and are unchanged by spaces. This is a curated summary; press
 `Mod+Shift+/` (i.e. `Mod+?`) at any time to see the live hotkey
 overlay.
 

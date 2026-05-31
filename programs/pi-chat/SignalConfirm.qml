@@ -1,8 +1,8 @@
-// Bridge between the distro-signal-bridge panel socket and the chat
+// Bridge between the spaces-signal-bridge panel socket and the chat
 // panel UI.
 //
 // Owns the long-lived subscriber connection to
-// $XDG_RUNTIME_DIR/distro-signal/panel.sock. Each `op:"snapshot"`
+// $XDG_RUNTIME_DIR/spaces-signal/panel.sock. Each `op:"snapshot"`
 // rebuilds `pending`; `op:"added"` appends one row; `op:"removed"`
 // drops a row by token. The panel binds `pending` directly to render
 // the approval cards.

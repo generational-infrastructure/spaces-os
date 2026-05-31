@@ -4,9 +4,9 @@
 Layout (paths identical on host and inside the container, because the state
 directory is bind-mounted at the same path):
 
-    /var/lib/distro-pi-chat-<instance>/skills-defs/<skill>/SKILL.md   # schema source
-    /var/lib/distro-pi-chat-<instance>/skill-config/config.toml       # mode 0644
-    /var/lib/distro-pi-chat-<instance>/skill-config/secrets.toml      # mode 0600
+    /var/lib/spaces-pi-chat-<instance>/skills-defs/<skill>/SKILL.md   # schema source
+    /var/lib/spaces-pi-chat-<instance>/skill-config/config.toml       # mode 0644
+    /var/lib/spaces-pi-chat-<instance>/skill-config/secrets.toml      # mode 0600
 
 Schema lives in YAML frontmatter of SKILL.md:
 
@@ -40,18 +40,18 @@ DEFAULT_INSTANCE = "local"
 CONFIG_MODE = 0o644
 SECRETS_MODE = 0o600
 DIR_MODE = 0o750
-DEFAULT_DAEMON_SOCKET = "/run/distro-skill-config-default.sock"
+DEFAULT_DAEMON_SOCKET = "/run/spaces-skill-config-default.sock"
 DAEMON_CONNECT_TIMEOUT = 3.0  # seconds, retried while daemon is starting
 
 
 class Paths:
     def __init__(self, instance: str):
         self.instance = instance
-        env_state = os.environ.get("DISTRO_PI_CHAT_STATE_DIR")
+        env_state = os.environ.get("SPACES_PI_CHAT_STATE_DIR")
         self.state_dir = (
             Path(env_state)
             if env_state
-            else Path(f"/var/lib/distro-pi-chat-{instance}")
+            else Path(f"/var/lib/spaces-pi-chat-{instance}")
         )
         self.skills_dir = self.state_dir / "skills-defs"
         self.cfg_dir = self.state_dir / "skill-config"
@@ -62,15 +62,15 @@ class Paths:
 def resolve_instance(flag: str | None) -> str:
     if flag:
         return flag
-    env = os.environ.get("DISTRO_PI_CHAT_INSTANCE")
+    env = os.environ.get("SPACES_PI_CHAT_INSTANCE")
     if env:
         return env
     # If state dir is overridden, instance name doesn't matter for path resolution.
-    if os.environ.get("DISTRO_PI_CHAT_STATE_DIR"):
+    if os.environ.get("SPACES_PI_CHAT_STATE_DIR"):
         return DEFAULT_INSTANCE
     candidates = sorted(
-        p.name[len("distro-pi-chat-") :]
-        for p in Path("/var/lib").glob("distro-pi-chat-*")
+        p.name[len("spaces-pi-chat-") :]
+        for p in Path("/var/lib").glob("spaces-pi-chat-*")
         if p.is_dir()
     )
     if len(candidates) == 1:
@@ -78,8 +78,8 @@ def resolve_instance(flag: str | None) -> str:
     if not candidates:
         return DEFAULT_INSTANCE
     sys.exit(
-        f"error: multiple distro-pi-chat instances found ({', '.join(candidates)}); "
-        "pass --instance or set DISTRO_PI_CHAT_INSTANCE"
+        f"error: multiple spaces-pi-chat instances found ({', '.join(candidates)}); "
+        "pass --instance or set SPACES_PI_CHAT_INSTANCE"
     )
 
 
@@ -424,7 +424,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="skill-config")
     ap.add_argument(
         "--instance",
-        help="pi-chat instance name (default: $DISTRO_PI_CHAT_INSTANCE, or auto-detect)",
+        help="pi-chat instance name (default: $SPACES_PI_CHAT_INSTANCE, or auto-detect)",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 

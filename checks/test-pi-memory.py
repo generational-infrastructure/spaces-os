@@ -66,14 +66,14 @@ def poll_reply(
 
 
 def _sediment_env():
-    """Read /etc/distro/pi-chat.json so the sediment CLI sees the same
+    """Read /etc/spaces/pi-chat.json so the sediment CLI sees the same
     DB + HF cache the chat sandbox uses. sudo strips
     environment.sessionVariables, so falling back to the in-process env
     would point at sediment's default ~/.sediment/data (empty) and
     trigger a model download against the public internet."""
     env = dict(os.environ)
     try:
-        with open("/etc/distro/pi-chat.json") as fh:
+        with open("/etc/spaces/pi-chat.json") as fh:
             cfg = json.load(fh)
     except FileNotFoundError:
         return env
