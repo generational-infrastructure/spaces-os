@@ -102,10 +102,12 @@ for the live catalogue with descriptions:
 | `wayland.output-management` | `zwlr_output_manager_v1` (configure displays). |
 | `wayland.screen-capture` | `zwlr_screencopy_manager_v1`. |
 
-The `wayland.*` permissions are gated by the patched niri compositor;
-until `patches/niri-per-permission-gating.patch.draft` lands they reach
-`/etc/spaces/wayland-permissions.txt` as a declaration but Niri still
-binary-gates on the security-context restricted flag.
+The `wayland.*` permissions are gated by the patched niri compositor.
+`patches/niri-per-permission-gating.patch` applies cleanly and compiles
+against niri 25.11; until it is wired into `programs.niri.package`
+(opt-in — it rebuilds niri from source) these reach
+`/etc/spaces/wayland-permissions.txt` as a declaration but stock Niri
+still binary-gates on the security-context restricted flag.
 
 ## Sandbox baseline
 
@@ -230,5 +232,5 @@ the closed-set guarantee from the static manifest is preserved.
 - `packages/app-run-flake/` — dynamic CLI.
 - `checks/apps-coordinator.nix` — headless VM check (47 subtests).
 - `checks/apps-coordinator-wayland.nix` — VM check with Niri (9 subtests).
-- `patches/niri-per-permission-gating.patch.draft` — Niri patch design,
-  awaiting hunk-header regeneration.
+- `patches/niri-per-permission-gating.patch` — per-permission Niri gating;
+  applies + compiles against niri 25.11, opt-in via `programs.niri.package`.

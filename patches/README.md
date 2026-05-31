@@ -4,13 +4,13 @@
 
 Applied in test-support/. Lets niri render under llvmpipe in VM tests.
 
-## `niri-per-permission-gating.patch.draft`
+## `niri-per-permission-gating.patch`
 
-**Status: design draft — hunk headers need repair before this can be
-applied.** The substance of every change is correct (verified against
-the upstream `client_is_unrestricted` filter sites at niri commit-time);
-only the unified-diff hunk arithmetic is off. Regenerating with `git
-diff` against an edited working copy is the cleanest path.
+**Status: applies cleanly and compiles against niri 25.11** (verified
+with `nix build` of `pkgs.niri` + this patch). Not yet wired into the
+production niri package — activate it by overriding
+`programs.niri.package` with a niri built from this patch (see
+"Activating" below). Doing so rebuilds niri from source.
 
 ### What the patch does
 
@@ -54,11 +54,26 @@ and `modules/nixos/apps.nix` generates the file from
 `wayland.*` — both already done; the patched niri is the missing
 consumer.
 
+### Activating
+
+Override the compositor package with a niri built from this patch, e.g.
+in the niri module or a host config:
+
+```nix
+programs.niri.package = pkgs.niri.overrideAttrs (o: {
+  patches = (o.patches or [ ]) ++ [ ../../patches/niri-per-permission-gating.patch ];
+});
+```
+
+With no map entries the behaviour is identical to today's binary gating
+(restricted clients are denied every `wayland.*` global); entries in the
+map grant per-app, per-permission access. Wiring is opt-in because it
+forces a niri source rebuild for the whole bundle.
+
 ### Verifying
 
-When the patch lands and the patched niri is wired through
-test-support, `checks/apps-coordinator-wayland.nix` should be extended
-with:
+When the patched niri is wired through test-support,
+`checks/apps-coordinator-wayland.nix` should be extended with:
 - `probe-virtual-keyboard` app: `permissions.granted = [ "wayland" "wayland.virtual-keyboard" ]`. wayland-info should see `zwp_virtual_keyboard_manager_v1`.
 - A sibling without that permission. wayland-info should NOT see it.
 

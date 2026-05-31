@@ -30,23 +30,63 @@ Permission names this patch wires:
 
 `wp_security_context_manager_v1` itself stays binary-gated — sandboxed
 clients must never be able to nest sandboxes.
+Regenerated against niri 25.11 and verified to compile (nix build of
+pkgs.niri + this patch succeeds).
 
+diff --git a/src/dbus/mutter_service_channel.rs b/src/dbus/mutter_service_channel.rs
+index e226acb..58193e0 100644
+--- a/src/dbus/mutter_service_channel.rs
++++ b/src/dbus/mutter_service_channel.rs
+@@ -27,6 +27,7 @@ impl ServiceChannel {
+             restricted: false,
+             // FIXME: maybe you can get the PID from D-Bus somehow?
+             credentials_unknown: true,
++            app_id: None,
+         };
+         if let Err(err) = self.to_niri.send(client) {
+             warn!("error sending message to niri: {err:?}");
+diff --git a/src/handlers/mod.rs b/src/handlers/mod.rs
+index 73575b4..e399d76 100644
+--- a/src/handlers/mod.rs
++++ b/src/handlers/mod.rs
+@@ -471,6 +471,7 @@ pub fn configure_lock_surface(surface: &LockSurface, output: &Output) {
+ 
+ impl SecurityContextHandler for State {
+     fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
++        let app_id = context.app_id.clone();
+         self.niri
+             .event_loop
+             .insert_source(source, move |client, _, state| {
+@@ -479,6 +480,7 @@ impl SecurityContextHandler for State {
+                     client,
+                     restricted: true,
+                     credentials_unknown: false,
++                    app_id: app_id.clone(),
+                 });
+             })
+             .unwrap();
 diff --git a/src/niri.rs b/src/niri.rs
+index e59de48..3825653 100644
 --- a/src/niri.rs
 +++ b/src/niri.rs
-@@ -9,1 +9,1 @@
+@@ -6,7 +6,7 @@ use std::path::PathBuf;
+ use std::rc::Rc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::mpsc::{self, Receiver, Sender};
 -use std::sync::{Arc, Mutex};
 +use std::sync::{Arc, Mutex, OnceLock};
-@@ -2254,3 +2254,46 @@
-         fn client_is_unrestricted(client: &Client) -> bool {
+ use std::time::{Duration, Instant};
+ use std::{env, mem, thread};
+ 
+@@ -2454,6 +2454,49 @@ impl Niri {
              !client.get_data::<ClientState>().unwrap().restricted
          }
-+
-+        // Per-permission permission map for security-context clients,
-+        // loaded lazily from a file on first access. Format: one line
-+        // per grant, "<app-id> <permission>", blank/'#'-comment lines
-+        // skipped. Path comes from $NIRI_PERMISSION_MAP, defaulting
-+        // to /etc/spaces/wayland-permissions.txt.
+ 
++        // Per-permission map for security-context clients, loaded lazily
++        // from a file on first access. Format: one "<app-id> <permission>"
++        // line per grant; blank / '#'-comment lines skipped. Path comes
++        // from $NIRI_PERMISSION_MAP, defaulting to
++        // /etc/spaces/wayland-permissions.txt.
 +        static PERMISSION_MAP: OnceLock<HashMap<String, HashSet<String>>> = OnceLock::new();
 +        fn permission_map() -> &'static HashMap<String, HashSet<String>> {
 +            PERMISSION_MAP.get_or_init(|| {
@@ -70,122 +110,115 @@ diff --git a/src/niri.rs b/src/niri.rs
 +            })
 +        }
 +
-+        // Granular gate. A non-restricted client always passes (matches
-+        // the original behaviour). A restricted client passes iff its
-+        // app-id has the named permission in the map; missing app-id
-+        // or empty map = deny.
++        // Granular gate. A non-restricted client always passes (matches the
++        // original behaviour). A restricted client passes iff its app-id has
++        // the named permission in the map; missing app-id or empty map = deny.
 +        fn client_can(client: &Client, permission: &str) -> bool {
 +            let state = client.get_data::<ClientState>().unwrap();
 +            if !state.restricted {
 +                return true;
 +            }
-+            state.app_id.as_ref()
++            state
++                .app_id
++                .as_ref()
 +                .and_then(|id| permission_map().get(id))
 +                .is_some_and(|perms| perms.contains(permission))
 +        }
-@@ -2281,4 +2324,4 @@
++
+         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
+         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
+             &display_handle,
+@@ -2479,10 +2522,10 @@ impl Niri {
+         );
          let layer_shell_state = WlrLayerShellState::new_with_filter::<State, _>(
              &display_handle,
 -            client_is_unrestricted,
 +            |c| client_can(c, "wayland.layer-shell"),
          );
-@@ -2285,2 +2328,4 @@
          let session_lock_state =
 -            SessionLockManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            SessionLockManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.session-lock")
-+            });
-@@ -2311,5 +2356,5 @@
++            SessionLockManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.session-lock"));
+         let shm_state = ShmState::new::<State>(
+             &display_handle,
+             vec![wl_shm::Format::Xbgr8888, wl_shm::Format::Abgr8888],
+@@ -2510,12 +2553,12 @@ impl Niri {
          let wlr_data_control_state = WlrDataControlState::new::<State, _>(
              &display_handle,
              Some(&primary_selection_state),
 -            client_is_unrestricted,
 +            |c| client_can(c, "wayland.data-control"),
          );
-@@ -2316,5 +2361,5 @@
          let ext_data_control_state = ExtDataControlState::new::<State, _>(
              &display_handle,
              Some(&primary_selection_state),
 -            client_is_unrestricted,
 +            |c| client_can(c, "wayland.data-control"),
          );
-@@ -2327,2 +2372,4 @@
+         let presentation_state =
+             PresentationState::new::<State>(&display_handle, Monotonic::ID as u32);
+@@ -2524,22 +2567,22 @@ impl Niri {
+ 
+         let text_input_state = TextInputManagerState::new::<State>(&display_handle);
          let input_method_state =
 -            InputMethodManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            InputMethodManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.input-method")
-+            });
-@@ -2331,2 +2378,4 @@
++            InputMethodManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.input-method"));
+         let keyboard_shortcuts_inhibit_state =
+             KeyboardShortcutsInhibitState::new::<State>(&display_handle);
          let virtual_keyboard_state =
 -            VirtualKeyboardManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            VirtualKeyboardManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.virtual-keyboard")
-+            });
-@@ -2333,2 +2382,4 @@
++            VirtualKeyboardManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.virtual-keyboard"));
          let virtual_pointer_state =
 -            VirtualPointerManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            VirtualPointerManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.virtual-pointer")
-+            });
-@@ -2335,2 +2386,4 @@
++            VirtualPointerManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.virtual-pointer"));
          let foreign_toplevel_state =
 -            ForeignToplevelManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            ForeignToplevelManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.foreign-toplevel-management")
-+            });
-@@ -2337,2 +2390,4 @@
++            ForeignToplevelManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.foreign-toplevel-management"));
          let ext_workspace_state =
 -            ExtWorkspaceManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            ExtWorkspaceManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.ext-workspace")
-+            });
-@@ -2340,2 +2395,4 @@
++            ExtWorkspaceManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.ext-workspace"));
          let mut output_management_state =
 -            OutputManagementManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            OutputManagementManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.output-management")
-+            });
-@@ -2342,2 +2399,4 @@
++            OutputManagementManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.output-management"));
+         output_management_state.on_config_changed(config_.outputs.clone());
          let screencopy_state =
 -            ScreencopyManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
-+            ScreencopyManagerState::new::<State, _>(&display_handle, |c| {
-+                client_can(c, "wayland.screen-capture")
-+            });
-@@ -2441,1 +2500,2 @@
-                     state.niri.insert_client(NewClient {
++            ScreencopyManagerState::new::<State, _>(&display_handle, |c| client_can(c, "wayland.screen-capture"));
+         let viewporter_state = ViewporterState::new::<State>(&display_handle);
+         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
+ 
+@@ -2638,6 +2681,7 @@ impl Niri {
                          client,
                          restricted: false,
                          credentials_unknown: false,
 +                        app_id: None,
                      });
-@@ -2635,4 +2695,4 @@
-     pub fn insert_client(&mut self, client: NewClient) {
-         let NewClient {
+                 })
+                 .unwrap();
+@@ -2851,6 +2895,7 @@ impl Niri {
              client,
              restricted,
              credentials_unknown,
 +            app_id,
          } = client;
-@@ -2643,1 +2703,2 @@
-         let data = Arc::new(ClientState {
-             compositor_state: Default::default(),
+ 
+         let config = self.config.borrow();
+@@ -2859,6 +2904,7 @@ impl Niri {
              can_view_decoration_globals: config.prefer_no_csd,
              primary_selection_disabled: config.clipboard.disable_primary,
              restricted,
 +            app_id,
              credentials_unknown,
          });
-@@ -6462,3 +6525,4 @@
- pub struct NewClient {
+ 
+@@ -6542,6 +6588,7 @@ pub struct NewClient {
      pub client: UnixStream,
      pub restricted: bool,
      pub credentials_unknown: bool,
 +    pub app_id: Option<String>,
  }
-@@ -6468,4 +6532,6 @@
+ 
  pub struct ClientState {
-     pub compositor_state: CompositorClientState,
-     pub can_view_decoration_globals: bool,
+@@ -6550,6 +6597,8 @@ pub struct ClientState {
      pub primary_selection_disabled: bool,
      /// Whether this client is denied from the restricted protocols such as security-context.
      pub restricted: bool,
@@ -194,23 +227,15 @@ diff --git a/src/niri.rs b/src/niri.rs
      /// We cannot retrieve this client's socket credentials.
      pub credentials_unknown: bool,
  }
-
-diff --git a/src/handlers/mod.rs b/src/handlers/mod.rs
---- a/src/handlers/mod.rs
-+++ b/src/handlers/mod.rs
-@@ -501,11 +501,13 @@
-     fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
-+        let app_id = context.app_id.clone();
-         self.niri
-             .event_loop
-             .insert_source(source, move |client, _, state| {
-                 trace!("inserting a new restricted client, context={context:?}");
-                 state.niri.insert_client(NewClient {
-                     client,
-                     restricted: true,
-                     credentials_unknown: false,
-+                    app_id: app_id.clone(),
-                 });
-             })
-             .unwrap();
-     }
+diff --git a/src/tests/fixture.rs b/src/tests/fixture.rs
+index e57ef21..69c36a9 100644
+--- a/src/tests/fixture.rs
++++ b/src/tests/fixture.rs
+@@ -101,6 +101,7 @@ impl Fixture {
+             client: sock1,
+             restricted: false,
+             credentials_unknown: false,
++            app_id: None,
+         });
+ 
+         let client = Client::new(sock2);

@@ -947,9 +947,9 @@ else
           # (`virtual-keyboard` + `screen-capture`); the module
           # writes one "<appId> <permission>" line per entry to
           # /etc/spaces/wayland-permissions.txt. Until the niri
-          # patch lands the file is informational only — assert
-          # the wiring is in place so the patch has something to
-          # consume when it ships.
+          # patch is wired into programs.niri.package the file is
+          # informational only — assert the wiring is in place so the
+          # patched niri has something to consume once activated.
           content = machine.succeed("cat /etc/spaces/wayland-permissions.txt")
           assert "spaces.app.browser wayland.virtual-keyboard" in content, content
           assert "spaces.app.browser wayland.screen-capture" in content, content
