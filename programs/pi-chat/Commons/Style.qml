@@ -68,7 +68,11 @@ QtObject {
 
   // The `general` block of noctalia's settings.json. Only the ratio knobs
   // the chat panel needs are mapped; everything else in the file is ignored.
-  readonly property JsonObject general: settings.general
+  //
+  // Aliased to the inline `generalAdapter` so the linter can resolve the ratio
+  // members: a property typed as the bare `JsonObject` is opaque to qmllint, so
+  // reads like `general.radiusRatio` would trip --max-warnings 0.
+  readonly property alias general: generalAdapter
 
   property FileView _settingsFile: FileView {
     path: root.noctaliaConfigDir + "/settings.json"
@@ -86,6 +90,7 @@ QtObject {
       // plugin's original hardcoded constants. A missing file or absent key
       // falls back here, so a setup without noctalia is unchanged.
       property JsonObject general: JsonObject {
+        id: generalAdapter
         property real radiusRatio: 1.0
         property real iRadiusRatio: 1.0
         property real scaleRatio: 1.0
