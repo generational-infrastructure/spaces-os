@@ -946,10 +946,9 @@ else
           # The browser app declares two wayland.* permissions
           # (`virtual-keyboard` + `screen-capture`); the module
           # writes one "<appId> <permission>" line per entry to
-          # /etc/spaces/wayland-permissions.txt. Until the niri
-          # patch is wired into programs.niri.package the file is
-          # informational only — assert the wiring is in place so the
-          # patched niri has something to consume once activated.
+          # /etc/spaces/wayland-permissions.txt, which the gating-patched
+          # niri (applied via overlay in modules/nixos/niri.nix) reads at
+          # startup. Assert the file is generated with the right contents.
           content = machine.succeed("cat /etc/spaces/wayland-permissions.txt")
           assert "spaces.app.browser wayland.virtual-keyboard" in content, content
           assert "spaces.app.browser wayland.screen-capture" in content, content

@@ -103,11 +103,11 @@ for the live catalogue with descriptions:
 | `wayland.screen-capture` | `zwlr_screencopy_manager_v1`. |
 
 The `wayland.*` permissions are gated by the patched niri compositor.
-`patches/niri-per-permission-gating.patch` applies cleanly and compiles
-against niri 25.11; until it is wired into `programs.niri.package`
-(opt-in — it rebuilds niri from source) these reach
-`/etc/spaces/wayland-permissions.txt` as a declaration but stock Niri
-still binary-gates on the security-context restricted flag.
+`modules/nixos/niri.nix` builds niri with `patches/niri-per-permission-gating.patch`
+(via `programs.niri.package`), so the running compositor reads
+`/etc/spaces/wayland-permissions.txt` and grants each restricted protocol
+per app-id. With no entries the behaviour matches stock Niri (restricted
+security-context clients are denied every `wayland.*` global).
 
 ## Sandbox baseline
 
@@ -233,4 +233,4 @@ the closed-set guarantee from the static manifest is preserved.
 - `checks/apps-coordinator.nix` — headless VM check (47 subtests).
 - `checks/apps-coordinator-wayland.nix` — VM check with Niri (9 subtests).
 - `patches/niri-per-permission-gating.patch` — per-permission Niri gating;
-  applies + compiles against niri 25.11, opt-in via `programs.niri.package`.
+  applied by `modules/nixos/niri.nix` via `programs.niri.package`.

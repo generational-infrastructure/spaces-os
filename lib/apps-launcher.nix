@@ -109,15 +109,13 @@ let
     xwayland = "Access the user's XWayland server. X11 clients can keylog each other.";
     "wm.spawn-named-tasks" = "Coordinator may launch other manifested apps on this app's behalf.";
 
-    # Granular Wayland-protocol permissions. Niri gates each of
-    # these on the per-permission patch in `patches/`. Until the
-    # patch lands the names are declarative — they reach the
-    # generated /etc/spaces/wayland-permissions.txt but the
-    # compositor is still binary-gating on the security-context
-    # restricted flag. (Apps that need a restricted protocol *now*
-    # use `waylandSandbox = false` to skip the security-context
-    # wrap entirely; that opt-out becomes obsolete when the patch
-    # is applied.)
+    # Granular Wayland-protocol permissions. The gating patch in
+    # `patches/` (applied to niri by modules/nixos/niri.nix)
+    # makes the compositor allow each restricted protocol per app-id,
+    # keyed on the generated /etc/spaces/wayland-permissions.txt.
+    # (Apps that need a restricted protocol can alternatively set
+    # `waylandSandbox = false` to skip the security-context wrap
+    # entirely — coarser, but useful when an app needs several.)
     "wayland.layer-shell" = "Bind zwlr_layer_shell_v1 (panels, bars, on-screen displays).";
     "wayland.session-lock" = "Bind ext_session_lock_manager_v1 (lock the screen).";
     "wayland.data-control" = "Bind wlr/ext data-control (read the user's clipboard).";

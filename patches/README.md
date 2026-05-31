@@ -6,11 +6,12 @@ Applied in test-support/. Lets niri render under llvmpipe in VM tests.
 
 ## `niri-per-permission-gating.patch`
 
-**Status: applies cleanly and compiles against niri 25.11** (verified
-with `nix build` of `pkgs.niri` + this patch). Not yet wired into the
-production niri package — activate it by overriding
-`programs.niri.package` with a niri built from this patch (see
-"Activating" below). Doing so rebuilds niri from source.
+**Status: applied by the bundle.** `modules/nixos/niri.nix` sets
+`programs.niri.package` to a niri built with this patch, so every spaces
+host runs the patched compositor (verified: `nix build` of `pkgs.niri` +
+this patch, and `test-machine` builds with both this and the
+software-rendering patch). It rebuilds niri from source.
+Behaviour-preserving when the permission map is empty (see "Activation").
 
 ### What the patch does
 
@@ -54,21 +55,26 @@ and `modules/nixos/apps.nix` generates the file from
 `wayland.*` — both already done; the patched niri is the missing
 consumer.
 
-### Activating
+### Activation
 
-Override the compositor package with a niri built from this patch, e.g.
-in the niri module or a host config:
+Wired in `modules/nixos/niri.nix` via `programs.niri.package`:
 
 ```nix
-programs.niri.package = pkgs.niri.overrideAttrs (o: {
-  patches = (o.patches or [ ]) ++ [ ../../patches/niri-per-permission-gating.patch ];
-});
+programs.niri.package = lib.mkDefault (
+  pkgs.niri.overrideAttrs (o: {
+    patches = (o.patches or [ ]) ++ [ ../../patches/niri-per-permission-gating.patch ];
+  })
+);
 ```
 
-With no map entries the behaviour is identical to today's binary gating
-(restricted clients are denied every `wayland.*` global); entries in the
-map grant per-app, per-permission access. Wiring is opt-in because it
-forces a niri source rebuild for the whole bundle.
+(`mkDefault` so `modules/nixos/test-support` can swap in a niri carrying
+*both* this and the software-rendering patch for VM tests — a nixpkgs
+overlay can't be used because `runNixOSTest` pins `nixpkgs.pkgs` per node.)
+
+With no map entries the behaviour is identical to upstream's binary
+gating (restricted clients are denied every `wayland.*` global); entries
+in `/etc/spaces/wayland-permissions.txt` grant per-app, per-permission
+access.
 
 ### Verifying
 
