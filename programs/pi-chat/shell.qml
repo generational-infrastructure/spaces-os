@@ -43,10 +43,12 @@ PanelWindow {
   // windows, below screen-edge OSDs/lockscreens". Overlay would
   // hover over the bar too aggressively.
   WlrLayershell.layer: WlrLayer.Top
-  // Don't yank focus from whatever the user was doing when they
-  // summon the chat. The compose box explicitly requests focus when
-  // tapped — until then the underlying app keeps the keyboard.
-  WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+  // Grab keyboard focus while the panel is shown so the compose box is
+  // focused the instant it opens — summoning the chat means you want to
+  // type. Drop to None when hidden so we never hold the keyboard away
+  // from the underlying app once the panel is dismissed. The visibility
+  // flip flips `active`, which fires the focus handler in Panel.qml.
+  WlrLayershell.keyboardFocus: shell.visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
   color: Color.mSurface
   visible: false

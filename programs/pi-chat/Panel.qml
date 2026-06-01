@@ -762,10 +762,10 @@ Item {
   }
 
   // Focus the compose box when the panel surface gains keyboard focus.
-  // On niri the layer-shell `active` flag flips true the instant the
-  // compositor routes keyboard input to us; that's the moment Qt can
-  // actually take focus. Doing it earlier races with the click that
-  // opened the panel.
+  // The shell requests Exclusive keyboard focus while visible, so the
+  // layer-shell `active` flag flips true as soon as the panel opens —
+  // no click needed. `active` is the moment Qt can actually take focus;
+  // doing it earlier (e.g. on Component.onCompleted) races the grab.
   Connections {
     target: root.Window.window
     ignoreUnknownSignals: true
