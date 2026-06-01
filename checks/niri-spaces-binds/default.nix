@@ -29,6 +29,10 @@ pkgs.runCommand "niri-spaces-binds-test" { inherit niriConfig; } ''
   set -euo pipefail
   fail() { echo "FAIL: $*" >&2; exit 1; }
 
+  # Mod+/ summons the quick-launch agent bar via the quickLaunch IPC verb.
+  grep -qE 'Mod\+Slash .*spawn "pi-chat-toggle" "quickLaunch"' "$niriConfig" \
+    || fail "Mod+Slash must spawn pi-chat-toggle quickLaunch"
+
   # Mod+Shift+N reloads the noctalia bar.
   grep -qE 'Mod\+Shift\+N .*"restart" "noctalia-shell\.service"' "$niriConfig" \
     || fail "Mod+Shift+N must restart noctalia-shell.service"

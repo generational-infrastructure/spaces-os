@@ -42,5 +42,12 @@
   "menu": {
     "open-chat": "Открыть чат",
     "settings": "Настройки"
+  },
+  "quickbar": {
+    "placeholder": "Запустить агента…  ( / для параметров )",
+    "launch-hint": "↵ запустить",
+    "no-matches": "нет подходящей модели",
+    "unknown-directive": "неизвестная директива",
+    "loading-models": "загрузка моделей…"
   }
 }

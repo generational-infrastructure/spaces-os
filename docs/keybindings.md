@@ -12,6 +12,7 @@ Added in [`modules/nixos/niri.nix`](../modules/nixos/niri.nix).
 | Shortcut | Action |
 |---|---|
 | `Mod+A` | Toggle the pi-chat AI panel |
+| `Mod+/` | Summon the quick-launch agent bar: type a prompt + Enter fires an agent in the background (the chat panel stays closed; a desktop notification fires on completion). Continue the session later via `Mod+A`. |
 | `Mod+S` | Toggle voice-to-text recording (voxtype) |
 | `Mod+L` | Lock the screen (swaylock) |
 | `Ctrl+Alt+L` | Lock the screen (swaylock) — same as `Mod+L`, works with any modKey |

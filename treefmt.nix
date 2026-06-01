@@ -29,5 +29,6 @@ _: {
   programs.prettier.excludes = [
     "programs/pi-chat/MsgText.js"
     "programs/pi-chat/MsgFilter.js"
+    "programs/pi-chat/BarParse.js"
   ];
 }

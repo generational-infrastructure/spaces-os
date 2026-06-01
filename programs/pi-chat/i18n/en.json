@@ -56,5 +56,12 @@
   "menu": {
     "open-chat": "Open Chat",
     "settings": "Settings"
+  },
+  "quickbar": {
+    "placeholder": "Launch an agent…  ( / for options )",
+    "launch-hint": "↵ launch",
+    "no-matches": "no matching model",
+    "unknown-directive": "unknown directive",
+    "loading-models": "loading models…"
   }
 }

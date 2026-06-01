@@ -1,0 +1,11 @@
+#!/bin/sh
+# Stub `notify-send` placed first on PATH. Records every invocation's
+# argv as one JSON array line in $NOTIFY_WITNESS so the driver can
+# assert the completion notification fired exactly once with the
+# expected title/body. Best-effort: never fails the caller.
+witness="${NOTIFY_WITNESS:-/dev/null}"
+python3 - "$@" <<'PY' >>"$witness" 2>/dev/null || true
+import json, sys
+print(json.dumps(sys.argv[1:]))
+PY
+exit 0
