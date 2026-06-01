@@ -16,7 +16,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@4a754ab0c192f4d12cf88b5954b9dd13fd2d612e # main 2026-05-08
+        uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main 2026-05-25
         with:
           extra-conf: |
             experimental-features = nix-command flakes
