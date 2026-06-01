@@ -1030,7 +1030,18 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    bridge = Bridge(build_config_from_env())
+    config = build_config_from_env()
+    legacy_db = dbmod.default_legacy_db_path()
+    # One-shot migration for the 'distro' → 'spaces' rename. Wrapped in
+    # a broad except so a corrupt legacy DB can never block bridge
+    # startup — losing the migration is recoverable, losing the bridge
+    # is not.
+    try:
+        if dbmod.migrate_legacy_state(config.db_path, legacy_db):
+            log.info("migrated legacy signal store %s -> %s", legacy_db, config.db_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("legacy-state migration failed: %s; continuing with new store", exc)
+    bridge = Bridge(config)
     bridge.start()
     try:
         bridge.join()

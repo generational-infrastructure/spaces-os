@@ -387,5 +387,119 @@ class TestConnectReadonly(unittest.TestCase):
             dbmod.connect_readonly(missing)
 
 
+class TestMigrateLegacyState(unittest.TestCase):
+    """The 2026-05 'distro' → 'spaces' rename moved on-disk state from
+    ~/.local/state/distro/signal/ to ~/.local/state/spaces/signal/
+    without copying existing data. The bridge runs a one-shot migration
+    at startup so users who linked before the rename don't see an empty
+    store.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.new_dir = root / "new"
+        self.legacy_dir = root / "legacy"
+        self.new_db = self.new_dir / "messages.db"
+        self.legacy_db = self.legacy_dir / "messages.db"
+
+    def _seed(self, path: Path, *uids: str) -> None:
+        db = dbmod.connect(path)
+        try:
+            for uid in uids:
+                dbmod.store_message(
+                    db,
+                    {
+                        "uid": uid,
+                        "ts_ms": 1_700_000_000_000,
+                        "thread_id": "t",
+                        "thread_kind": "dm",
+                        "body": uid,
+                    },
+                )
+        finally:
+            db.close()
+
+    def _count(self, path: Path) -> int:
+        db = dbmod.connect_readonly(path)
+        try:
+            return int(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+        finally:
+            db.close()
+
+    def test_returns_false_when_legacy_missing(self) -> None:
+        self.assertFalse(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertFalse(self.new_db.exists())
+
+    def test_returns_false_when_legacy_has_no_messages(self) -> None:
+        # Empty schema-only legacy DB should never overwrite.
+        self._seed(self.legacy_db)
+        self.assertFalse(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertFalse(self.new_db.exists())
+        self.assertTrue(self.legacy_db.exists())
+
+    def test_migrates_when_new_missing(self) -> None:
+        self._seed(self.legacy_db, "a", "b", "c")
+        self.assertTrue(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertEqual(self._count(self.new_db), 3)
+        # Legacy file is consumed so a second run is a no-op.
+        self.assertFalse(self.legacy_db.exists())
+
+    def test_migrates_when_new_is_empty(self) -> None:
+        # Mirrors the bug: bridge created a fresh empty DB at the new
+        # path on first run, masking the legacy data underneath.
+        self._seed(self.new_db)
+        self._seed(self.legacy_db, "a", "b")
+        self.assertTrue(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertEqual(self._count(self.new_db), 2)
+
+    def test_does_not_migrate_when_new_has_more_rows(self) -> None:
+        # User has linked fresh on the new path and accumulated history;
+        # never clobber that with stale pre-rename rows.
+        self._seed(self.legacy_db, "old1")
+        self._seed(self.new_db, "new1", "new2")
+        self.assertFalse(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertEqual(self._count(self.new_db), 2)
+        self.assertTrue(self.legacy_db.exists())
+
+    def test_cleans_up_legacy_wal_and_shm(self) -> None:
+        self._seed(self.legacy_db, "a")
+        # Simulate a crashed writer leaving WAL/SHM behind.
+        (self.legacy_dir / "messages.db-wal").write_bytes(b"stale")
+        (self.legacy_dir / "messages.db-shm").write_bytes(b"stale")
+        self.assertTrue(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        # Sidecars at the legacy path are dead pointers post-move;
+        # leaving them risks future sqlite versions re-opening them by
+        # accident. They MUST be gone.
+        self.assertFalse((self.legacy_dir / "messages.db-wal").exists())
+        self.assertFalse((self.legacy_dir / "messages.db-shm").exists())
+
+    def test_migrate_preserves_uncheckpointed_wal_rows(self) -> None:
+        # The orphaned legacy DB was last written by an old bridge that
+        # crashed before checkpointing; rows live in -wal, not the main
+        # file. The migration MUST fold the WAL in before moving so no
+        # message goes missing.
+        db = dbmod.connect(self.legacy_db)
+        try:
+            dbmod.store_message(
+                db,
+                {
+                    "uid": "in-wal",
+                    "ts_ms": 1_700_000_000_000,
+                    "thread_id": "t",
+                    "thread_kind": "dm",
+                    "body": "WAL row",
+                },
+            )
+        finally:
+            # Close without an explicit checkpoint — WAL stays populated.
+            db.close()
+        self.assertTrue(dbmod.migrate_legacy_state(self.new_db, self.legacy_db))
+        self.assertEqual(self._count(self.new_db), 1)
+        rows = dbmod.query_messages(dbmod.connect_readonly(self.new_db))
+        self.assertEqual(rows[0]["body"], "WAL row")
+
+
 if __name__ == "__main__":
     unittest.main()

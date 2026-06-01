@@ -76,6 +76,96 @@ def default_db_path() -> Path:
     return Path(state) / "spaces" / "signal" / "messages.db"
 
 
+def default_legacy_db_path() -> Path:
+    """messages.db location used before the 2026-05 'distro' → 'spaces'
+    rename. Returned even if it doesn't exist — callers branch on
+    existence themselves so the path is testable in isolation.
+    """
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return Path(state) / "distro" / "signal" / "messages.db"
+
+
+def _count_messages(path: Path) -> int:
+    """Row count from a possibly-corrupt or schema-only DB. Any sqlite
+    error (missing file, locked, wrong schema) is treated as zero so
+    the migration falls back safely instead of aborting bridge startup.
+    """
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, isolation_level=None)
+    except sqlite3.Error:
+        return 0
+    try:
+        row = db.execute("SELECT COUNT(*) FROM messages").fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        db.close()
+
+
+def _checkpoint(path: Path) -> None:
+    """Fold any pending WAL into the main DB file. The legacy bridge
+    may have crashed before checkpointing, leaving rows only in
+    messages.db-wal; without this the os.replace below would migrate
+    a strictly older snapshot.
+    """
+    db = sqlite3.connect(str(path), isolation_level=None)
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        db.close()
+
+
+def migrate_legacy_state(new_db_path: Path, legacy_db_path: Path) -> bool:
+    """Move the pre-rename messages DB into the new location on first
+    bridge startup after the 2026-05 'distro' → 'spaces' rename.
+
+    Guard: only migrates when the legacy DB has more rows than the new
+    one. That covers the two real-world shapes — new DB absent (fresh
+    post-rename install on an old home dir) and new DB freshly created
+    but empty (bridge already ran once before this code shipped) — while
+    refusing to clobber a new DB the user has accumulated real history
+    into.
+
+    The legacy WAL is checkpointed first so uncommitted rows survive
+    the move; legacy sidecars (-wal, -shm) are unlinked afterwards
+    because they're dead pointers post-rename.
+    """
+    if not legacy_db_path.is_file():
+        return False
+    legacy_count = _count_messages(legacy_db_path)
+    if legacy_count <= 0:
+        return False
+    new_count = _count_messages(new_db_path) if new_db_path.is_file() else 0
+    if new_count >= legacy_count:
+        return False
+    _checkpoint(legacy_db_path)
+    new_db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Drop the new DB's sidecars before replacing: a stale WAL/SHM
+    # referencing the about-to-be-overwritten inode would confuse the
+    # next sqlite open. The bridge will recreate them on connect().
+    for suffix in ("-wal", "-shm"):
+        sidecar = new_db_path.with_name(new_db_path.name + suffix)
+        try:
+            sidecar.unlink()
+        except FileNotFoundError:
+            pass
+    os.replace(legacy_db_path, new_db_path)
+    for suffix in ("-wal", "-shm"):
+        sidecar = legacy_db_path.with_name(legacy_db_path.name + suffix)
+        try:
+            sidecar.unlink()
+        except FileNotFoundError:
+            pass
+    # Tidy: if the legacy dir is now empty, remove it so a re-run is
+    # obviously a no-op and the empty shell doesn't linger in $HOME.
+    try:
+        legacy_db_path.parent.rmdir()
+    except OSError:
+        pass
+    return True
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     # check_same_thread=False: the bridge serialises writes via its

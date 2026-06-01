@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spaces-state-migrate"
+version = "0.1.0"
+description = "One-shot user-state migration for the 2026-05 'distro' → 'spaces' rename"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+# Run by the spaces-state-migrate.service user oneshot at login, before
+# any subsystem touches the new state paths. Idempotent — a re-run on a
+# system without legacy state is a fast no-op.
+spaces-state-migrate = "spaces_state_migrate.migrate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spaces_state_migrate"]
