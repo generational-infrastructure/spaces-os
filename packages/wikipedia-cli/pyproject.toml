@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wikipedia-cli"
+version = "0.1.0"
+description = "Wikipedia CLI for search, summary, and full article text via the MediaWiki API"
+license = "MIT"
+requires-python = ">=3.10"
+
+[project.scripts]
+wikipedia-cli = "wikipedia_cli:main"

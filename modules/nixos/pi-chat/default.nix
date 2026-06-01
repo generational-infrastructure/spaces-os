@@ -45,6 +45,7 @@ let
   notificationsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.notifications-cli;
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
   osmCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli;
+  wikipediaCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikipedia-cli;
   caldavCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli;
   wikidataCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikidata-cli;
   contactsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.contacts-cli;
@@ -112,6 +113,7 @@ let
     datetime = "${skillsDir}/datetime";
     location = "${skillsDir}/location";
     maps = "${skillsDir}/maps";
+    wikipedia = "${skillsDir}/wikipedia";
     notifications = "${skillsDir}/notifications";
     skill-config = "${skillsDir}/skill-config";
     calendar = "${skillsDir}/calendar";
@@ -531,6 +533,8 @@ in
       "^notifications(\\s|$)"
       # wikidata: read-only public Wikidata queries, no auth, no mutation.
       "^wikidata-cli(\\s|$)"
+      # wikipedia: read-only public Wikipedia/MediaWiki queries, no auth, no mutation.
+      "^wikipedia-cli(\\s|$)"
     ];
 
     # llama-swap supplies the default LLM endpoint; enable by default
@@ -556,6 +560,7 @@ in
       notificationsCliPkg
       googleCliPkg
       osmCliPkg
+      wikipediaCliPkg
       caldavCliPkg
       wikidataCliPkg
       contactsCliPkg
