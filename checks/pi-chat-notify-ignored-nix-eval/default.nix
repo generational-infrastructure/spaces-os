@@ -19,7 +19,7 @@ let
       flake = inputs.self;
     };
     modules = [
-      inputs.self.nixosModules.distro
+      inputs.self.nixosModules.spaces
       {
         nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
         fileSystems."/" = {
