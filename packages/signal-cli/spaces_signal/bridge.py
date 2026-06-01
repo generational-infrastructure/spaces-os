@@ -24,8 +24,8 @@ Three concurrent jobs in one process:
 Self-detection is based on the daemon's `listAccounts` snapshot
 (taken on connect, refreshed every few minutes). A recipient that
 matches any of our accounts by phone number or UUID bypasses the
-confirmation queue — the same shape vbuterin/messaging-daemon ships,
-adapted to multi-account mode.
+confirmation queue: a message to one of your own linked identities
+can't be a third-party exfiltration target, so it needs no approval.
 """
 
 from __future__ import annotations
@@ -209,8 +209,8 @@ def envelope_to_message(envelope: dict, account: dict | None = None) -> dict | N
 def classify_recipient(value: str) -> str:
     """Return one of 'number', 'uuid', 'username', 'group'.
 
-    Mirrors vbuterin/messaging-daemon's classifier; the daemon's
-    `send` RPC accepts these as distinct argument shapes.
+    signal-cli's `send` RPC accepts these as distinct argument shapes
+    (recipient number/uuid, username, or groupId).
     """
     value = value.strip()
     if value.startswith("+"):

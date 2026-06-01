@@ -407,9 +407,18 @@ in
       default = [ ];
       example = lib.literalExpression ''
         [
-          { source = "%t/signal-cli/socket"; mode = "rw"; }
-          { source = "%h/.local/state/spaces/signal"; mode = "rw"; }
-          { source = "%h/.local/share/signal-cli/attachments"; mode = "ro"; }
+          # The signal skill (see modules/nixos/signal-cli.nix): message
+          # store + attachments read-only, and the bridge's sandbox
+          # runtime dir read-write (enqueue.sock appears inside it). The
+          # signal-cli daemon socket and panel.sock are deliberately NOT
+          # exposed — that split is the send-approval gate's boundary.
+          { source = "%h/.local/state/spaces/signal"; mode = "ro"; }
+          {
+            source = "%h/.local/share/signal-cli/attachments";
+            mode = "ro";
+            optional = true;
+          }
+          { source = "%t/spaces-signal/sandbox"; mode = "rw"; }
         ]
       '';
       description = ''

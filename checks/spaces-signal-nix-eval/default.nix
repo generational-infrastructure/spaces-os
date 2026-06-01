@@ -4,10 +4,12 @@
 #   1. Enabling services.spaces-signal materialises the right
 #      systemd.user.spaces-signal-cli unit (ExecStart contains the
 #      daemon args we promise; RuntimeDirectory is set).
-#   2. The module publishes the signal-cli socket + store dirs into
-#      services.pi-chat.sandboxBinds, so the agent's read CLI can
-#      reach the daemon and the message DB through the per-session
-#      sandbox.
+#   2. The module publishes the message store (read-only) and the
+#      bridge's sandbox runtime dir (read-write) into
+#      services.pi-chat.sandboxBinds — and crucially does NOT publish
+#      the signal-cli daemon socket or panel.sock, so a prompt-injected
+#      agent can read messages and queue sends but can neither reach the
+#      daemon directly nor mint its own approval.
 #   3. Enabling spaces-signal without pi-chat trips the module's own
 #      assertion (the integration is meaningless without the agent).
 #   4. Default-on follows pi-chat: an unconfigured spaces host

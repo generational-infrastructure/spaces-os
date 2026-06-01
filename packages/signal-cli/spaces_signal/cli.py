@@ -1,20 +1,20 @@
 """Agent-facing `signal` command.
 
 The CLI is the only `spaces_signal` entry point visible from inside
-the pi-chat sandbox. It speaks three protocols:
+the pi-chat sandbox. It speaks two protocols:
 
 * **SQLite (RO)** for read commands: `threads`, `read`, `search`.
   Backed by the same `messages.db` the bridge writes.
 
-* **JSON-RPC over the signal-cli daemon socket** for live identity
-  reads: `contacts`, `groups`. Bound into the sandbox by the
-  signal-cli NixOS module; called directly because both endpoints
-  are short-lived and the data is not sensitive.
-
-* **NDJSON over the bridge enqueue socket** for `send`. Self-sends
-  return immediately ("sent"); everything else returns a pending
-  token the agent must surface to the user — approval happens out
-  of band through the chat panel, not from inside the sandbox.
+* **NDJSON over the bridge enqueue socket** for everything that needs
+  the live daemon: `contacts` / `groups` (identity reads the bridge
+  proxies) and `send`. The bridge owns the only JSON-RPC client to
+  signal-cli; its daemon socket is deliberately NOT bound into the
+  sandbox, so a prompt-injected agent cannot call `send` on the daemon
+  directly and bypass the approval gate. Self-sends return immediately
+  ("sent"); every other send returns a pending token the agent must
+  surface to the user — approval happens out of band through the chat
+  panel, not from inside the sandbox.
 
 Default output is plain text designed for the agent's eyes; `--json`
 emits the underlying records verbatim for programmatic use.

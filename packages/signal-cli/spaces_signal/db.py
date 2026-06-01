@@ -7,9 +7,12 @@ The store lives at $SPACES_SIGNAL_DB (default
   may legitimately replay the same envelope (signal-cli ack semantics)
   and the dedup prevents double-counting in thread reads.
 
-* `pending_sends` — outbound sends queued by the agent that require
-  the human to approve through the chat panel. The bridge owns state
-  transitions; the agent-facing CLI only ever INSERTs into 'pending'.
+* `pending_sends` — outbound sends the agent queued via the bridge's
+  enqueue socket that require the human to approve through the chat
+  panel. The bridge owns this table outright: it INSERTs the row and
+  owns every state transition. The sandbox-side CLI never writes here
+  — it opens the store read-only — so a prompt-injected agent cannot
+  forge an 'approved'/'sent' row to fake an approval.
 
 Both tables store timestamps as integer ms-since-epoch (matching the
 Signal protocol envelope timestamps) so the agent never has to
