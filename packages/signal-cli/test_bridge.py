@@ -815,6 +815,43 @@ class TestPendingCapAndTTL(BridgeHarness):
         self.assertEqual(dbmod.get_pending(self.bridge.db, "fresh")["state"], "pending")
 
 
+class TestSocketPeerCred(BridgeHarness):
+    """Defence-in-depth: only same-uid peers may talk to the bridge
+    sockets. The 0600 socket mode already blocks other users; the
+    SO_PEERCRED check is the belt to that brace."""
+
+    def test_peer_uid_reads_local_uid(self) -> None:
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        self.assertEqual(bridge_mod._peer_uid(a), os.getuid())
+
+    def test_same_uid_peer_is_served(self) -> None:
+        # Non-regression: a same-uid client (the normal case, including
+        # the sandboxed agent which runs as the user) still gets served.
+        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
+        self.assertIn("ok", resp)
+
+    def test_mismatched_uid_peer_is_rejected(self) -> None:
+        orig = bridge_mod._peer_uid
+        bridge_mod._peer_uid = lambda conn: os.getuid() + 1
+        self.addCleanup(setattr, bridge_mod, "_peer_uid", orig)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(3.0)
+        s.connect(self.enqueue_sock)
+        self.addCleanup(s.close)
+        try:
+            s.sendall(b'{"op": "contacts"}\n')
+        except OSError:
+            pass  # bridge may have already closed the conn
+        f = s.makefile("r")
+        try:
+            line = f.readline()
+        except OSError:
+            line = ""  # connection reset by the bridge == rejected
+        self.assertEqual(line, "", "mismatched-uid peer must be closed unserved")
+
+
 class TestEnqueueResourceLimits(BridgeHarness):
     """Cheap DoS guards: a malicious sandbox or bug-pinned client
     must not be able to OOM the bridge by streaming a single

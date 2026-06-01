@@ -37,6 +37,7 @@ import secrets
 import select
 import socket
 import sqlite3
+import struct
 import threading
 import unicodedata
 from dataclasses import dataclass
@@ -129,6 +130,22 @@ def _default_panel_socket() -> str:
         return env
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     return f"{runtime}/spaces-signal/panel.sock"
+
+
+def _peer_uid(conn: socket.socket) -> int | None:
+    """UID of the connected peer via SO_PEERCRED, or None when it can't
+    be determined (option unavailable / not Linux). Used to reject
+    cross-user connections to the bridge sockets — defence-in-depth
+    behind the 0600 socket mode."""
+    opt = getattr(socket, "SO_PEERCRED", None)
+    if opt is None:
+        return None
+    try:
+        creds = conn.getsockopt(socket.SOL_SOCKET, opt, struct.calcsize("3i"))
+    except OSError:
+        return None
+    _pid, uid, _gid = struct.unpack("3i", creds)
+    return uid
 
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -937,6 +954,23 @@ class Bridge:
                 conn, _ = srv.accept()
             except OSError:
                 break
+            peer_uid = _peer_uid(conn)
+            if peer_uid is not None and peer_uid != os.getuid():
+                # Defence-in-depth behind the 0600 socket in a 0700 dir:
+                # only this user's own processes (the sandboxed agent on
+                # enqueue.sock, the panel on panel.sock — both run as the
+                # user) may reach the bridge. Reject any other uid.
+                log.warning(
+                    "rejecting %s connection from uid %s (bridge uid %s)",
+                    path,
+                    peer_uid,
+                    os.getuid(),
+                )
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                continue
             self._spawn(lambda c=conn: handler(c), name=f"conn-{path}")
 
 
