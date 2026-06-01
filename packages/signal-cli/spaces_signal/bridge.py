@@ -59,6 +59,16 @@ DEFAULT_PANEL_SOCKET_ENV = "SPACES_SIGNAL_PANEL_SOCKET"
 MAX_ENQUEUE_LINE_BYTES = 1 << 20  # 1 MiB
 MAX_SEND_BODY_BYTES = 64 * 1024  # 64 KiB
 
+# Cap on un-decided sends an agent can stack up at once. A prompt-
+# injected agent could otherwise flood the approval panel (local DoS)
+# or bury a malicious card among many to fish for an approve-by-fatigue.
+MAX_PENDING_SENDS = 32
+
+# Stale pending sends are auto-expired after this long un-decided, so a
+# forgotten card can't be approved hours later with surprising effect
+# and pending_sends can't grow without bound.
+PENDING_TTL_SECONDS = 60 * 60
+
 
 class _SelectWake:
     """Wake-up primitive that interrupts a blocking select() instantly.
@@ -433,15 +443,23 @@ class Bridge:
         try:
             with self._db_lock:
                 deleted = dbmod.expire_messages(self.db)
-                if deleted:
-                    # Flush the secure-deleted pages out of the WAL so
-                    # the expired plaintext actually leaves the file
-                    # rather than lingering in -wal until a checkpoint.
+                expired_tokens = dbmod.expire_pending(
+                    self.db,
+                    older_than_ms=dbmod.now_ms() - PENDING_TTL_SECONDS * 1000,
+                )
+                if deleted or expired_tokens:
+                    # Flush secure-deleted pages out of the WAL so expired
+                    # plaintext actually leaves the file rather than
+                    # lingering in -wal until a checkpoint.
                     self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            if deleted:
-                log.info("expired %d disappearing message(s)", deleted)
         except sqlite3.Error as exc:
-            log.warning("message expiry sweep failed: %s", exc)
+            log.warning("expiry sweep failed: %s", exc)
+            return
+        if deleted:
+            log.info("expired %d disappearing message(s)", deleted)
+        for token in expired_tokens:
+            log.info("expired stale pending send %s", token)
+            self._broadcast_panel({"op": "removed", "token": token, "state": "expired"})
 
     # ── receiver ────────────────────────────────────────────────────
 
@@ -588,6 +606,22 @@ class Bridge:
             except (JsonRpcError, OSError, TimeoutError) as exc:
                 return {"ok": False, "error": f"send failed: {exc}"}
             return {"ok": True, "to_self": True}
+
+        # Cap the outstanding approval backlog. A prompt-injected agent
+        # could otherwise mint unbounded pending cards — flooding the
+        # panel (local DoS) or burying a malicious request among many to
+        # fish for an approve-by-fatigue. Refuse new sends until the
+        # human clears the backlog.
+        with self._db_lock:
+            outstanding = dbmod.count_pending(self.db)
+        if outstanding >= MAX_PENDING_SENDS:
+            return {
+                "ok": False,
+                "error": (
+                    f"too many pending sends ({outstanding}); approve or "
+                    f"deny existing ones in the chat panel first"
+                ),
+            }
 
         # Non-self: queue for human approval.
         token = secrets.token_urlsafe(24)

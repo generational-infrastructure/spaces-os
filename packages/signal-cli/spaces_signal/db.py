@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_state
   ON pending_sends(state, created_at);
 """
 
-VALID_STATES = frozenset({"pending", "approved", "sent", "denied", "failed"})
+VALID_STATES = frozenset({"pending", "approved", "sent", "denied", "failed", "expired"})
 
 
 def default_db_path() -> Path:
@@ -275,6 +275,37 @@ def list_pending(
         state_list,
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def count_pending(db: sqlite3.Connection) -> int:
+    """Number of sends still awaiting a human decision."""
+    row = db.execute(
+        "SELECT COUNT(*) AS n FROM pending_sends WHERE state = 'pending'"
+    ).fetchone()
+    return int(row["n"])
+
+
+def expire_pending(db: sqlite3.Connection, *, older_than_ms: int) -> list[str]:
+    """Mark still-'pending' rows created before `older_than_ms` as
+    'expired' (never decided in time). Returns the tokens expired so the
+    caller can drop their cards from the panel.
+
+    Callers MUST hold the bridge db_lock so the SELECT and UPDATE are
+    atomic against a concurrent approve/deny — otherwise a row decided
+    between the two could be wrongly reported expired.
+    """
+    rows = db.execute(
+        "SELECT token FROM pending_sends WHERE state = 'pending' AND created_at < ?",
+        (older_than_ms,),
+    ).fetchall()
+    tokens = [r["token"] for r in rows]
+    if tokens:
+        db.execute(
+            "UPDATE pending_sends SET state = 'expired', decision_at = ?"
+            " WHERE state = 'pending' AND created_at < ?",
+            (now_ms(), older_than_ms),
+        )
+    return tokens
 
 
 def get_pending(db: sqlite3.Connection, token: str) -> dict | None:

@@ -762,6 +762,59 @@ class TestMessageExpiryScheduled(unittest.TestCase):
         self.assertTrue(_wait_until(expired_gone, timeout=3))
 
 
+class TestPendingCapAndTTL(BridgeHarness):
+    """Approval-panel flood guards: an agent can't stack unbounded
+    pending cards, and stale undecided ones auto-expire so they can't be
+    approved much later with surprising effect."""
+
+    def test_outstanding_pending_is_capped(self) -> None:
+        orig = bridge_mod.MAX_PENDING_SENDS
+        bridge_mod.MAX_PENDING_SENDS = 3
+        self.addCleanup(setattr, bridge_mod, "MAX_PENDING_SENDS", orig)
+        for i in range(3):
+            r = _send_request(
+                self.enqueue_sock,
+                {"op": "send", "to": "+15559998888", "body": f"m{i}"},
+            )
+            self.assertTrue(r.get("pending"), r)
+        overflow = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "+15559998888", "body": "overflow"},
+        )
+        self.assertFalse(overflow["ok"])
+        self.assertIn("too many pending", overflow["error"])
+
+    def test_self_send_not_capped(self) -> None:
+        # Self-sends dispatch immediately and never queue, so the
+        # backlog cap must not refuse them.
+        orig = bridge_mod.MAX_PENDING_SENDS
+        bridge_mod.MAX_PENDING_SENDS = 1
+        self.addCleanup(setattr, bridge_mod, "MAX_PENDING_SENDS", orig)
+        r = _send_request(
+            self.enqueue_sock, {"op": "send", "to": "+15559998888", "body": "p"}
+        )
+        self.assertTrue(r.get("pending"), r)
+        r = _send_request(
+            self.enqueue_sock, {"op": "send", "to": "+15550000001", "body": "note"}
+        )
+        self.assertTrue(r.get("to_self"), r)
+
+    def test_stale_pending_expired_by_sweep(self) -> None:
+        old = dbmod.now_ms() - (bridge_mod.PENDING_TTL_SECONDS * 1000 + 60_000)
+        with self.bridge._db_lock:
+            self.bridge.db.execute(
+                "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
+                " VALUES ('stale', ?, '+15559998888', 'old', 'pending')",
+                (old,),
+            )
+            dbmod.insert_pending(
+                self.bridge.db, token="fresh", recipient="+15559998888", body="new"
+            )
+        self.bridge._expire_once()
+        self.assertEqual(dbmod.get_pending(self.bridge.db, "stale")["state"], "expired")
+        self.assertEqual(dbmod.get_pending(self.bridge.db, "fresh")["state"], "pending")
+
+
 class TestEnqueueResourceLimits(BridgeHarness):
     """Cheap DoS guards: a malicious sandbox or bug-pinned client
     must not be able to OOM the bridge by streaming a single

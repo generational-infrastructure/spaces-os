@@ -283,6 +283,41 @@ class TestPendingSends(DbBase):
         self.assertEqual(pending, {"a"})
         self.assertEqual(approved, {"b"})
 
+    def test_count_pending(self) -> None:
+        self.assertEqual(dbmod.count_pending(self.db), 0)
+        dbmod.insert_pending(self.db, token="a", recipient="+1", body="x")
+        dbmod.insert_pending(self.db, token="b", recipient="+2", body="y")
+        dbmod.claim_pending(self.db, "b", state="approved")
+        # Only the still-pending row counts toward the cap.
+        self.assertEqual(dbmod.count_pending(self.db), 1)
+
+    def test_expire_pending_marks_old_only(self) -> None:
+        now = dbmod.now_ms()
+        self.db.execute(
+            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
+            " VALUES ('old', ?, '+1', 'm', 'pending')",
+            (now - 10_000,),
+        )
+        self.db.execute(
+            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
+            " VALUES ('new', ?, '+2', 'm', 'pending')",
+            (now,),
+        )
+        tokens = dbmod.expire_pending(self.db, older_than_ms=now - 5_000)
+        self.assertEqual(tokens, ["old"])
+        self.assertEqual(dbmod.get_pending(self.db, "old")["state"], "expired")
+        self.assertEqual(dbmod.get_pending(self.db, "new")["state"], "pending")
+
+    def test_expire_pending_ignores_already_decided(self) -> None:
+        now = dbmod.now_ms()
+        self.db.execute(
+            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
+            " VALUES ('appr', ?, '+1', 'm', 'approved')",
+            (now - 10_000,),
+        )
+        self.assertEqual(dbmod.expire_pending(self.db, older_than_ms=now), [])
+        self.assertEqual(dbmod.get_pending(self.db, "appr")["state"], "approved")
+
 
 class TestConnectReadonly(unittest.TestCase):
     """The sandbox-side `signal` CLI MUST open the DB read-only.
