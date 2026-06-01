@@ -408,6 +408,16 @@ Item {
           delegate: RowLayout {
             id: signalDelegate
             required property var modelData
+            // Always surface the raw recipient beside the (attacker-
+            // controllable) display name so the human can catch a
+            // spoofed name aimed at an unrelated number/UUID before
+            // tapping Send. Mirrors the `signal` CLI's pending card.
+            readonly property string recipientLabel: {
+              const dn = signalDelegate.modelData.display_name || "";
+              const rc = signalDelegate.modelData.recipient || "?";
+              return (dn === "" || dn === rc) ? rc : (dn + " <" + rc + ">");
+            }
+            readonly property real maxBodyHeight: Style.baseWidgetSize * 5
             Layout.fillWidth: true
             spacing: Style.marginS
             ColumnLayout {
@@ -415,18 +425,30 @@ Item {
               spacing: 0
               NText {
                 Layout.fillWidth: true
-                text: root.tr("panel.signal-pending-prefix", { to: (signalDelegate.modelData.display_name || signalDelegate.modelData.recipient || "?") })
+                text: root.tr("panel.signal-pending-prefix", { to: signalDelegate.recipientLabel })
                 pointSize: Style.fontSizeS
                 font.bold: true
                 wrapMode: Text.Wrap
               }
-              NText {
+              ScrollView {
+                id: signalBodyScroll
                 Layout.fillWidth: true
-                text: signalDelegate.modelData.body || ""
-                pointSize: Style.fontSizeXS
-                wrapMode: Text.Wrap
-                maximumLineCount: 4
-                elide: Text.ElideRight
+                // Untruncated: show the whole body, but cap the card and
+                // scroll past the cap so a long message can't blow up the
+                // panel. The human can scroll to read all of what they
+                // are about to approve.
+                Layout.preferredHeight: Math.min(signalBody.implicitHeight, signalDelegate.maxBodyHeight)
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                NText {
+                  id: signalBody
+                  width: signalBodyScroll.availableWidth
+                  text: signalDelegate.modelData.body || ""
+                  pointSize: Style.fontSizeXS
+                  wrapMode: Text.Wrap
+                }
               }
             }
             NButton {
