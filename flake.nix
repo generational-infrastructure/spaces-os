@@ -15,6 +15,8 @@
     llm-agents.inputs.systems.follows = "systems";
     voxtype.url = "github:peteonrails/voxtype";
     voxtype.inputs.nixpkgs.follows = "nixpkgs";
+    home-manager.url = "github:nix-community/home-manager";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
     systems.url = "github:nix-systems/default";
   };
 
