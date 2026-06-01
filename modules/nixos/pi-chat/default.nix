@@ -46,6 +46,7 @@ let
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
   osmCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli;
   caldavCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli;
+  wikidataCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikidata-cli;
   contactsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.contacts-cli;
   mailCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.mail-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
@@ -117,6 +118,7 @@ let
     contacts = "${skillsDir}/contacts";
     email = "${skillsDir}/email";
     google = "${skillsDir}/google";
+    wikidata = "${skillsDir}/wikidata";
   }
   // lib.optionalAttrs (config.services.spaces-signal.enable or false) {
     signal = "${skillsDir}/signal";
@@ -527,6 +529,8 @@ in
       "^skill-config(\\s|$)"
       # notifications: thin reader over a host-managed history file.
       "^notifications(\\s|$)"
+      # wikidata: read-only public Wikidata queries, no auth, no mutation.
+      "^wikidata-cli(\\s|$)"
     ];
 
     # llama-swap supplies the default LLM endpoint; enable by default
@@ -553,6 +557,7 @@ in
       googleCliPkg
       osmCliPkg
       caldavCliPkg
+      wikidataCliPkg
       contactsCliPkg
       mailCliPkg
       sedimentPkg

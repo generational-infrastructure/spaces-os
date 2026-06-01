@@ -55,6 +55,7 @@ let
     notifications = [ "notifications" ];
     google = [ "google-cli" ];
     maps = [ "osm-cli" ];
+    wikidata = [ "wikidata-cli" ];
     calendar = [ "caldav" ];
     contacts = [ "contacts" ];
     email = [ "mail" ];

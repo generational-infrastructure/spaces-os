@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wikidata-cli"
+version = "0.1.0"
+description = "Wikidata CLI for entity search, lookup, and SPARQL queries"
+license = "MIT"
+requires-python = ">=3.10"
+
+[project.scripts]
+wikidata-cli = "wikidata_cli:main"
