@@ -86,6 +86,11 @@ def connect(path: Path) -> sqlite3.Connection:
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
     db.execute("PRAGMA foreign_keys=ON")
+    # secure_delete overwrites freed content instead of leaving it in
+    # the page. Disappearing messages are deleted by the bridge's
+    # expiry sweep; this makes that deletion actually scrub the
+    # plaintext off disk rather than leaving it readable in free pages.
+    db.execute("PRAGMA secure_delete=ON")
     init_schema(db)
     return db
 
@@ -178,8 +183,9 @@ def query_messages(
     params: list = []
 
     # Disappearing-message hygiene: never surface anything past its
-    # configured expiry. The bridge runs a periodic vacuum that actually
-    # deletes these rows; this filter is the belt to that vacuum's braces.
+    # configured expiry. The bridge runs a periodic expiry sweep
+    # (Bridge._run_expiry -> expire_messages) that physically deletes
+    # these rows; this filter is the belt to that sweep's braces.
     clauses.append("(expires_at_ms IS NULL OR expires_at_ms > ?)")
     params.append(now_ms())
 
@@ -276,6 +282,32 @@ def get_pending(db: sqlite3.Connection, token: str) -> dict | None:
     return dict(row) if row else None
 
 
+def claim_pending(db: sqlite3.Connection, token: str, *, state: str) -> bool:
+    """Atomically claim a still-`pending` row, moving it to a decided
+    state ('approved' or 'denied'). Returns True iff *this* caller won
+    the claim — the row existed and was still 'pending'. Concurrent
+    deciders (a second approve, or an approve racing a deny) get False
+    and MUST NOT act on the row.
+
+    This is the approval gate's serialization point. The older
+    `mark_pending(state != target)` guard only blocked re-applying the
+    *same* state; it still let an already-approved (or even 'sent')
+    row be flipped to 'denied' and vice versa, so a deny racing an
+    approve could report success while signal-cli actually dispatched
+    the message. Claiming strictly from 'pending' closes that race:
+    exactly one of {approve, deny} can win.
+    """
+    if state not in ("approved", "denied"):
+        raise ValueError(f"claim_pending: state must be approved/denied, got {state!r}")
+    cur = db.execute(
+        """UPDATE pending_sends
+           SET state = ?, decision_at = ?
+           WHERE token = ? AND state = 'pending'""",
+        (state, now_ms(), token),
+    )
+    return cur.rowcount == 1
+
+
 def mark_pending(
     db: sqlite3.Connection,
     token: str,
@@ -283,8 +315,10 @@ def mark_pending(
     state: str,
     error: str | None = None,
 ) -> bool:
-    """Set the terminal state on a pending row. Returns True iff the row
-    existed and the state actually changed.
+    """Set a terminal state (sent/failed) on a row already claimed via
+    `claim_pending`. Idempotent: returns True iff the row existed and
+    the state actually changed. NOT a claim — callers that need to win
+    an exclusive pending→decided transition MUST use `claim_pending`.
     """
     if state not in VALID_STATES:
         raise ValueError(f"mark_pending: invalid state {state!r}")

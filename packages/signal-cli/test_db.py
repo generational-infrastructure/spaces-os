@@ -243,6 +243,35 @@ class TestPendingSends(DbBase):
         with self.assertRaises(ValueError):
             dbmod.mark_pending(self.db, "t", state="not-a-state")
 
+    def test_claim_pending_wins_from_pending(self) -> None:
+        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
+        self.assertTrue(dbmod.claim_pending(self.db, "t", state="approved"))
+        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "approved")
+
+    def test_claim_pending_second_claim_loses(self) -> None:
+        # Once a row leaves 'pending', no further claim can win — this
+        # is what stops a deny from "cancelling" an already-approved
+        # send while signal-cli dispatches it anyway.
+        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
+        self.assertTrue(dbmod.claim_pending(self.db, "t", state="approved"))
+        self.assertFalse(dbmod.claim_pending(self.db, "t", state="denied"))
+        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "approved")
+
+    def test_claim_pending_cannot_flip_sent_to_denied(self) -> None:
+        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
+        dbmod.claim_pending(self.db, "t", state="approved")
+        dbmod.mark_pending(self.db, "t", state="sent")
+        self.assertFalse(dbmod.claim_pending(self.db, "t", state="denied"))
+        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "sent")
+
+    def test_claim_pending_rejects_terminal_state(self) -> None:
+        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
+        with self.assertRaises(ValueError):
+            dbmod.claim_pending(self.db, "t", state="sent")
+
+    def test_claim_pending_unknown_token_returns_false(self) -> None:
+        self.assertFalse(dbmod.claim_pending(self.db, "nope", state="approved"))
+
     def test_list_pending_filters_by_state(self) -> None:
         dbmod.insert_pending(self.db, token="a", recipient="+1", body="x")
         dbmod.insert_pending(self.db, token="b", recipient="+2", body="y")

@@ -619,6 +619,148 @@ class TestPanelDecisionRace(BridgeHarness):
             check_db.close()
         self.assertEqual(row["state"], "sent")
 
+    def test_concurrent_approve_deny_dispatches_at_most_once(self) -> None:
+        # An approve and a deny race on the same token. claim_pending
+        # makes the decision atomic, so exactly one decider wins and a
+        # winning deny means the message is never dispatched. The atomic
+        # claim itself is proven deterministically in
+        # test_db.test_claim_pending_second_claim_loses; this is the
+        # end-to-end check over the panel socket, looped to widen the
+        # odds of hitting the both-passed-the-pre-check window.
+        check = dbmod.connect(self.db_path)
+        self.addCleanup(check.close)
+        for i in range(16):
+            body = f"race-{i}"
+            token = _send_request(
+                self.enqueue_sock,
+                {"op": "send", "to": "+15559998888", "body": body},
+            )["token"]
+
+            out: dict[str, dict] = {}
+
+            def decide(op: str, token: str = token, out: dict = out) -> None:
+                out[op] = _send_request(self.panel_sock, {"op": op, "token": token})
+
+            threads = [
+                threading.Thread(target=decide, args=("approve",)),
+                threading.Thread(target=decide, args=("deny",)),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            winners = [op for op in ("approve", "deny") if out[op].get("ok")]
+            self.assertEqual(len(winners), 1, f"exactly one winner: {out!r}")
+            sends = [c for c in self.daemon.send_calls if c.get("message") == body]
+            state = dbmod.get_pending(check, token)["state"]
+            if winners[0] == "deny":
+                self.assertEqual(sends, [], "a denied send MUST NOT be dispatched")
+                self.assertEqual(state, "denied")
+            else:
+                self.assertEqual(len(sends), 1, "approved send dispatched once")
+                self.assertEqual(state, "sent")
+
+
+class TestMessageExpiry(BridgeHarness):
+    """Disappearing messages must actually leave messages.db. The read
+    paths filter expired rows, but without the bridge's periodic sweep
+    the plaintext would persist on disk forever."""
+
+    def test_expire_once_deletes_expired_keeps_live(self) -> None:
+        past = dbmod.now_ms() - 10_000
+        with self.bridge._db_lock:
+            dbmod.store_message(
+                self.bridge.db,
+                {
+                    "uid": "exp",
+                    "ts_ms": past,
+                    "thread_id": "t",
+                    "thread_kind": "dm",
+                    "body": "secret",
+                    "expires_at_ms": past,
+                },
+            )
+            dbmod.store_message(
+                self.bridge.db,
+                {
+                    "uid": "keep",
+                    "ts_ms": dbmod.now_ms(),
+                    "thread_id": "t",
+                    "thread_kind": "dm",
+                    "body": "stay",
+                },
+            )
+        self.bridge._expire_once()
+        with self.bridge._db_lock:
+            uids = {
+                r["uid"] for r in self.bridge.db.execute("SELECT uid FROM messages")
+            }
+        self.assertNotIn("exp", uids)
+        self.assertIn("keep", uids)
+
+    def test_expiry_thread_is_running(self) -> None:
+        self.assertIn("bridge-expiry", {t.name for t in self.bridge._threads})
+
+
+class TestMessageExpiryScheduled(unittest.TestCase):
+    """The running bridge sweeps on startup (and on its interval), not
+    only when _expire_once is called by hand."""
+
+    def test_startup_sweep_removes_preexisting_expired(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        daemon = FakeSignalDaemon(str(base / "signal.sock"))
+        daemon.accounts = [{"uuid": "acct-uuid", "number": "+15550000001"}]
+        self.addCleanup(daemon.stop)
+
+        db_path = base / "messages.db"
+        seed = dbmod.connect(db_path)
+        past = dbmod.now_ms() - 10_000
+        dbmod.store_message(
+            seed,
+            {
+                "uid": "exp",
+                "ts_ms": past,
+                "thread_id": "t",
+                "thread_kind": "dm",
+                "body": "secret",
+                "expires_at_ms": past,
+            },
+        )
+        dbmod.store_message(
+            seed,
+            {
+                "uid": "keep",
+                "ts_ms": dbmod.now_ms(),
+                "thread_id": "t",
+                "thread_kind": "dm",
+                "body": "stay",
+            },
+        )
+        seed.close()
+
+        br = bridge_mod.Bridge(
+            bridge_mod.BridgeConfig(
+                db_path=db_path,
+                daemon_socket=str(base / "signal.sock"),
+                enqueue_socket=str(base / "enqueue.sock"),
+                panel_socket=str(base / "panel.sock"),
+            ),
+            accounts_refresh_seconds=60.0,
+            expire_interval_seconds=0.05,
+        )
+        br.start()
+        self.addCleanup(br.stop)
+
+        def expired_gone() -> bool:
+            with br._db_lock:
+                uids = {r["uid"] for r in br.db.execute("SELECT uid FROM messages")}
+            return "exp" not in uids and "keep" in uids
+
+        self.assertTrue(_wait_until(expired_gone, timeout=3))
+
 
 class TestEnqueueResourceLimits(BridgeHarness):
     """Cheap DoS guards: a malicious sandbox or bug-pinned client

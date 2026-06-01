@@ -36,6 +36,7 @@ import os
 import secrets
 import select
 import socket
+import sqlite3
 import threading
 import unicodedata
 from dataclasses import dataclass
@@ -267,6 +268,7 @@ class Bridge:
         *,
         daemon_client_factory: Callable[[], JsonRpcClient] | None = None,
         accounts_refresh_seconds: float = 300.0,
+        expire_interval_seconds: float = 60.0,
     ) -> None:
         self.config = config
         self._db_lock = threading.Lock()
@@ -275,6 +277,7 @@ class Bridge:
             config.daemon_socket
         )
         self._accounts_refresh_seconds = accounts_refresh_seconds
+        self._expire_interval_seconds = expire_interval_seconds
 
         self._accounts: list[dict] = []
         self._accounts_lock = threading.Lock()
@@ -317,6 +320,7 @@ class Bridge:
         self._spawn(self._run_enqueue_listener, name="enqueue")
         self._spawn(self._run_panel_listener, name="panel")
         self._spawn(self._run_accounts_refresher, name="accounts-refresh")
+        self._spawn(self._run_expiry, name="expiry")
 
     def stop(self) -> None:
         self._stop.set()
@@ -407,6 +411,37 @@ class Bridge:
                 log.info("requested primary-device metadata sync for %s", account)
             except (JsonRpcError, OSError, TimeoutError) as exc:
                 log.warning("sendSyncRequest(%s) failed: %s", account, exc)
+
+    # ── disappearing-message expiry ─────────────────────────────────
+
+    def _run_expiry(self) -> None:
+        """Physically delete disappearing messages whose window has
+        passed. The read paths already filter expired rows out, but
+        without this sweep the plaintext lingers in messages.db
+        forever — defeating the point of disappearing messages.
+
+        Runs once promptly on startup (a restart should clear any
+        backlog accrued while the bridge was down), then on the
+        interval.
+        """
+        while True:
+            self._expire_once()
+            if self._stop.wait(self._expire_interval_seconds):
+                return
+
+    def _expire_once(self) -> None:
+        try:
+            with self._db_lock:
+                deleted = dbmod.expire_messages(self.db)
+                if deleted:
+                    # Flush the secure-deleted pages out of the WAL so
+                    # the expired plaintext actually leaves the file
+                    # rather than lingering in -wal until a checkpoint.
+                    self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if deleted:
+                log.info("expired %d disappearing message(s)", deleted)
+        except sqlite3.Error as exc:
+            log.warning("message expiry sweep failed: %s", exc)
 
     # ── receiver ────────────────────────────────────────────────────
 
@@ -718,12 +753,13 @@ class Bridge:
                 "state": row["state"],
             }
         if not approve:
-            # Atomically transition pending → denied. If the row was
-            # already decided between our read and write, mark_pending
-            # returns False; surface "already <state>" rather than
-            # claiming success.
+            # Atomically claim the still-`pending` row, moving it to
+            # 'denied'. If an approve already won the claim (or the row
+            # was otherwise decided), claim_pending returns False and we
+            # surface "already <state>" rather than reporting a cancel
+            # that didn't actually stop the send.
             with self._db_lock:
-                claimed = dbmod.mark_pending(self.db, token, state="denied")
+                claimed = dbmod.claim_pending(self.db, token, state="denied")
                 if not claimed:
                     current = dbmod.get_pending(self.db, token)
             if not claimed:
@@ -737,13 +773,15 @@ class Bridge:
             self._broadcast_panel({"op": "removed", "token": token, "state": "denied"})
             return {"op": "decision", "ok": True, "state": "denied"}
 
-        # Approve: claim the row by atomically transitioning
-        # pending → approved. Only the thread whose UPDATE actually
-        # changes a row may dispatch — every other concurrent approver
-        # gets `claimed = False` and bails. This closes the
-        # double-send TOCTOU between get_pending() and the dispatch.
+        # Approve: claim the still-`pending` row, moving it to
+        # 'approved'. Only the thread whose UPDATE actually changes a
+        # row may dispatch — every other concurrent decider (a second
+        # approve, or a racing deny) gets `claimed = False` and bails.
+        # This closes both the double-send TOCTOU and the deny-races-
+        # approve hole (a cancel that returned ok while the message
+        # still went out).
         with self._db_lock:
-            claimed = dbmod.mark_pending(self.db, token, state="approved")
+            claimed = dbmod.claim_pending(self.db, token, state="approved")
             if not claimed:
                 current = dbmod.get_pending(self.db, token)
         if not claimed:
