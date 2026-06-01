@@ -23,7 +23,7 @@ import sys
 import time
 
 
-def call(quickshell_bin, config, target, fn, *args, timeout=10):
+def call(quickshell_bin, config, target, fn, *args, timeout=15):
     """Invoke a shell IPC function and return its stdout-stripped text."""
     cmd = [
         quickshell_bin,
@@ -45,7 +45,7 @@ def call(quickshell_bin, config, target, fn, *args, timeout=10):
 
 
 def poll_reply(
-    quickshell_bin, config, target, session_id, baseline, predicate, timeout=30
+    quickshell_bin, config, target, session_id, baseline, predicate, timeout=60
 ):
     """Poll lastAssistantText until predicate(text) and text != baseline."""
     deadline = time.monotonic() + timeout
@@ -80,7 +80,14 @@ def main():
     )
     print(f"SESSION: {session_id}", file=sys.stderr)
 
-    # Turn 1: any non-empty reply is enough.
+    # Turn 1: any non-empty reply is enough. This is the cold-start
+    # path: the pi RPC process is spawned for the first time (Node
+    # boot + extension load + the first sediment recall cold-loads the
+    # embedding model), so on a contended CI host running this nested
+    # VM alongside other `nix flake check` builds it can take far
+    # longer than a warm turn. Give it a generous budget — a genuine
+    # hang still fails the poll, just later, while a correct-but-
+    # starved system gets the time it needs.
     baseline = call(quickshell_bin, config, target, "lastAssistantText", session_id)
     call(quickshell_bin, config, target, "send", "Hello bot")
     reply1 = poll_reply(
@@ -90,6 +97,7 @@ def main():
         session_id,
         baseline,
         predicate=lambda t: bool(t.strip()),
+        timeout=120,
     )
     print(f"TURN 1 OK: {reply1[:80]!r}")
 
