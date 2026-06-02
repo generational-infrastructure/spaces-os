@@ -69,9 +69,14 @@ path** only.
 
 ## Missing — by stage
 
-- [ ] **Stage 1 deploy.** A host config that runs pi-sessiond on `localhost`
-  and points the desktop panel at `ws://127.0.0.1:<port>` (gated on the
-  sandbox). Decide: keep dual-transport, or cut the local Process path.
+- [~] **Stage 1 deploy — validated.** `checks/pi-chat-local-executor` boots a
+  full desktop that self-hosts `pi-sessiond` on `127.0.0.1` with the panel at
+  `ws://127.0.0.1:8770`, and drives a sandboxed session end-to-end (daemon +
+  panel coexisting on one machine). Decision: **keep dual-transport** — the WS
+  path doesn't yet carry skill-config / side-channels, so cutting the local
+  Process path would regress the desktop. Remaining: a one-flag bundle toggle
+  + a `wsToken` tokenFile indirection (loopback token is world-readable today),
+  flipped on once side-channels land.
 - [ ] **Stage 2 — registry/n:m.** `list_sessions` daemon verb + `sessions`
   envelope; multi-client mirroring (event/`response` fan-out to N clients on one
   session). Single-session multiplexing already works; mirroring + `list_sessions`
