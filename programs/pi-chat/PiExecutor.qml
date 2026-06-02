@@ -33,10 +33,13 @@ QtObject {
   property bool _welcomed: false
   property var _pendingCreates: []   // FIFO of { resolve, reject }
   property var _connectWaiters: []   // callbacks fired once welcomed
+  property bool _live: false         // drives the socket; toggled to reconnect
+  onActiveChanged: _live = active
+  Component.onCompleted: _live = active
 
   property WebSocket _sock: WebSocket {
     url: executor.url
-    active: executor.active
+    active: executor._live
     onStatusChanged: status => {
       if (status === WebSocket.Open) {
         sendTextMessage(JSON.stringify({
@@ -47,9 +50,21 @@ QtObject {
         }));
       } else if (status === WebSocket.Closed || status === WebSocket.Error) {
         executor._onClosed(errorString);
+        if (executor.active) {
+          executor._live = false;  // toggle so the next connect is a real change
+          executor._retry.restart();
+        }
       }
     }
     onTextMessageReceived: message => executor._onMessage(message)
+  }
+
+  // The WebSocket does not auto-retry; reconnect with a short backoff while
+  // a connection is wanted (server not up yet, dropped, or daemon restarted).
+  property Timer _retry: Timer {
+    interval: 1000
+    repeat: false
+    onTriggered: if (executor.active) executor._live = true
   }
 
   function _onMessage(text) {
