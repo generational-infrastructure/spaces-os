@@ -544,6 +544,10 @@ in
       "^wikidata-cli(\\s|$)"
       # wikipedia: read-only public Wikipedia/MediaWiki queries, no auth, no mutation.
       "^wikipedia-cli(\\s|$)"
+      # google: Gmail + Calendar via the google-cli wrapper. Whitelisted
+      # in full (read AND mutate) at the user's request — sends mail and
+      # adds/deletes events without a per-command confirm prompt.
+      "^google-cli(\\s|$)"
     ];
 
     # llama-swap supplies the default LLM endpoint; enable by default
