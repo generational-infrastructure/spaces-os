@@ -65,6 +65,11 @@ Item {
       // Forwarded verbatim to each PiSession; %h/%t are expanded at
       // session-spawn time inside PiSession._buildCommand().
       property var sandboxBinds: []
+      // Remote executor (pi-sessiond) WebSocket endpoint. When wsUrl is
+      // non-empty the panel attaches sessions over WS instead of spawning
+      // pi locally; wsToken is the pre-shared `hello` secret.
+      property string wsUrl: ""
+      property string wsToken: ""
     }
   }
 
@@ -90,6 +95,8 @@ Item {
     : ""
   readonly property string memoryHfHome: root._cfg.memoryHfHome
   readonly property var sandboxBinds: root._cfg.sandboxBinds || []
+  readonly property string wsUrl: root._cfg.wsUrl
+  readonly property string wsToken: root._cfg.wsToken
   readonly property int idleTimeoutMin: {
     const c = cfg("idleTimeoutMinutes");
     if (typeof c === "number" && c > 0) return c;
@@ -113,6 +120,17 @@ Item {
   readonly property bool signalBridgeConnected: signalConfirm.connected
   function signalApprove(token) { signalConfirm.approve(token); }
   function signalDeny(token) { signalConfirm.deny(token); }
+
+  // Single WebSocket connection to the configured remote executor
+  // (pi-sessiond). Null in local mode (wsUrl empty); each PiSession
+  // multiplexes over it by its daemon-assigned session id.
+  PiExecutor {
+    id: piExecutor
+    url: root.wsUrl
+    token: root.wsToken
+    active: root.wsUrl !== ""
+  }
+  readonly property var executor: root.wsUrl !== "" ? piExecutor : null
 
   // ── sessions index ──
   // Plain-JS array so QML bindings re-evaluate on assignment.
@@ -719,6 +737,7 @@ Item {
           memoryDbDir: Qt.binding(() => root.memoryDbDir),
           memoryHfHome: Qt.binding(() => root.memoryHfHome),
           sandboxBinds: Qt.binding(() => root.sandboxBinds),
+          executor: Qt.binding(() => root.executor),
         });
         _registerSession(obj);
       } else {
