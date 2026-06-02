@@ -51,6 +51,19 @@ const STATE_DIR = resolve(
 );
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
+// Idle-GC + subprocess ceiling (design §5.1, §397). A live-idle session with no
+// attached clients is stopped after IDLE_TIMEOUT_MS (0 disables); MAX_LIVE caps
+// resident subprocesses (0 = unlimited). Both rely on cold respawn-on-attach.
+const IDLE_TIMEOUT_MS = Number(
+  process.env.SPACES_SESSIOND_IDLE_TIMEOUT_MS ?? "1800000",
+);
+// Poll often enough to honor the timeout without busy-looping: a quarter of the
+// timeout, clamped to [1s, 60s].
+const GC_INTERVAL_MS = Math.min(
+  60000,
+  Math.max(1000, Math.floor(IDLE_TIMEOUT_MS / 4)),
+);
+const MAX_LIVE = Number(process.env.SPACES_SESSIOND_MAX_LIVE ?? "0");
 
 function loadToken(): string {
   const credDir = process.env.CREDENTIALS_DIRECTORY;
@@ -119,6 +132,9 @@ interface Session {
   seq: number;
   subscribers: Set<Conn>;
   buffer: BufferedEvent[];
+  busy: boolean; // mid-turn (agent_start..agent_end); never GC a busy session
+  parked: boolean; // blocked on a human (§6); never GC a parked session
+  lastActivity: number; // epoch ms of last event/command; drives idle-GC + LRU
 }
 const sessions = new Map<string, Session>();
 
@@ -128,6 +144,7 @@ function send(ws: Conn, msg: unknown): void {
 
 // Stamp a session event with the next monotonic seq and fan it out verbatim.
 function broadcast(session: Session, payload: unknown): void {
+  session.lastActivity = Date.now();
   session.seq += 1;
   const data = JSON.stringify({
     v: 1,
@@ -219,6 +236,8 @@ interface SpawnOpts {
 // Spawn a sandboxed `pi --mode rpc` for a session and register it live.
 function spawnSession(opts: SpawnOpts): Session {
   const { id, provider, model, continueSession } = opts;
+  // Stay under the resident-subprocess ceiling before adding another.
+  enforceCeiling();
   const workdir = workdirOf(id);
   const sessionDir = sessionDirOf(id);
   mkdirSync(workdir, { recursive: true });
@@ -259,6 +278,9 @@ function spawnSession(opts: SpawnOpts): Session {
     seq: 0,
     subscribers: new Set(),
     buffer: [],
+    busy: false,
+    parked: false,
+    lastActivity: Date.now(),
   };
   sessions.set(id, session);
 
@@ -270,6 +292,13 @@ function spawnSession(opts: SpawnOpts): Session {
         event = JSON.parse(line);
       } catch {
         return; // pi emits only JSON lines; ignore anything else.
+      }
+      // Shallow peek (design §5.2): track turn boundaries so idle-GC never
+      // stops a session mid-turn.
+      if (isRecord(event)) {
+        const t = asString(event.type);
+        if (t === "agent_start") session.busy = true;
+        else if (t === "agent_end") session.busy = false;
       }
       broadcast(session, event);
     }),
@@ -311,6 +340,52 @@ function resumeSession(id: string): Session | undefined {
 // session; a still-mapped entry like that is cold, so attach resurrects it.
 function isAlive(session: Session): boolean {
   return session.proc.exitCode === null && session.proc.signalCode === null;
+}
+
+// ---- idle-GC + subprocess ceiling (design §5.1, §397) ----------------------
+
+function touch(session: Session): void {
+  session.lastActivity = Date.now();
+}
+
+// A session safe to stop: no attached clients, not mid-turn, not parked on a
+// human (design §5.1: never GC a live-busy or parked session).
+function isEvictable(session: Session): boolean {
+  return session.subscribers.size === 0 && !session.busy && !session.parked;
+}
+
+// Stop a session's subprocess; its committed jsonl persists, so the next attach
+// resurrects it (cold). Only ever called on idle sessions, so pi is between
+// turns (not writing) and a later --continue reads a consistent jsonl.
+function gcSession(session: Session): void {
+  sessions.delete(session.id);
+  session.proc.kill("SIGTERM");
+}
+
+// Evict the least-recently-active idle session until the resident count is
+// under the ceiling. Busy/parked/subscribed sessions are never evicted; if none
+// are idle we run over the soft cap rather than reject a new session.
+function enforceCeiling(): void {
+  if (MAX_LIVE <= 0) return;
+  while (sessions.size >= MAX_LIVE) {
+    let victim: Session | undefined;
+    for (const s of sessions.values()) {
+      if (!isEvictable(s)) continue;
+      if (!victim || s.lastActivity < victim.lastActivity) victim = s;
+    }
+    if (!victim) break;
+    gcSession(victim);
+  }
+}
+
+function gcIdleSessions(): void {
+  if (IDLE_TIMEOUT_MS <= 0) return;
+  const now = Date.now();
+  for (const session of sessions.values()) {
+    if (isEvictable(session) && now - session.lastActivity > IDLE_TIMEOUT_MS) {
+      gcSession(session);
+    }
+  }
 }
 
 // ---- envelope dispatch -----------------------------------------------------
@@ -386,6 +461,7 @@ function handleMessage(ws: Conn, text: string): void {
     case "detach": {
       const session = sessions.get(asString(parsed.sessionId) ?? "");
       session?.subscribers.delete(ws);
+      if (session) touch(session);
       return;
     }
     case "command": {
@@ -394,6 +470,7 @@ function handleMessage(ws: Conn, text: string): void {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;
       }
+      touch(session);
       // The payload is pi's own command, forwarded verbatim to stdin.
       session.stdin.write(`${JSON.stringify(parsed.payload)}\n`);
       return;
@@ -423,6 +500,10 @@ Bun.serve<ConnData>({
     },
   },
 });
+
+if (IDLE_TIMEOUT_MS > 0) {
+  setInterval(gcIdleSessions, GC_INTERVAL_MS);
+}
 
 console.error(
   `pi-sessiond: listening on ${HOST}:${PORT} (executor ${EXECUTOR_ID}); ` +
