@@ -81,13 +81,14 @@ in
 {
   options.services.spaces-signal = {
     enable = lib.mkEnableOption "signal-cli daemon backing the spaces AI agent's Signal skill" // {
-      # Default tracks pi-chat: anything pulling the spaces bundle
-      # gets the signal infrastructure for free, but the *units*
-      # stay condition-gated below so a fresh system pays nothing
-      # until the user runs `signal-cli link`. Standalone imports
-      # (no pi-chat in the config) fall back to false so the
-      # assertion further down has something to refuse cleanly.
-      default = config.services.pi-chat.enable or false;
+      # Tracks pi-chat: this module is imported only by pi-chat, so
+      # every pi-chat consumer gets the signal infrastructure for
+      # free. The *units* stay condition-gated below, so a fresh
+      # system pays nothing until the user runs `signal-cli link`.
+      # Tracking (rather than a flat `true`) keeps the module inert
+      # when pi-chat is imported but disabled, instead of tripping
+      # the pi-chat-required assertion below.
+      default = config.services.pi-chat.enable;
       defaultText = lib.literalExpression "config.services.pi-chat.enable";
     };
 

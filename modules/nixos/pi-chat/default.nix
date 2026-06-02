@@ -292,6 +292,7 @@ in
   # = false` and `services.pi-chat.llmUrl = "…"` to point elsewhere.
   imports = [
     ../llama-swap.nix
+    inputs.self.nixosModules.signal-cli
   ];
 
   options.services.pi-chat = {

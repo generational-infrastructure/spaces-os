@@ -8,8 +8,6 @@
     inputs.self.nixosModules.pi-chat
     # local LLM server with bundled GGUF models
     inputs.self.nixosModules.llama-swap
-    # signal-cli daemon + bridge for the signal skill
-    inputs.self.nixosModules.signal-cli
     # one-shot 'distro' → 'spaces' user-state migration
     inputs.self.nixosModules.spaces-state-migrate
     # push-to-talk voice-to-text (Mod+S)
