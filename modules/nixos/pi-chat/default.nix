@@ -308,6 +308,26 @@ in
       description = "Base URL of an OpenAI-compatible LLM server (without /v1 suffix).";
     };
 
+    wsUrl = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        WebSocket URL of a pi-sessiond executor (e.g. ws://server:8770).
+        When set, the panel attaches sessions over this connection instead
+        of spawning pi locally; empty keeps the local executor.
+      '';
+    };
+
+    wsToken = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Pre-shared `hello` token for the executor in `wsUrl`. Written into
+        the world-readable panel config — use only where that is acceptable
+        (tests / trusted LAN); a tokenFile indirection is a later refinement.
+      '';
+    };
+
     defaultModel = lib.mkOption {
       type = lib.types.str;
       default = "gemma4:e4b";
@@ -681,6 +701,10 @@ in
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
       restartTriggers = [ shellDir ];
+      # QtWebSockets lives outside quickshell's bundled QML path; quickshell's
+      # wrapper --prefixes its own paths onto NIXPKGS_QT6_QML_IMPORT_PATH, so
+      # this composes rather than clobbering.
+      environment.NIXPKGS_QT6_QML_IMPORT_PATH = "${pkgs.qt6.qtwebsockets}/lib/qt-6/qml";
       serviceConfig = {
         ExecStartPre = "${materializeShell}";
         ExecStart = "${pkgs.quickshell}/bin/quickshell -c ${shellName}";
@@ -773,6 +797,8 @@ in
     # Symlink from a generation-pinned store path.
     environment.etc."spaces/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
       inherit (cfg) llmUrl;
+      inherit (cfg) wsUrl;
+      inherit (cfg) wsToken;
       inherit (cfg) defaultModel;
       inherit (cfg) defaultProvider;
       piBin = lib.getExe piPkg;
