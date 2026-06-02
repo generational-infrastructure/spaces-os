@@ -40,11 +40,17 @@ path** only.
   `checks/pi-remote-session` confirms pi still functions under the real sandbox.
 - [ ] Run the sandboxed unit as a dedicated non-root uid (the daemon is root, so
   pi runs root-inside-sandbox). Needs state-dir ownership / `--uid=` wiring.
-- [ ] **Persistence + reconnect-with-history** (stage 3). `--session-dir` +
-  `--continue`; per-session ring buffer (≥ current turn); `snapshot` (from
-  `get_messages`) on cold attach; `lastSeq` warm-reattach replay. Today:
-  `--no-session`; reconnect re-attaches but loses history and any in-flight turn.
-  - Test: kill/respawn the daemon mid-turn; client reattaches and catches up.
+- [~] **Reconnect-with-history** (stage 3) — **partly done.** The daemon keeps
+  a capped per-session event ring buffer and replays events with seq > lastSeq
+  on `attach` (`packages/pi-sessiond/main.ts`), so a reconnecting/mirroring
+  client catches up. Verified by the reconnect subtest in
+  `checks/pi-remote-session`. Still missing:
+  - [ ] Disk persistence across daemon/subprocess restart: `--session-dir` +
+    `--continue`, binding the session dir into the sandbox, and respawning a
+    cold session on attach.
+  - [ ] Panel re-attaches its sessions on WS reconnect (sending `lastSeq`);
+    today PiExecutor reconnects the socket but the sessions don't re-attach.
+  - [ ] `get_messages` snapshot for history older than the buffer window.
 - [ ] **Crash respawn + idle-GC + subprocess ceiling.** Respawn with
   `--continue` on non-zero exit; GC idle/cold sessions after a timeout; cap
   resident subprocesses; never GC a busy/parked session.
