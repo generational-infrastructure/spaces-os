@@ -144,11 +144,14 @@ function createSession(provider: string, model: string): Session {
   const id = randomUUID();
   const workdir = `${STATE_DIR}/workspaces/${id}`;
   mkdirSync(workdir, { recursive: true });
+  const sessionDir = `${STATE_DIR}/sessions/${id}`;
+  mkdirSync(sessionDir, { recursive: true });
 
   const { argv, env } = buildSpawnCommand({
     systemdRun: SYSTEMD_RUN,
     piBin: PI_BIN,
     sessionId: id,
+    sessionDir,
     workdir,
     agentDir: AGENT_DIR,
     llmUrl: LLM_URL,

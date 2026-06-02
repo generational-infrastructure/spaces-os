@@ -11,6 +11,7 @@ export interface SpawnConfig {
   systemdRun: string; // path to systemd-run (or a stub, in tests)
   piBin: string;
   sessionId: string;
+  sessionDir: string; // pi --session-dir target (persisted session.jsonl; bound rw)
   workdir: string; // per-session cwd / workspace (bound rw)
   agentDir: string; // PI_CODING_AGENT_DIR (bound rw when sandboxed)
   llmUrl: string;
@@ -35,7 +36,8 @@ function piArgs(c: SpawnConfig): string[] {
     "rpc",
     "--provider",
     c.provider,
-    "--no-session",
+    "--session-dir",
+    c.sessionDir,
     "--offline",
     "--no-context-files",
   ];
@@ -62,6 +64,7 @@ export function buildSpawnCommand(c: SpawnConfig): SpawnCommand {
     `--setenv=HOME=${c.agentDir}`,
     `--setenv=PATH=${c.path}`,
     `--property=BindPaths=${c.workdir}:${c.workdir}`,
+    `--property=BindPaths=${c.sessionDir}:${c.sessionDir}`,
     "--property=PrivateTmp=true",
     "--property=PrivateDevices=true",
     "--property=ProtectKernelTunables=true",

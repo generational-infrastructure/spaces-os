@@ -6,6 +6,7 @@ const base: SpawnConfig = {
   systemdRun: "/run/wrappers/systemd-run",
   piBin: "/store/pi/bin/pi",
   sessionId: "abc123",
+  sessionDir: "/var/lib/pi-sessiond/sessions/abc123",
   workdir: "/var/lib/pi-sessiond/workspaces/abc123",
   agentDir: "/var/lib/pi-sessiond/pi-agent",
   llmUrl: "http://127.0.0.1:8013",
@@ -28,6 +29,9 @@ test("an untrusted session is launched sandboxed via systemd-run", () => {
   expect(argv).toContain("--property=ProtectHome=tmpfs");
   expect(argv).toContain(`--property=BindPaths=${base.workdir}:${base.workdir}`);
   expect(argv).toContain(`--property=BindPaths=${base.agentDir}:${base.agentDir}`);
+  // Persisted session dir, bound rw so sandboxed pi can write session.jsonl.
+  expect(argv).toContain(`--property=BindPaths=${base.sessionDir}:${base.sessionDir}`);
+  expect(argv).not.toContain("--no-session");
 
   // Kernel / namespace protection set.
   for (const prop of [
@@ -56,7 +60,8 @@ test("an untrusted session is launched sandboxed via systemd-run", () => {
     "rpc",
     "--provider",
     "local",
-    "--no-session",
+    "--session-dir",
+    base.sessionDir,
     "--offline",
     "--no-context-files",
     "--model",

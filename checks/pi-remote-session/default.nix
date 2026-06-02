@@ -100,5 +100,11 @@ else
               "${clientPython}/bin/python3 ${driver} "
               + "ws://server:${toString wsPort} ${token} server"
           )
+
+      with subtest("session is persisted to disk as jsonl"):
+          server.wait_until_succeeds(
+              "find /var/lib/pi-sessiond/sessions -name '*.jsonl' | grep -q .",
+              timeout=15,
+          )
     '';
   }
