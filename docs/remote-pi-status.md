@@ -45,16 +45,22 @@ path** only.
   on `attach` (`packages/pi-sessiond/main.ts`), so a reconnecting/mirroring
   client catches up. Verified by the reconnect subtest in
   `checks/pi-remote-session`. Still missing:
-  - [~] Disk persistence: `--session-dir` + sandbox bind **done** — pi writes
-    a durable `session.jsonl` (verified by `pi-remote-session`). Remaining:
-    respawn a cold session with `--continue` on attach after the
-    subprocess/daemon restarted.
+  - [x] Disk persistence + cold respawn **done** — pi writes a durable
+    `session.jsonl` (`--session-dir`, sandbox-bound); a session whose
+    subprocess is gone is resurrected on `attach` by respawning
+    `pi --continue` (provider/model from a `sessions/<id>.meta.json` sidecar,
+    so it survives a daemon restart). Verified by `pi-remote-session`
+    (jsonl-persisted + cold-resume subtests; `get_state` shows the reloaded
+    history). `attach.sessionId` is UUID-validated before it touches the fs.
   - [ ] Panel re-attaches its sessions on WS reconnect (sending `lastSeq`);
     today PiExecutor reconnects the socket but the sessions don't re-attach.
   - [ ] `get_messages` snapshot for history older than the buffer window.
 - [ ] **Crash respawn + idle-GC + subprocess ceiling.** Respawn with
   `--continue` on non-zero exit; GC idle/cold sessions after a timeout; cap
-  resident subprocesses; never GC a busy/parked session.
+  resident subprocesses; never GC a busy/parked session. Also reap pi units
+  orphaned by a daemon restart (a stale `pi-sessiond-<id>.service` would hold
+  the session dir against a fresh respawn) — the cold-respawn mechanism is in
+  place; this is the lifecycle/cleanup half.
 
 ## Missing — by stage
 
