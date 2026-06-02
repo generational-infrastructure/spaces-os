@@ -1,18 +1,16 @@
 { pkgs, ... }:
-# Red-phase placeholder for the remote-pi executor daemon.
+# pi-sessiond — the remote-pi executor daemon (docs/remote-pi-design.md).
 #
-# The real pi-sessiond is the TypeScript daemon from docs/remote-pi-design.md:
-# a token-authenticated WebSocket listener that spawns one sandboxed
-# `pi --mode rpc` subprocess per session, stamps + fans out pi's event stream,
-# and serializes client commands into each subprocess's stdin.
+# A token-authenticated WebSocket transport in front of a registry of
+# `pi --mode rpc` subprocesses (one per session): pi's event stream is
+# forwarded verbatim inside seq-stamped envelopes, and client commands are
+# written to the owning subprocess's stdin.
 #
-# Until that lands (green), this placeholder only opens the configured TCP
-# port and accepts-then-drops connections. That is deliberate: it lets the
-# multi-VM check in checks/pi-remote-session/ exercise the whole two-node path
-# (both VMs boot, the client reaches the server over the test network, the
-# executor service is up and listening) and fail *precisely* at the
-# WebSocket/session protocol — the behaviour green implements — instead of
-# dying on "service down" or an undefined symbol.
+# Run under Bun — a single TypeScript entrypoint using Bun's built-in
+# WebSocket server with zero third-party deps, so there is no npm lockfile or
+# vendoring to carry yet. When the daemon starts consuming pi's exported npm
+# types (to drop the shallow-parse seams), this grows into a proper
+# buildNpmPackage / bun package.
 pkgs.writeShellScriptBin "pi-sessiond" ''
-  exec ${pkgs.python3}/bin/python3 ${./placeholder.py}
+  exec ${pkgs.bun}/bin/bun ${./main.ts}
 ''
