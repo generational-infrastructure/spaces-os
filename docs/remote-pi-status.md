@@ -45,9 +45,10 @@ path** only.
   on `attach` (`packages/pi-sessiond/main.ts`), so a reconnecting/mirroring
   client catches up. Verified by the reconnect subtest in
   `checks/pi-remote-session`. Still missing:
-  - [ ] Disk persistence across daemon/subprocess restart: `--session-dir` +
-    `--continue`, binding the session dir into the sandbox, and respawning a
-    cold session on attach.
+  - [~] Disk persistence: `--session-dir` + sandbox bind **done** — pi writes
+    a durable `session.jsonl` (verified by `pi-remote-session`). Remaining:
+    respawn a cold session with `--continue` on attach after the
+    subprocess/daemon restarted.
   - [ ] Panel re-attaches its sessions on WS reconnect (sending `lastSeq`);
     today PiExecutor reconnects the socket but the sessions don't re-attach.
   - [ ] `get_messages` snapshot for history older than the buffer window.
