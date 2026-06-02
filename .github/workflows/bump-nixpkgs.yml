@@ -28,7 +28,6 @@ jobs:
         run: nix flake update nixpkgs --commit-lock-file
 
       - name: Create pull request
-        id: cpr
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         with:
           title: 'flake.lock: bump nixpkgs'
@@ -36,12 +35,6 @@ jobs:
           body: |
             Automated daily bump of the `nixpkgs` flake input.
 
-            Auto-merges once `buildbot/nix-build` passes.
+            Auto-merges once `buildbot/nix-build` passes (see auto-merge-bump.yml).
           branch: bump-nixpkgs
           delete-branch: true
-
-      - name: Enable auto-merge
-        if: steps.cpr.outputs.pull-request-number
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
