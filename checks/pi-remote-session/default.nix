@@ -96,15 +96,34 @@ else
       client.wait_for_unit("multi-user.target")
 
       with subtest("client opens and drives a session on the server executor"):
-          client.succeed(
+          out = client.succeed(
               "${clientPython}/bin/python3 ${driver} "
               + "ws://server:${toString wsPort} ${token} server"
           )
+
+      session_id = next(
+          (
+              line.split("=", 1)[1].strip()
+              for line in out.splitlines()
+              if line.startswith("SESSION_ID=")
+          ),
+          "",
+      )
+      assert session_id, f"driver did not report a SESSION_ID: {out!r}"
 
       with subtest("session is persisted to disk as jsonl"):
           server.wait_until_succeeds(
               "find /var/lib/pi-sessiond/sessions -name '*.jsonl' | grep -q .",
               timeout=15,
+          )
+
+      with subtest("a cold session resumes from disk on re-attach (--continue)"):
+          # Kill the session's pi subprocess; its jsonl + meta sidecar persist.
+          server.succeed(f"systemctl stop pi-sessiond-{session_id}.service")
+          # Re-attach: the daemon must respawn pi --continue and restore history.
+          client.succeed(
+              "${clientPython}/bin/python3 ${driver} resume "
+              + f"ws://server:${toString wsPort} ${token} {session_id}"
           )
     '';
   }

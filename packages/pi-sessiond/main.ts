@@ -16,7 +16,14 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Writable } from "node:stream";
 import { resolve } from "node:path";
@@ -62,6 +69,7 @@ const TOKEN = loadToken();
 // pi reads settings.json from here and writes auth.json / *.lock dirs back.
 const AGENT_DIR = `${STATE_DIR}/pi-agent`;
 mkdirSync(AGENT_DIR, { recursive: true });
+mkdirSync(`${STATE_DIR}/sessions`, { recursive: true });
 if (SETTINGS_TEMPLATE) {
   copyFileSync(SETTINGS_TEMPLATE, `${AGENT_DIR}/settings.json`);
 }
@@ -76,6 +84,15 @@ function asString(value: unknown): string | undefined {
 }
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
+}
+
+// A session id is always a randomUUID() we minted. Validating the shape before
+// it builds filesystem paths (sessions/<id>, <id>.meta.json) closes a path-
+// traversal hole on the client-supplied attach.sessionId.
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function isSessionId(value: string): boolean {
+  return SESSION_ID_RE.test(value);
 }
 
 // ---- connection + session state -------------------------------------------
@@ -140,11 +157,71 @@ function lineSplitter(onLine: (line: string) => void): (chunk: Buffer) => void {
   };
 }
 
-function createSession(provider: string, model: string): Session {
-  const id = randomUUID();
-  const workdir = `${STATE_DIR}/workspaces/${id}`;
+// ---- session lifecycle -----------------------------------------------------
+
+function sessionDirOf(id: string): string {
+  return `${STATE_DIR}/sessions/${id}`;
+}
+function workdirOf(id: string): string {
+  return `${STATE_DIR}/workspaces/${id}`;
+}
+// Sibling of the session dir (not inside it) so pi never sees the daemon's
+// bookkeeping file in its --session-dir.
+function metaPathOf(id: string): string {
+  return `${STATE_DIR}/sessions/${id}.meta.json`;
+}
+
+// Persisted per-session metadata, so a session can be resurrected from disk
+// with the right provider/model after the subprocess or the daemon restarts.
+interface SessionMeta {
+  provider: string;
+  model: string;
+}
+function writeSessionMeta(id: string, meta: SessionMeta): void {
+  writeFileSync(metaPathOf(id), JSON.stringify(meta));
+}
+function readSessionMeta(id: string): SessionMeta | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(metaPathOf(id), "utf8");
+  } catch {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  const provider = asString(parsed.provider);
+  const model = asString(parsed.model);
+  if (provider === undefined || model === undefined) return undefined;
+  return { provider, model };
+}
+// Has pi committed at least one turn here? --continue only makes sense then;
+// on an empty dir pi falls back to a fresh session (noisily).
+function hasCommittedSession(id: string): boolean {
+  try {
+    return readdirSync(sessionDirOf(id)).some((f) => f.endsWith(".jsonl"));
+  } catch {
+    return false;
+  }
+}
+
+interface SpawnOpts {
+  id: string;
+  provider: string;
+  model: string;
+  continueSession: boolean;
+}
+
+// Spawn a sandboxed `pi --mode rpc` for a session and register it live.
+function spawnSession(opts: SpawnOpts): Session {
+  const { id, provider, model, continueSession } = opts;
+  const workdir = workdirOf(id);
+  const sessionDir = sessionDirOf(id);
   mkdirSync(workdir, { recursive: true });
-  const sessionDir = `${STATE_DIR}/sessions/${id}`;
   mkdirSync(sessionDir, { recursive: true });
 
   const { argv, env } = buildSpawnCommand({
@@ -160,6 +237,7 @@ function createSession(provider: string, model: string): Session {
     memoryHigh: MEMORY_HIGH,
     path: process.env.PATH ?? "",
     trusted: false,
+    continueSession,
   });
 
   const proc = spawn(argv[0], argv.slice(1), {
@@ -203,6 +281,36 @@ function createSession(provider: string, model: string): Session {
   });
 
   return session;
+}
+
+// A brand-new session: mint an id, spawn fresh (no --continue), and persist
+// its provider/model so it can be resurrected from disk later.
+function createSession(provider: string, model: string): Session {
+  const id = randomUUID();
+  const session = spawnSession({ id, provider, model, continueSession: false });
+  writeSessionMeta(id, { provider, model });
+  return session;
+}
+
+// Resurrect a session whose subprocess is gone (GC'd, crashed, or the daemon
+// restarted) from its committed jsonl on disk. Returns undefined when nothing
+// is persisted under this id (design §5.1: attach to cold -> spawn --continue).
+function resumeSession(id: string): Session | undefined {
+  if (!isSessionId(id)) return undefined;
+  const meta = readSessionMeta(id);
+  if (!meta) return undefined;
+  return spawnSession({
+    id,
+    provider: meta.provider,
+    model: meta.model,
+    continueSession: hasCommittedSession(id),
+  });
+}
+
+// A subprocess that has exited (exit code or signal set) no longer serves its
+// session; a still-mapped entry like that is cold, so attach resurrects it.
+function isAlive(session: Session): boolean {
+  return session.proc.exitCode === null && session.proc.signalCode === null;
 }
 
 // ---- envelope dispatch -----------------------------------------------------
@@ -253,7 +361,15 @@ function handleMessage(ws: Conn, text: string): void {
       return;
     }
     case "attach": {
-      const session = sessions.get(asString(parsed.sessionId) ?? "");
+      const sessionId = asString(parsed.sessionId) ?? "";
+      let session = sessions.get(sessionId);
+      // A mapped-but-dead subprocess (exit not yet reaped, or stopped out from
+      // under us) is cold: drop it and resurrect from the committed jsonl.
+      if (session && !isAlive(session)) {
+        sessions.delete(sessionId);
+        session = undefined;
+      }
+      session ??= resumeSession(sessionId);
       if (!session) {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;

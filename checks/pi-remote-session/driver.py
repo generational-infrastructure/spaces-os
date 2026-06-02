@@ -93,6 +93,7 @@ async def run(uri, token, executor):
         session_id = attached.get("sessionId")
         if not session_id:
             fail(f"attached envelope missing sessionId: {attached}")
+        print(f"SESSION_ID={session_id}", flush=True)
 
         await ws.send(
             json.dumps(
@@ -172,14 +173,74 @@ async def run(uri, token, executor):
         print("OK")
 
 
+async def run_resume(uri, token, session_id):
+    """Attach to a *cold* session (its subprocess is gone): the daemon must
+    respawn `pi --continue` from the committed jsonl and serve it live again
+    with the prior conversation restored."""
+    async with websockets.connect(uri) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "hello",
+                    "token": token,
+                    "client": {"name": "pi-remote-session-resume"},
+                }
+            )
+        )
+        await recv_kind(ws, "welcome")
+
+        await ws.send(
+            json.dumps(
+                {"v": 1, "kind": "attach", "sessionId": session_id, "lastSeq": 0}
+            )
+        )
+        await recv_kind(ws, "attached")
+
+        # Prove --continue actually reloaded the persisted conversation: pi's
+        # get_state must still report the turn driven before the kill (>=2
+        # messages: the user prompt + the assistant reply).
+        await ws.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "command",
+                    "sessionId": session_id,
+                    "payload": {"type": "get_state"},
+                }
+            )
+        )
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
+            msg = json.loads(raw)
+            if msg.get("kind") == "error":
+                fail(f"server error during resume: {msg}")
+            if msg.get("kind") != "event":
+                continue
+            ev = msg.get("payload") or {}
+            if ev.get("type") == "response" and ev.get("command") == "get_state":
+                data = ev.get("data") or {}
+                count = data.get("messageCount")
+                if not isinstance(count, int) or count < 2:
+                    fail(f"resumed session lost history: messageCount={count!r}")
+                break
+
+        print("OK")
+
+
 def main():
-    if len(sys.argv) < 3:
-        fail("usage: driver.py <ws_url> <token> [executor-id]")
-    uri = sys.argv[1]
-    token = sys.argv[2]
-    executor = sys.argv[3] if len(sys.argv) > 3 else None
+    args = sys.argv[1:]
+    if args and args[0] == "resume":
+        if len(args) < 4:
+            fail("usage: driver.py resume <ws_url> <token> <sessionId>")
+        coro = run_resume(args[1], args[2], args[3])
+    else:
+        if len(args) < 2:
+            fail("usage: driver.py <ws_url> <token> [executor-id]")
+        executor = args[2] if len(args) > 2 else None
+        coro = run(args[0], args[1], executor)
     try:
-        asyncio.run(run(uri, token, executor))
+        asyncio.run(coro)
     except websockets.exceptions.WebSocketException as e:
         fail(f"websocket error: {e!r}")
     except asyncio.TimeoutError:

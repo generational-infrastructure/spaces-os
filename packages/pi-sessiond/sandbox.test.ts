@@ -15,6 +15,7 @@ const base: SpawnConfig = {
   memoryHigh: "4G",
   path: "/run/current-system/sw/bin",
   trusted: false,
+  continueSession: false,
 };
 
 test("an untrusted session is launched sandboxed via systemd-run", () => {
@@ -32,6 +33,7 @@ test("an untrusted session is launched sandboxed via systemd-run", () => {
   // Persisted session dir, bound rw so sandboxed pi can write session.jsonl.
   expect(argv).toContain(`--property=BindPaths=${base.sessionDir}:${base.sessionDir}`);
   expect(argv).not.toContain("--no-session");
+  expect(argv).not.toContain("--continue");
 
   // Kernel / namespace protection set.
   for (const prop of [
@@ -80,4 +82,9 @@ test("a trusted session keeps protections but drops ProtectHome", () => {
 test("model is omitted when unset", () => {
   const { argv } = buildSpawnCommand({ ...base, model: "" });
   expect(argv).not.toContain("--model");
+});
+
+test("a resumed session passes --continue to replay the committed jsonl", () => {
+  const { argv } = buildSpawnCommand({ ...base, continueSession: true });
+  expect(argv).toContain("--continue");
 });
