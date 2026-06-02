@@ -65,6 +65,7 @@ pkgs.runCommand "pi-chat-qmllint"
     inherit src;
     qsModules = patchedQuickshellQml;
     qtModules = "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml";
+    qtWebsockets = "${pkgs.qt6.qtwebsockets}/lib/qt-6/qml";
   }
   ''
     set -euo pipefail
@@ -78,6 +79,7 @@ pkgs.runCommand "pi-chat-qmllint"
       -I "$workdir" \
       -I "$qsModules" \
       -I "$qtModules" \
+      -I "$qtWebsockets" \
       --max-warnings 0 \
       "''${files[@]}"
 

@@ -42,6 +42,9 @@ QtObject {
 
   // ── deployment env (set by the backend before spawn) ──
   property var    backend: null      // PiChatBackend, used for skill-config socket sends
+  // When set (WS / remote mode), the session attaches to a pi-sessiond
+  // executor over this connection instead of spawning a local pi.
+  property var    executor: null
   property string piBin              // /nix/store/.../bin/pi
   property string stateDir           // ~/.local/state/spaces/pi
   property string piAgentDir         // <stateDir>/pi-agent
@@ -104,6 +107,11 @@ QtObject {
   property string _assistantLastTextBubbleId: ""
   property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
+  // ── WebSocket transport state (used when `executor` is set) ──
+  readonly property bool _useWs: executor !== null
+  property string _daemonSessionId: ""  // id the executor assigned on create
+  property bool   _wsAttached: false
+  property var    _wsPending: []         // commands buffered until attached
   // Request/response correlation. Each entry is { resolve, reject }; pi
   // echoes the `id` we attach to outgoing commands on the matching
   // response, which _handleResponse uses to fulfill the promise.
@@ -259,6 +267,7 @@ QtObject {
   // Backend-facing lifecycle.
 
   function spawn() {
+    if (_useWs) { _wsSpawn(); return; }
     if (_shouldRun && _process) return;
     if (!piBin) {
       Logger.w("PiSession", "spawn without piBin", sessionId);
@@ -274,6 +283,43 @@ QtObject {
     streaming = true;
   }
 
+  // WS mode: create the session on (or re-attach it to) the executor,
+  // buffering commands until the daemon assigns an id and we subscribe.
+  function _wsSpawn() {
+    if (_shouldRun && _wsAttached) return;
+    _shouldRun = true;
+    streaming = true;
+    if (_daemonSessionId) {
+      executor.subscribe(_daemonSessionId, session);
+      executor.attach(_daemonSessionId);
+      _wsAttached = true;
+      _wsFlush();
+      return;
+    }
+    executor.whenConnected(() => {
+      if (!_shouldRun) return;
+      const opts = { name: sessionName };
+      if (modelPref) opts.model = modelPref;
+      if (workspacePath) opts.workspace = workspacePath;
+      executor.createSession(opts).then(id => {
+        if (!_shouldRun) { executor.detach(id); return; }
+        _daemonSessionId = id;
+        executor.subscribe(id, session);
+        _wsAttached = true;
+        _wsFlush();
+      }).catch(e => {
+        Logger.w("PiSession", sessionId, "create_session failed", e);
+        streaming = false;
+      });
+    });
+  }
+
+  function _wsFlush() {
+    const q = _wsPending;
+    _wsPending = [];
+    for (const c of q) executor.command(_daemonSessionId, c);
+  }
+
   // ── per-session memory toggle ──
   //
   // The marker convention is opt-out: file present → disabled. The
@@ -284,6 +330,7 @@ QtObject {
   // the marker matches the persisted intent even after the session
   // dir was wiped or pi was restarted.
   function _syncMemoryMarker() {
+    if (_useWs) return;  // marker is local-only; remote sessions live on the executor
     if (!stateDir || !sessionId) return;
     const markerPath = stateDir + "/sessions/" + sessionId + "/memory-off";
     const cmd = memoryEnabled
@@ -298,6 +345,16 @@ QtObject {
 
   function stop() {
     _shouldRun = false;
+    if (_useWs) {
+      if (_daemonSessionId) {
+        executor.detach(_daemonSessionId);
+        executor.unsubscribe(_daemonSessionId);
+      }
+      _wsAttached = false;
+      streaming = false;
+      typing = false;
+      return;
+    }
     if (!_process) {
       streaming = false;
       typing = false;
@@ -313,6 +370,11 @@ QtObject {
   }
 
   function _send(cmd) {
+    if (_useWs) {
+      if (_wsAttached && _daemonSessionId) executor.command(_daemonSessionId, cmd);
+      else _wsPending.push(cmd);
+      return;
+    }
     if (!_process || !_process.running) return;
     try {
       _process.write(JSON.stringify(cmd) + "\n");
@@ -327,7 +389,7 @@ QtObject {
   // Rejects immediately when the process is not running.
   function _request(cmd) {
     return new Promise((resolve, reject) => {
-      if (!_process || !_process.running) {
+      if (!_useWs && (!_process || !_process.running)) {
         reject("process not running");
         return;
       }
@@ -496,6 +558,21 @@ QtObject {
     try { ev = JSON.parse(line); }
     catch (e) { Logger.w("PiSession", sessionId, "bad json", line); return; }
     _handleEvent(ev);
+  }
+  // WS mode: an event envelope's payload (already parsed) is the pi
+  // event — feed it to the same state machine as the local pipe.
+  function _onEnvelopeEvent(payload) {
+    if (payload) _handleEvent(payload);
+  }
+
+  // WS mode: the executor connection dropped. Mirror process-exit cleanup.
+  function _onExecutorClosed() {
+    _wsAttached = false;
+    streaming = false;
+    typing = false;
+    _streamingId = "";
+    _thinkingId = "";
+    _rejectInflight("executor disconnected");
   }
 
   function _handleEvent(ev) {
