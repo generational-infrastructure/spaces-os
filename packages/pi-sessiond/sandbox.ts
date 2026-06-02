@@ -20,6 +20,7 @@ export interface SpawnConfig {
   memoryHigh: string;
   path: string; // PATH to forward into the unit
   trusted: boolean; // skip filesystem narrowing (ProtectHome) when true
+  continueSession: boolean; // pass pi --continue (resume the committed jsonl)
 }
 
 export interface SpawnCommand {
@@ -42,6 +43,10 @@ function piArgs(c: SpawnConfig): string[] {
     "--no-context-files",
   ];
   if (c.model) args.push("--model", c.model);
+  // Resume the most recent committed jsonl in --session-dir. Only when one
+  // exists: on a fresh session the dir is empty and pi's --continue is noisy
+  // (matches the desktop panel's PiSession._buildCommand).
+  if (c.continueSession) args.push("--continue");
   return args;
 }
 
