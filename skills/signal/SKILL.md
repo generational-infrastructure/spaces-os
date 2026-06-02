@@ -17,7 +17,8 @@ row and run the **exact** commands in order.
 | "Find messages about **`<TOPIC>`**" (a thing, not a person) | `signal search "<TOPIC>"`                           |
 | "Send **`<NAME>`** the message **`<BODY>`**"           | `signal contacts` → find UUID → `signal send <UUID> "<BODY>"` → surface pending token |
 | "Reply to the **`<GROUP>`** group: **`<BODY>`**"       | `signal groups` → find GROUP_ID → `signal send <GROUP_ID> "<BODY>"` → surface token |
-| "Remind me later: **`<BODY>`**" (note-to-self)         | `signal contacts` → find user's own number → `signal send <SELF> "<BODY>"` (sends immediately) |
+| "Remind me later: **`<BODY>`**" (note-to-self)         | `signal send self "<BODY>"` (sends immediately, no approval)                          |
+| "What did I note to myself?" / "Read my notes-to-self" | `signal read self`                                       |
 
 If the user's question doesn't match any row, ask them what they
 want before running anything.
@@ -91,10 +92,14 @@ Read one conversation, **oldest message first**.
 
 ```bash
 signal read <thread-id>
+signal read self                                # your note-to-self thread
 signal read <thread-id> --limit 50
 signal read <thread-id> --since 1779200000000   # unix milliseconds
 signal read <thread-id> --json
 ```
+
+The literal `self` reads your note-to-self thread without you
+having to know your own UUID — the mirror of `signal send self`.
 
 Each row has an ISO-8601 UTC timestamp, the sender label (display
 name where known), and the message body.
@@ -156,13 +161,15 @@ signal send <UUID> "see you at 7"          # to a person
 signal send <GROUP_ID> "I'm running late"  # to a group
 signal send +15551234 "hi"                 # by phone number
 signal send <username>.<suffix> "yes"      # by Signal username
+signal send self "remind me to call mom"   # note-to-self
 ```
 
 **Two paths:**
 
-* **Recipient is the user themselves** (their own phone number /
-  UUID): sends **immediately**. No approval. Use this for
-  note-to-self.
+* **Recipient is `self`** (or the user's own phone number / UUID):
+  sends **immediately**. No approval. Use `self` for note-to-self —
+  the bridge resolves it to the linked account so you don't have to
+  look the user's own number up.
 
 * **Recipient is anyone else**: bridge **enqueues** the message and
   returns a pending token like:
@@ -189,6 +196,7 @@ signal send <username>.<suffix> "yes"      # by Signal username
 | Phone number | `+15551234`                          | `signal contacts`               |
 | Username     | `<handle>.<suffix>`                  | User tells you                  |
 | Group ID     | `AfL/co87TsyfTv4FqgJfcF6rNWoRkO2C…=` | `signal groups` / `threads`     |
+| Self         | `self`                                | literal — bridge resolves it    |
 
 UUID is the most reliable. Prefer it over the phone number when you
 have both.

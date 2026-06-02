@@ -159,6 +159,24 @@ class TestQueryMessages(DbBase):
         rows = dbmod.query_messages(self.db, body_query="evens")
         self.assertEqual({r["uid"] for r in rows}, {"m0", "m2", "m4"})
 
+    def test_thread_kind_filter_returns_only_matching(self) -> None:
+        # The `read self` shorthand resolves to a thread_kind='self'
+        # filter so the agent never has to know its own UUID. A
+        # note-to-self message lives under that kind regardless of
+        # which thread_id (own UUID) it carries.
+        dbmod.store_message(
+            self.db,
+            _msg(
+                "self-1",
+                thread_id="own-uuid",
+                thread_kind="self",
+                ts_ms=1_700_000_500_000,
+                body="remind me",
+            ),
+        )
+        rows = dbmod.query_messages(self.db, thread_kind="self")
+        self.assertEqual({r["uid"] for r in rows}, {"self-1"})
+
 
 class TestListThreads(DbBase):
     def setUp(self) -> None:

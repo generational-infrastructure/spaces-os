@@ -266,6 +266,7 @@ def query_messages(
     db: sqlite3.Connection,
     *,
     thread_id: str | None = None,
+    thread_kind: str | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
     body_query: str | None = None,
@@ -285,6 +286,9 @@ def query_messages(
     if thread_id is not None:
         clauses.append("thread_id = ?")
         params.append(thread_id)
+    if thread_kind is not None:
+        clauses.append("thread_kind = ?")
+        params.append(thread_kind)
     if since_ms is not None:
         clauses.append("ts_ms >= ?")
         params.append(int(since_ms))

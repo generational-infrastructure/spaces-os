@@ -380,6 +380,50 @@ class TestEnqueueSelfSend(BridgeHarness):
         self.assertTrue(resp["ok"])
         self.assertTrue(resp.get("to_self"))
 
+    def test_self_send_with_literal_self_dispatches_to_first_account(self) -> None:
+        # The sandbox agent can't see the user's own uuid/number
+        # (those aren't in `signal contacts`), so it MUST be able to
+        # write `signal send self "..."` and have the bridge resolve
+        # `self` to its own linked account.
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "self", "body": "note via alias"},
+        )
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp.get("to_self"))
+        self.assertTrue(_wait_until(lambda: bool(self.daemon.send_calls), timeout=3))
+        call = self.daemon.send_calls[0]
+        self.assertEqual(call["message"], "note via alias")
+        # Bridge MUST translate "self" before hitting signal-cli — the
+        # daemon has no "self" alias and would reject the literal.
+        target = call.get("recipient") or call.get("username") or []
+        self.assertEqual(target, ["+15550000001"])
+        # No pending row — note-to-self never gates on the user.
+        pending = dbmod.list_pending(dbmod.connect(self.db_path))
+        self.assertEqual(pending, [])
+
+    def test_self_send_literal_self_case_insensitive(self) -> None:
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "SELF", "body": "shout"},
+        )
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp.get("to_self"))
+
+    def test_self_send_literal_self_with_no_linked_account_errors(self) -> None:
+        # Strip the daemon's account, refresh the bridge cache, and
+        # then ask for a self-send. The bridge has no identity to
+        # resolve "self" against — refuse rather than dispatch
+        # nothing.
+        self.daemon.accounts = []
+        self.bridge._refresh_accounts()
+        resp = _send_request(
+            self.enqueue_sock,
+            {"op": "send", "to": "self", "body": "no account"},
+        )
+        self.assertFalse(resp["ok"])
+        self.assertIn("no linked Signal account", resp["error"])
+
 
 class TestEnqueueOtherRecipient(BridgeHarness):
     def test_non_self_returns_pending_token(self) -> None:

@@ -256,6 +256,54 @@ class TestRead(CliBase):
         self.assertNotIn("hi from alice", out)
         self.assertIn("are you free tomorrow", out)
 
+    def _seed_self_message(self) -> None:
+        db = dbmod.connect(self.db_path)
+        dbmod.store_message(
+            db,
+            {
+                "uid": "self-1",
+                "ts_ms": 1_700_000_500_000,
+                "thread_id": "own-uuid",
+                "thread_kind": "self",
+                "body": "buy milk",
+                "sender_uuid": "own-uuid",
+                "sender_name": "Me",
+            },
+        )
+        db.close()
+
+    def test_read_self_resolves_self_thread(self) -> None:
+        # `read self` must surface the note-to-self thread without the
+        # agent knowing its own UUID, mirroring `send self`. Only the
+        # self-kind message comes back; DM/group fixtures are excluded.
+        self._seed_self_message()
+        rc, out, _ = _run(["read", "self"])
+        self.assertEqual(rc, 0)
+        self.assertIn("buy milk", out)
+        self.assertNotIn("hi from alice", out)
+        self.assertNotIn("team standup", out)
+
+    def test_read_self_case_insensitive(self) -> None:
+        self._seed_self_message()
+        rc, out, _ = _run(["read", "SELF"])
+        self.assertEqual(rc, 0)
+        self.assertIn("buy milk", out)
+
+    def test_read_self_empty_when_no_note_to_self(self) -> None:
+        # No self-kind rows seeded → legitimate empty result, not an
+        # error, and must NOT leak the DM/group threads.
+        rc, out, _ = _run(["read", "self"])
+        self.assertEqual(rc, 0)
+        self.assertIn("no messages", out)
+        self.assertNotIn("hi from alice", out)
+
+    def test_read_self_json(self) -> None:
+        self._seed_self_message()
+        rc, out, _ = _run(["read", "self", "--json"])
+        self.assertEqual(rc, 0)
+        parsed = json.loads(out)
+        self.assertEqual([r["uid"] for r in parsed], ["self-1"])
+
 
 class TestSearch(CliBase):
     def setUp(self) -> None:
@@ -443,6 +491,19 @@ class TestSend(CliBase):
         rc, out, _ = _run(["send", "+15550000001", "note"])
         self.assertEqual(rc, 0)
         self.assertIn("sent to self", out)
+
+    def test_self_keyword_passes_through_verbatim(self) -> None:
+        # The bridge owns the "self" → uuid translation. The CLI
+        # must just forward the literal so the bridge can resolve it
+        # using its own accounts cache; rewriting it client-side
+        # would re-introduce the same "agent has to know its own
+        # uuid" bug we're fixing.
+        stub = self._start_stub(lambda req: {"ok": True, "to_self": True})
+        rc, out, _ = _run(["send", "self", "remind me"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sent to self", out)
+        self.assertEqual(stub.requests[0]["to"], "self")
+        self.assertEqual(stub.requests[0]["body"], "remind me")
 
     def test_bridge_error_propagates_to_stderr(self) -> None:
         self._start_stub(lambda req: {"ok": False, "error": "no linked Signal account"})

@@ -139,13 +139,27 @@ def cmd_read(args: argparse.Namespace) -> int:
         _emit_unconfigured_hint()
         return 1
     db = dbmod.connect_readonly(dbmod.default_db_path())
-    rows = dbmod.query_messages(
-        db,
-        thread_id=args.thread_id,
-        since_ms=args.since,
-        until_ms=args.until,
-        limit=args.limit,
-    )
+    # `self` is a thread-id alias for the note-to-self conversation,
+    # mirroring `signal send self`. It resolves to the thread_kind
+    # filter rather than a literal thread_id so the agent never has
+    # to discover its own UUID — and so it works across every linked
+    # account's note-to-self thread at once.
+    if args.thread_id.lower() == "self":
+        rows = dbmod.query_messages(
+            db,
+            thread_kind="self",
+            since_ms=args.since,
+            until_ms=args.until,
+            limit=args.limit,
+        )
+    else:
+        rows = dbmod.query_messages(
+            db,
+            thread_id=args.thread_id,
+            since_ms=args.since,
+            until_ms=args.until,
+            limit=args.limit,
+        )
     # Reverse to oldest-first for readability.
     rows = list(reversed(rows))
     if args.json:
@@ -335,7 +349,10 @@ def build_parser() -> argparse.ArgumentParser:
     pt.set_defaults(func=cmd_threads)
 
     pr = sub.add_parser("read", help="show messages in one thread")
-    pr.add_argument("thread_id")
+    pr.add_argument(
+        "thread_id",
+        help="thread id (DM UUID, group id) or the literal 'self' for note-to-self",
+    )
     pr.add_argument(
         "--since", type=int, default=None, help="lower bound, ms since epoch"
     )
@@ -367,7 +384,11 @@ def build_parser() -> argparse.ArgumentParser:
         "chat panel)",
     )
     psd.add_argument(
-        "recipient", help="phone number (+...), UUID, username (a.b), or group ID"
+        "recipient",
+        help=(
+            "phone number (+...), UUID, username (a.b), group ID, or "
+            "the literal 'self' for a note-to-self"
+        ),
     )
     psd.add_argument("body", help="message text")
     psd.add_argument("--json", action="store_true")

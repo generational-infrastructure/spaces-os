@@ -616,6 +616,20 @@ class Bridge:
         else:
             acct = accounts[0]
 
+        # Literal `self` alias: the sandbox agent can't see the
+        # user's own uuid/number (those aren't in `signal contacts`),
+        # so it would otherwise have no way to address a note-to-
+        # self. Resolve to this account's phone number (preferred —
+        # signal-cli treats sends to your own number as note-to-self
+        # automatically; see signal-cli CHANGELOG 0.10.0) before the
+        # is_self_recipient check; falling back to UUID for accounts
+        # without a number. signal-cli's `send` RPC has no `self`
+        # alias and would reject the literal otherwise.
+        if recipient.lower() == "self":
+            recipient = acct.get("number") or acct.get("uuid") or ""
+            if not recipient:
+                return {"ok": False, "error": "linked account has no uuid or number"}
+
         # Self-send: dispatch immediately, no confirmation gate.
         if is_self_recipient(recipient, [acct]):
             try:
