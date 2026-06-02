@@ -1,6 +1,7 @@
 # Design: remote pi — a TypeScript daemon supervising sandboxed pi subprocesses
 
-**Status:** draft / exploration. No code yet.
+**Status:** in implementation (branch `pi-remote-chat`). Live progress + the
+remaining-work checklist: [`remote-pi-status.md`](./remote-pi-status.md).
 
 **Goals:**
 
