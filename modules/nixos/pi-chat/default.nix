@@ -293,6 +293,10 @@ in
   imports = [
     ../llama-swap.nix
     inputs.self.nixosModules.signal-cli
+    # Voice-to-text (Mod+S). Imported here so every pi-chat consumer
+    # gets it for free; voxtype's config is unconditional, so it is
+    # enabled by the mere import.
+    inputs.self.nixosModules.voxtype
   ];
 
   options.services.pi-chat = {

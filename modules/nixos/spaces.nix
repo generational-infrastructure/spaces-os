@@ -10,8 +10,6 @@
     inputs.self.nixosModules.llama-swap
     # one-shot 'distro' → 'spaces' user-state migration
     inputs.self.nixosModules.spaces-state-migrate
-    # push-to-talk voice-to-text (Mod+S)
-    inputs.self.nixosModules.voxtype
     # noctalia status bar (vanilla, no plugin)
     inputs.self.nixosModules.noctalia
     # niri scrollable-tiling Wayland compositor
