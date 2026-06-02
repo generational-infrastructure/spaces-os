@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import type { Writable } from "node:stream";
 import { resolve } from "node:path";
 import type { ServerWebSocket } from "bun";
+import { buildSpawnCommand } from "./sandbox";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -41,6 +42,8 @@ const STATE_DIR = resolve(
     process.env.STATE_DIRECTORY ??
     "/tmp/pi-sessiond",
 );
+const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
+const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
 
 function loadToken(): string {
   const credDir = process.env.CREDENTIALS_DIRECTORY;
@@ -127,28 +130,24 @@ function createSession(provider: string, model: string): Session {
   const workdir = `${STATE_DIR}/workspaces/${id}`;
   mkdirSync(workdir, { recursive: true });
 
-  const args = [
-    "--mode",
-    "rpc",
-    "--provider",
+  const { argv, env } = buildSpawnCommand({
+    systemdRun: SYSTEMD_RUN,
+    piBin: PI_BIN,
+    sessionId: id,
+    workdir,
+    agentDir: AGENT_DIR,
+    llmUrl: LLM_URL,
     provider,
-    "--no-session",
-    "--offline",
-    "--no-context-files",
-  ];
-  if (model) args.push("--model", model);
+    model,
+    memoryHigh: MEMORY_HIGH,
+    path: process.env.PATH ?? "",
+    trusted: false,
+  });
 
-  const proc = spawn(PI_BIN, args, {
+  const proc = spawn(argv[0], argv.slice(1), {
     cwd: workdir,
     stdio: ["pipe", "pipe", "inherit"],
-    env: {
-      ...process.env,
-      PI_CODING_AGENT_DIR: AGENT_DIR,
-      LLAMA_SWAP_BASE_URL: LLM_URL,
-      PI_OFFLINE: "1",
-      PI_TELEMETRY: "0",
-      HOME: AGENT_DIR,
-    },
+    env: { ...process.env, ...env },
   });
 
   const { stdout, stdin } = proc;
