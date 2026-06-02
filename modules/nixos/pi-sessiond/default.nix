@@ -22,6 +22,34 @@
 
 let
   cfg = config.services.pi-sessiond;
+
+  # systemd's $STATE_DIRECTORY is only the *relative* name ("pi-sessiond"),
+  # but the daemon hands pi an absolute PI_CODING_AGENT_DIR (pi's cwd is the
+  # per-session workdir, not the daemon's), so pass the resolved absolute path.
+  stateDir = "/var/lib/pi-sessiond";
+
+  jsonFormat = pkgs.formats.json { };
+
+  # Materialize each extension as its own store object. A bare `toString` of a
+  # flake-relative path embeds the whole-flake `…-source` path, which nix's
+  # reference scanner does NOT capture as a runtime dependency of settings.json
+  # — so the file is absent from the executor's store at runtime and pi
+  # silently skips the extension (the `local` provider never registers).
+  # `builtins.path` copies just the file to a standalone, tracked store path.
+  extPaths = map (e: builtins.path {
+    path = e;
+    name = baseNameOf (toString e);
+  }) cfg.extensions;
+
+  # pi's settings.json: which extensions/provider/model a spawned
+  # `pi --mode rpc` starts with. The daemon copies this template into its
+  # writable agent dir at startup (pi also writes auth.json / lock dirs there).
+  piSettings = jsonFormat.generate "pi-sessiond-settings.json" {
+    extensions = map toString extPaths;
+    inherit (cfg) defaultProvider defaultModel;
+    quietStartup = true;
+    enableInstallTelemetry = false;
+  };
 in
 {
   options.services.pi-sessiond = {
@@ -119,6 +147,17 @@ in
       default = false;
       description = "Open `port` in the firewall. Required for remote clients to reach this executor.";
     };
+
+    extensions = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [ ../pi-chat/extensions/llama-swap-discover.ts ];
+      defaultText = lib.literalExpression "[ ../pi-chat/extensions/llama-swap-discover.ts ]";
+      description = ''
+        pi extensions every spawned session loads. Defaults to the bundled
+        llama-swap-discover extension so the session's model list is
+        discovered from `''${llmUrl}/v1/models`.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -143,6 +182,10 @@ in
         SPACES_SESSIOND_DEFAULT_PROVIDER = cfg.defaultProvider;
         LLAMA_SWAP_BASE_URL = cfg.llmUrl;
         PI_BIN = lib.getExe cfg.piPackage;
+        SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
+        SPACES_SESSIOND_STATE_DIR = stateDir;
+        # Bun (and pi) want a writable HOME for caches.
+        HOME = stateDir;
       }
       // lib.optionalAttrs (cfg.token != null) {
         SPACES_SESSIOND_TOKEN = cfg.token;
