@@ -141,6 +141,34 @@ async def run(uri, token, executor):
             and final_text != EXPECTED_REPLY
         ):
             fail(f"agent_end text {final_text!r} did not match {EXPECTED_REPLY!r}")
+        # ── reconnect-with-history ──────────────────────────────────────────
+        # Detach, then re-attach from seq 0: the daemon must replay the turn's
+        # events from its per-session buffer so a reconnecting (or mirroring)
+        # client catches up.
+        await ws.send(json.dumps({"v": 1, "kind": "detach", "sessionId": session_id}))
+        await ws.send(
+            json.dumps({"v": 1, "kind": "attach", "sessionId": session_id, "lastSeq": 0})
+        )
+        await recv_kind(ws, "attached")
+
+        replay = []
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
+            msg = json.loads(raw)
+            if msg.get("kind") != "event":
+                continue
+            ev = msg.get("payload") or {}
+            etype = ev.get("type")
+            if etype == "message_update":
+                me = ev.get("assistantMessageEvent") or {}
+                if me.get("type") == "text_delta":
+                    replay.append(me.get("delta") or "")
+            elif etype == "agent_end":
+                break
+        replayed = "".join(replay).strip()
+        if EXPECTED_REPLY not in replayed and replayed != EXPECTED_REPLY:
+            fail(f"reattach did not replay buffered history: got {replayed!r}")
+
         print("OK")
 
 

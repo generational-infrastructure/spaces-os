@@ -74,6 +74,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
 
 // ---- connection + session state -------------------------------------------
 
@@ -83,12 +86,22 @@ interface ConnData {
 }
 type Conn = ServerWebSocket<ConnData>;
 
+// Recent events per session, replayed to a (re)attaching client so it catches
+// up (warm reconnect / mirror). Capped — history beyond the window will need a
+// get_messages snapshot (follow-up).
+interface BufferedEvent {
+  seq: number;
+  data: string;
+}
+const BUFFER_CAP = 4096;
+
 interface Session {
   id: string;
   proc: ChildProcess;
   stdin: Writable;
   seq: number;
   subscribers: Set<Conn>;
+  buffer: BufferedEvent[];
 }
 const sessions = new Map<string, Session>();
 
@@ -106,6 +119,8 @@ function broadcast(session: Session, payload: unknown): void {
     seq: session.seq,
     payload,
   });
+  session.buffer.push({ seq: session.seq, data });
+  if (session.buffer.length > BUFFER_CAP) session.buffer.shift();
   for (const ws of session.subscribers) ws.send(data);
 }
 
@@ -156,7 +171,14 @@ function createSession(provider: string, model: string): Session {
     throw new Error("pi subprocess started without stdio pipes");
   }
 
-  const session: Session = { id, proc, stdin, seq: 0, subscribers: new Set() };
+  const session: Session = {
+    id,
+    proc,
+    stdin,
+    seq: 0,
+    subscribers: new Set(),
+    buffer: [],
+  };
   sessions.set(id, session);
 
   stdout.on(
@@ -235,6 +257,11 @@ function handleMessage(ws: Conn, text: string): void {
       }
       session.subscribers.add(ws);
       send(ws, { v: 1, kind: "attached", sessionId: session.id, seq: session.seq });
+      // Replay buffered events the client hasn't seen so it catches up.
+      const lastSeq = asNumber(parsed.lastSeq) ?? 0;
+      for (const ev of session.buffer) {
+        if (ev.seq > lastSeq) ws.send(ev.data);
+      }
       return;
     }
     case "detach": {
