@@ -55,12 +55,17 @@ path** only.
   - [ ] Panel re-attaches its sessions on WS reconnect (sending `lastSeq`);
     today PiExecutor reconnects the socket but the sessions don't re-attach.
   - [ ] `get_messages` snapshot for history older than the buffer window.
-- [ ] **Crash respawn + idle-GC + subprocess ceiling.** Respawn with
-  `--continue` on non-zero exit; GC idle/cold sessions after a timeout; cap
-  resident subprocesses; never GC a busy/parked session. Also reap pi units
-  orphaned by a daemon restart (a stale `pi-sessiond-<id>.service` would hold
-  the session dir against a fresh respawn) — the cold-respawn mechanism is in
-  place; this is the lifecycle/cleanup half.
+- [~] **Lifecycle: idle-GC + subprocess ceiling — done.** A live-idle session
+  with no clients is stopped after `idleTimeoutMs` (default 30min); `maxLive`
+  caps resident subprocesses and evicts the idle LRU. Busy/parked sessions are
+  never stopped; resurrection rides cold respawn-on-attach. Verified by
+  `checks/pi-sessiond-lifecycle` (idle-GC + eviction, both with re-attach).
+  Crash respawn is lazy (a non-zero exit surfaces `session_exit`; the next
+  attach resurrects). Remaining:
+  - [ ] Eager crash-respawn for *attached* subscribers (with crash-loop
+    backoff), so a live mirror recovers without a manual re-attach.
+  - [ ] Reap pi units orphaned by a daemon restart (a stale
+    `pi-sessiond-<id>.service` would hold the session dir against a respawn).
 
 ## Missing — by stage
 
