@@ -142,6 +142,28 @@ in
       description = "pi provider a new session uses unless the client overrides it.";
     };
 
+    idleTimeoutMs = lib.mkOption {
+      type = lib.types.int;
+      default = 1800000;
+      description = ''
+        Stop a live-idle session's subprocess after this many milliseconds with
+        no attached clients (design §5.1). The committed session.jsonl persists,
+        so the next attach resurrects it (`pi --continue`). 0 disables idle-GC.
+        A busy (mid-turn) or parked session is never stopped.
+      '';
+    };
+
+    maxLive = lib.mkOption {
+      type = lib.types.int;
+      default = 0;
+      description = ''
+        Ceiling on resident `pi --mode rpc` subprocesses (design §397). When a
+        new session would exceed it, the least-recently-active idle session is
+        evicted (stopped → cold, resurrected on its next attach). 0 = unlimited.
+        Busy/parked/attached sessions are never evicted.
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -186,6 +208,8 @@ in
         SPACES_SESSIOND_SYSTEMD_RUN = lib.getExe' pkgs.systemd "systemd-run";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
         SPACES_SESSIOND_STATE_DIR = stateDir;
+        SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
+        SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
         # Bun (and pi) want a writable HOME for caches.
         HOME = stateDir;
       }
