@@ -182,6 +182,8 @@ in
         SPACES_SESSIOND_DEFAULT_PROVIDER = cfg.defaultProvider;
         LLAMA_SWAP_BASE_URL = cfg.llmUrl;
         PI_BIN = lib.getExe cfg.piPackage;
+        # Wrap each session in a systemd-run sandbox (the daemon execs this).
+        SPACES_SESSIOND_SYSTEMD_RUN = lib.getExe' pkgs.systemd "systemd-run";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
         SPACES_SESSIOND_STATE_DIR = stateDir;
         # Bun (and pi) want a writable HOME for caches.

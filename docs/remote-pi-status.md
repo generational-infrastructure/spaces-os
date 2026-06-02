@@ -33,13 +33,13 @@ path** only.
 
 ## Missing — blockers (correctness / safety; do first)
 
-- [ ] **Per-session `systemd-run` sandbox in the daemon** (§2/§8). pi currently
-  spawns *unsandboxed* → a **regression vs. today's desktop panel** and a hard
-  blocker for any desktop cutover. Port the `PiSession._buildCommand` bouquet
-  (`ProtectHome=tmpfs`, narrowed `BindPaths`/`BindReadOnlyPaths`, the `trusted`
-  flag) into the daemon's spawn.
-  - Test: `checks/pi-sessiond-sandbox` asserting the spawned pi is confined
-    (mirror the existing `pi-session-sandbox-*` checks).
+- [x] **Per-session `systemd-run` sandbox in the daemon** (§2/§8) — **done.**
+  `packages/pi-sessiond/sandbox.ts` wraps each session's pi in a `systemd-run`
+  transient unit (`ProtectHome=tmpfs` when untrusted, narrowed `BindPaths`, the
+  kernel/namespace protection set). Unit-tested by `checks/pi-sessiond-sandbox`;
+  `checks/pi-remote-session` confirms pi still functions under the real sandbox.
+- [ ] Run the sandboxed unit as a dedicated non-root uid (the daemon is root, so
+  pi runs root-inside-sandbox). Needs state-dir ownership / `--uid=` wiring.
 - [ ] **Persistence + reconnect-with-history** (stage 3). `--session-dir` +
   `--continue`; per-session ring buffer (≥ current turn); `snapshot` (from
   `get_messages`) on cold attach; `lastSeq` warm-reattach replay. Today:

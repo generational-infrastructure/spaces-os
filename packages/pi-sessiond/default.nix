@@ -6,11 +6,17 @@
 # forwarded verbatim inside seq-stamped envelopes, and client commands are
 # written to the owning subprocess's stdin.
 #
-# Run under Bun — a single TypeScript entrypoint using Bun's built-in
-# WebSocket server with zero third-party deps, so there is no npm lockfile or
-# vendoring to carry yet. When the daemon starts consuming pi's exported npm
-# types (to drop the shallow-parse seams), this grows into a proper
-# buildNpmPackage / bun package.
+# Run under Bun. Both TypeScript modules (main.ts + sandbox.ts) are assembled
+# into a single store dir so Bun can resolve the relative import; zero
+# third-party deps means no npm lockfile yet. When the daemon consumes pi's
+# exported npm types this grows into a proper buildNpmPackage / bun package.
+let
+  src = pkgs.runCommandLocal "pi-sessiond-src" { } ''
+    mkdir -p "$out"
+    cp ${./main.ts} "$out/main.ts"
+    cp ${./sandbox.ts} "$out/sandbox.ts"
+  '';
+in
 pkgs.writeShellScriptBin "pi-sessiond" ''
-  exec ${pkgs.bun}/bin/bun ${./main.ts}
+  exec ${pkgs.bun}/bin/bun ${src}/main.ts
 ''
