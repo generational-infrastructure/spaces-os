@@ -155,5 +155,17 @@ else
               assert "id" in s and "name" in s and "updated" in s, s
           assert any(s["id"] == session_id for s in listed), (
               f"resumed session {session_id} missing from registry: {listed}")
+
+      with subtest("a cold session resumes after a full daemon restart"):
+          # pi exits on stdin EOF, so restarting the daemon reaps every session
+          # unit (systemd-run --pipe closes, --collect removes it) — no orphan
+          # holds the session dir. The session is cold on disk and resurrects on
+          # attach; a successful respawn proves the unit name was free.
+          server.systemctl("restart pi-sessiond.service")
+          server.wait_for_open_port(${toString wsPort})
+          client.succeed(
+              "${clientPython}/bin/python3 ${driver} resume "
+              + f"ws://server:${toString wsPort} ${token} {session_id}"
+          )
     '';
   }
