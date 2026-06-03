@@ -41,6 +41,9 @@ const DEFAULT_PROVIDER = process.env.SPACES_SESSIOND_DEFAULT_PROVIDER ?? "local"
 const LLM_URL = process.env.LLAMA_SWAP_BASE_URL ?? "";
 const PI_BIN = process.env.PI_BIN ?? "pi";
 const SETTINGS_TEMPLATE = process.env.SPACES_SESSIOND_PI_SETTINGS ?? "";
+// When set, the daemon also serves the PWA's static assets from this dir on
+// plain HTTP GETs (the same port upgrades to the WS protocol). Empty = WS only.
+const PWA_DIR = process.env.SPACES_SESSIOND_PWA_DIR ?? "";
 // $STATE_DIRECTORY is only the relative name; SPACES_SESSIOND_STATE_DIR is the
 // absolute path. resolve() guarantees an absolute base either way, so the
 // PI_CODING_AGENT_DIR handed to pi (whose cwd is the session workdir) is
@@ -683,6 +686,23 @@ function handleMessage(ws: Conn, text: string): void {
   }
 }
 
+// Serve the PWA's static assets on plain GETs; the same port upgrades to the WS
+// protocol. Unknown paths fall back to index.html (client-side routing). The
+// resolve()+prefix check keeps requests inside PWA_DIR (no path traversal).
+function serveStatic(req: Request): Response {
+  if (PWA_DIR.length === 0) {
+    return new Response("pi-sessiond: websocket only", { status: 426 });
+  }
+  let pathname = decodeURIComponent(new URL(req.url).pathname);
+  if (pathname === "/" || pathname === "") pathname = "/index.html";
+  const full = resolve(PWA_DIR, `.${pathname}`);
+  const inDir = full === PWA_DIR || full.startsWith(`${PWA_DIR}/`);
+  const served =
+    inDir && existsSync(full) && statSync(full).isFile()
+      ? full
+      : `${PWA_DIR}/index.html`;
+  return new Response(Bun.file(served));
+}
 // ---- WebSocket server ------------------------------------------------------
 
 Bun.serve<ConnData>({
@@ -692,7 +712,7 @@ Bun.serve<ConnData>({
     if (server.upgrade(req, { data: { id: randomUUID(), authed: false } })) {
       return undefined;
     }
-    return new Response("pi-sessiond: websocket only", { status: 426 });
+    return serveStatic(req);
   },
   websocket: {
     message(ws, message) {
