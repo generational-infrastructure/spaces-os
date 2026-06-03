@@ -196,6 +196,15 @@ QtObject {
     delete _pendingExtensionUI[id];
   }
 
+  // WS mode: another mirrored client answered this side channel first. Collapse
+  // the local prompt — the daemon already forwarded the winning answer to pi
+  // (first-answer-wins), so a second response from us would be dropped.
+  function _onSidechannelResolved(id, by) {
+    if (!_pendingExtensionUI[id]) return;
+    patch(id, { confirmState: "resolved" });
+    delete _pendingExtensionUI[id];
+  }
+
   function promptRespond(id, value) {
     // Patch local state for immediate UI feedback, then push the value
     // to the skill-config daemon over the sidecar socket. The daemon
