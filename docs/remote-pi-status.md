@@ -64,8 +64,11 @@ path** only.
   attach resurrects). Remaining:
   - [ ] Eager crash-respawn for *attached* subscribers (with crash-loop
     backoff), so a live mirror recovers without a manual re-attach.
-  - [ ] Reap pi units orphaned by a daemon restart (a stale
-    `pi-sessiond-<id>.service` would hold the session dir against a respawn).
+  - [x] ~~Reap pi units orphaned by a daemon restart~~ — **non-issue.** pi
+    exits on stdin EOF, so a daemon restart closes each `systemd-run --pipe`,
+    pi exits, and `--collect` removes the unit; nothing holds the session dir.
+    Verified by the "resumes after a full daemon restart" subtest in
+    `checks/pi-remote-session`.
 
 ## Missing — by stage
 
