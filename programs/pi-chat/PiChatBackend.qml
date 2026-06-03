@@ -149,6 +149,7 @@ Item {
       required property var modelData
       url: modelData.url
       token: modelData.token || ""
+      tokenPath: modelData.tokenPath || ""
       active: modelData.url !== ""
     }
     onObjectAdded: root._rebuildExecutors()
