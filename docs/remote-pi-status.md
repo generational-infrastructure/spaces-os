@@ -8,6 +8,51 @@ All work is on branch **`pi-remote-chat`** (not pushed). Checks run with
 `nix build .#checks.x86_64-linux.<name>`.
 
 ---
+## Architecture revision — SDK-embedded execution (in progress)
+
+**Decision reversed: the daemon embeds pi via its SDK instead of spawning
+`pi --mode rpc` subprocesses.** The original "sandboxed subprocess per session"
+choice is superseded; the design doc now reflects SDK-embedded throughout (§1
+table, §2, §5, §8, §10). Why: the subprocess sandbox was the *only* technical
+basis for rejecting the SDK and it's addressable; the subprocess daemon as built
+never imported pi's types (untyped NDJSON parsing — the fragile half of a Go
+bridge with none of the typed-integration benefit); SDK-embedded is the leaner
+architecture the project always described, and it's fewer moving parts.
+
+- **Feasibility: confirmed.** The `pi` package ships the SDK at
+  `${pi}/lib/node_modules/@mariozechner/pi-coding-agent` (`dist/core/sdk.js` →
+  `createAgentSession` / `createAgentSessionRuntime` / `SessionManager` /
+  `defineTool` / `ModelRegistry` / `AuthStorage`). Real npm scope is
+  `@mariozechner` (public docs say `@earendil-works`). Bun imports it from that
+  store path — no offline npm fetch.
+- **Executor is a proper Nix package** (requirement): `pi-sessiond` resolves the
+  SDK from the pinned `pi` store path and is **parameterized by `pi`**, so
+  `services.pi-chat.piPackage` pins both the desktop's local Process path and
+  the executor's embedded SDK from one source — no version skew. Supersedes the
+  `bun main.ts` zero-dep shim.
+- **Sandbox** (§8): the daemon runs as a hardened systemd unit; pi's built-in
+  `bash` is replaced by a custom `defineTool` `bash` wrapping each command in the
+  `systemd-run` bouquet `sandbox.ts` already builds. Trade: per-session crash
+  isolation is weaker (accepted, single-user).
+- **Scope is daemon-internal.** The §12 protocol and both clients (quickshell
+  panel + PWA) and their checks (`pi-session-ws`, `pi-web-*`, `pi-chat-*`) are
+  unaffected — the daemon forwards the *same* pi event shapes, now from
+  `session.subscribe` instead of parsed rpc stdout. The daemon-level checks
+  (`pi-remote-session`, `pi-sessiond-{sandbox,lifecycle,sidechannel}`) are
+  re-ported from fake-pi-subprocess to real-pi-via-SDK + a mock model.
+
+Migration tasks:
+- [x] Confirm the SDK is importable in the Bun/Nix build.
+- [x] Update the design doc + this tracker to SDK-embedded.
+- [ ] Research the SDK API (session create w/ local provider, events, prompt,
+  confirm/extension-UI, custom tools, `SessionManager` resume).
+- [ ] Rewrite `pi-sessiond` core (events→§12, command→`session.*`,
+  side-channels→extension hooks); repurpose `sandbox.ts` into the custom `bash`.
+- [ ] Package the executor (SDK from the pinned pi, parameterized by `pi`) +
+  harden the systemd unit in the module.
+- [ ] Re-port the daemon checks (mock model + real pi) and run all affected GREEN.
+
+---
 
 ## Landed (committed)
 
