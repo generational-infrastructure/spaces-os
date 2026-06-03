@@ -65,6 +65,15 @@ const GC_INTERVAL_MS = Math.min(
   Math.max(1000, Math.floor(IDLE_TIMEOUT_MS / 4)),
 );
 const MAX_LIVE = Number(process.env.SPACES_SESSIOND_MAX_LIVE ?? "0");
+// Eager crash-respawn (design §5.1). A subprocess that exits non-zero with
+// clients still attached is respawned in place (--continue), unless it has
+// crashed more than MAX_RESPAWNS times within RESPAWN_WINDOW_MS — a crash-loop
+// guard that then leaves the session cold (resurrected lazily on next attach).
+const MAX_RESPAWNS = Number(process.env.SPACES_SESSIOND_MAX_RESPAWNS ?? "3");
+const RESPAWN_WINDOW_MS = Number(
+  process.env.SPACES_SESSIOND_RESPAWN_WINDOW_MS ?? "30000",
+);
+const crashHistory = new Map<string, number[]>();
 
 function loadToken(): string {
   const credDir = process.env.CREDENTIALS_DIRECTORY;
@@ -317,6 +326,7 @@ function spawnSession(opts: SpawnOpts): Session {
   proc.on("exit", (code) => {
     broadcast(session, { type: "session_exit", code });
     sessions.delete(id);
+    maybeRespawnAfterCrash(session, code);
   });
 
   return session;
@@ -345,6 +355,36 @@ function resumeSession(id: string): Session | undefined {
     model: meta.model,
     continueSession: hasCommittedSession(id),
   });
+}
+
+// Eager crash-respawn: a non-zero exit with clients still attached is recovered
+// in place by respawning (--continue) and moving the subscribers over, so a
+// live mirror keeps streaming without a manual re-attach (design §5.1). A clean
+// exit, an exit with no audience (lazy resurrect on attach), or a crash-looping
+// session is left cold.
+function maybeRespawnAfterCrash(prev: Session, code: number | null): void {
+  if (code === 0 || prev.subscribers.size === 0) return;
+  if (!withinRespawnBudget(prev.id)) return; // crash-looping → leave cold
+  const meta = readSessionMeta(prev.id);
+  const revived = spawnSession({
+    id: prev.id,
+    name: prev.name,
+    provider: meta?.provider ?? DEFAULT_PROVIDER,
+    model: meta?.model ?? DEFAULT_MODEL,
+    continueSession: hasCommittedSession(prev.id),
+  });
+  for (const ws of prev.subscribers) revived.subscribers.add(ws);
+}
+
+// True while the session is under its crash-respawn budget; records this crash.
+function withinRespawnBudget(id: string): boolean {
+  const now = Date.now();
+  const recent = (crashHistory.get(id) ?? []).filter(
+    (t) => now - t < RESPAWN_WINDOW_MS,
+  );
+  recent.push(now);
+  crashHistory.set(id, recent);
+  return recent.length <= MAX_RESPAWNS;
 }
 
 // A subprocess that has exited (exit code or signal set) no longer serves its
