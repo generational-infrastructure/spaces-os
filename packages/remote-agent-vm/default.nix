@@ -229,6 +229,9 @@ else
           # shellcheck disable=SC2064
           trap "kill $spid $cpid 2>/dev/null || true" EXIT INT TERM
           echo "remote-agent-vm: server pid $spid, client pid $cpid"
+          echo "remote-agent-vm:   server  ssh -p 2223 test@localhost    VNC 127.0.0.1:5999"
+          echo "remote-agent-vm:   client  ssh -p 2224 test@localhost    VNC 127.0.0.1:6000  <- the desktop panel"
+          echo "remote-agent-vm: point a VNC viewer at 127.0.0.1:6000 to click around the client (password: none)."
           wait
           ;;
 
