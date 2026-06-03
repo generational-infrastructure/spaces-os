@@ -30,6 +30,7 @@ QtObject {
 
   // daemonSessionId -> PiSession (the subscriber fed incoming events)
   property var _subscribers: ({})
+  property var _lastSeq: ({})        // daemonSessionId -> highest seq seen
   property bool _welcomed: false
   property var _pendingCreates: []   // FIFO of { resolve, reject }
   property var _connectWaiters: []   // callbacks fired once welcomed
@@ -81,17 +82,30 @@ QtObject {
       const waiters = _connectWaiters;
       _connectWaiters = [];
       for (const cb of waiters) cb();
+      // Re-attach sessions kept across a reconnect, replaying events missed
+      // while the socket was down (the daemon replays seq > lastSeq).
+      for (const sid in _subscribers) {
+        _sock.sendTextMessage(JSON.stringify({
+          v: 1, kind: "attach", sessionId: sid, lastSeq: _lastSeq[sid] ?? 0,
+        }));
+        _subscribers[sid]?._onExecutorReattached?.();
+      }
       break;
     }
     case "attached": {
-      // create_session ack (FIFO). attach acks for existing sessions
-      // have no pending create and are simply ignored — the caller
-      // already knows the id it attached.
+      const sid = msg.sessionId;
+      // Re-attach ack for a kept session: if the daemon's seq is below our high
+      // water mark the session was resurrected (seq reset) — drop the stale
+      // mark so replayed/new events aren't suppressed.
+      if ((sid in _subscribers) && (msg.seq < (_lastSeq[sid] ?? 0))) _lastSeq[sid] = msg.seq;
+      // create_session ack (FIFO). attach acks for existing sessions have no
+      // pending create and are simply ignored — the caller knows its id.
       const p = _pendingCreates.shift();
-      if (p) p.resolve(msg.sessionId);
+      if (p) p.resolve(sid);
       break;
     }
     case "event": {
+      _lastSeq[msg.sessionId] = msg.seq;
       const obj = _subscribers[msg.sessionId];
       if (obj) obj._onEnvelopeEvent(msg.payload);
       break;
@@ -109,9 +123,8 @@ QtObject {
     const creates = _pendingCreates;
     _pendingCreates = [];
     for (const p of creates) p.reject("executor disconnected");
-    const subs = _subscribers;
-    _subscribers = ({});
-    for (const sid in subs) subs[sid]?._onExecutorClosed?.();
+    // Keep _subscribers so they re-attach (with lastSeq) on the next welcome.
+    for (const sid in _subscribers) _subscribers[sid]?._onExecutorClosed?.();
     if (reason) Logger.w("PiExecutor", "closed", reason);
   }
 
@@ -132,7 +145,9 @@ QtObject {
 
   function attach(sid) {
     if (_sock.status === WebSocket.Open)
-      _sock.sendTextMessage(JSON.stringify({ v: 1, kind: "attach", sessionId: sid }));
+      _sock.sendTextMessage(JSON.stringify({
+        v: 1, kind: "attach", sessionId: sid, lastSeq: _lastSeq[sid] ?? 0,
+      }));
   }
 
   function detach(sid) {
