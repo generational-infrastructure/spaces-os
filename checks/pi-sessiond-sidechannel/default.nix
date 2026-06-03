@@ -1,0 +1,45 @@
+# Daemon-level side-channel check (design §6): the REAL pi-sessiond with a fake
+# pi (no VM, no LLM) behind a systemd-run stub, driven over the §12 WebSocket
+# protocol. Asserts:
+#   - first-answer-wins: two mirrored clients answer one extension_ui_request;
+#     pi receives exactly one response; the loser gets `sidechannel_resolved`.
+#   - park: a zero-client request marks the session `parked` (list_sessions),
+#     survives, and is resolvable on re-attach.
+#
+# Cheap (~seconds, no VM): bun runs the daemon on loopback in the build sandbox.
+# x86_64-linux only to match the other daemon checks; stub elsewhere.
+{ pkgs, inputs, ... }:
+
+if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
+  pkgs.runCommand "pi-sessiond-sidechannel-x86_64-only" { } "mkdir -p $out"
+else
+
+  let
+    daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
+    py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
+
+    fakePi = pkgs.runCommandLocal "fake-pi" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      install -Dm755 ${./fake-pi.py} $out/bin/fake-pi
+      patchShebangs $out/bin/fake-pi
+    '';
+
+    stub = pkgs.runCommandLocal "systemd-run-stub" { nativeBuildInputs = [ pkgs.bash ]; } ''
+      install -Dm755 ${./systemd-run-stub} $out/bin/systemd-run
+      patchShebangs $out/bin/systemd-run
+    '';
+  in
+  pkgs.runCommand "pi-sessiond-sidechannel-test"
+    {
+      nativeBuildInputs = [
+        py
+        pkgs.coreutils
+      ];
+    }
+    ''
+      export HOME="$TMPDIR"
+      ${py}/bin/python3 ${./driver.py} \
+        ${pkgs.lib.getExe daemon} \
+        ${fakePi}/bin/fake-pi \
+        ${stub}/bin/systemd-run
+      touch "$out"
+    ''
