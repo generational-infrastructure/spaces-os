@@ -22,7 +22,6 @@ if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
 else
 
   let
-    inherit (pkgs) lib;
     token = "remote-pi-chat-secret";
     wsPort = 8770;
     llmPort = 8013;
@@ -42,7 +41,7 @@ else
           executorId = "server";
           host = "0.0.0.0";
           port = wsPort;
-          token = token;
+          inherit token;
           llmUrl = "http://127.0.0.1:${toString llmPort}";
           defaultModel = "mock-model";
           defaultProvider = "local";
@@ -50,7 +49,7 @@ else
         };
 
         # The executor's "llama-swap": a deterministic, offline mock so the
-        # pi subprocess streams a fixed "Hello, world!" reply.
+        # daemon's embedded pi streams a fixed "Hello, world!" reply.
         systemd.services.pi-remote-mock-llm = {
           description = "OpenAI-compatible mock LLM for the remote pi-chat test";
           wantedBy = [ "multi-user.target" ];
@@ -170,6 +169,18 @@ else
                     + " 2>&1 | grep -q 'Hello, world'",
                     timeout=90,
                 )
+
+                # The reply renders even if the command-response layer is broken,
+                # so assert the panel actually learned its model from the daemon's
+                # get_available_models / get_state responses (regression guard:
+                # those responses must carry success=true or the panel drops them).
+                model_raw = client.succeed(
+                    sudo_env + "quickshell ipc -c pi-chat call pi-chat sessionModel " + sid)
+                model = json.loads(model_raw or "{}")
+                if not model.get("active") or int(model.get("count") or 0) < 1:
+                    raise Exception(
+                        "panel never learned its model from the daemon "
+                        f"(command-response layer rejected): {model_raw!r}")
             except Exception:
                 dump_diagnostics()
                 raise

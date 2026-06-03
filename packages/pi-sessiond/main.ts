@@ -703,7 +703,7 @@ function responsePayload(
   command: string,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  return { type: "response", command, data };
+  return { type: "response", command, success: true, data };
 }
 // Send an event envelope to a single client (query replies; not buffered).
 function sendEvent(ws: Conn, session: Session, payload: unknown): void {

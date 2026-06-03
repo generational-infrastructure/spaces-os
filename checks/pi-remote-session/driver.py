@@ -221,6 +221,10 @@ async def run_resume(uri, token, session_id):
                 continue
             ev = msg.get("payload") or {}
             if ev.get("type") == "response" and ev.get("command") == "get_state":
+                if ev.get("success") is not True:
+                    fail(
+                        f"get_state response missing success=true (panel rejects it): {ev!r}"
+                    )
                 data = ev.get("data") or {}
                 count = data.get("messageCount")
                 if not isinstance(count, int) or count < 2:
