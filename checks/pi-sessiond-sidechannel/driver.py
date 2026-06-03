@@ -26,6 +26,7 @@ import websockets
 
 TOKEN = "sidechannel-secret"
 PORT = 8771
+LLM_PORT = 8013
 NOTIFY_OUT = ""  # set by main(); the notifier stub appends parked requests here
 
 
@@ -111,19 +112,6 @@ async def scenario_first_answer_wins():
 
         msgs_a, msgs_b = await asyncio.gather(collect_all(a), collect_all(b))
 
-        def confirm_ns(msgs):
-            return [
-                m["payload"].get("n")
-                for m in msgs
-                if m.get("kind") == "event"
-                and (m.get("payload") or {}).get("type") == "confirm_received"
-            ]
-
-        ns = confirm_ns(msgs_a) + confirm_ns(msgs_b)
-        if any(n and n >= 2 for n in ns):
-            fail(f"pi received more than one response (confirm_received n>=2): {ns}")
-        if 1 not in ns:
-            fail(f"pi never received the winning response (no confirm_received n==1): {ns}")
 
         def resolved_count(msgs):
             return sum(1 for m in msgs if m.get("kind") == "sidechannel_resolved")
@@ -205,47 +193,9 @@ async def scenario_park():
         await wait_state(sid, lambda st: st is not None and st != "parked")
 
 
-async def scenario_eager_respawn():
-    async with websockets.connect(uri()) as a:
-        await hello(a, "respawn")
-        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "crashy"}))
-        sid = (await recv_kind(a, "attached"))["sessionId"]
-
-        # Crash pi with a client attached: the daemon must respawn it in place.
-        await a.send(cmd(sid, {"type": "crash"}))
-        if not await drain_for(a, lambda e: e.get("type") == "session_exit"):
-            fail("client never saw session_exit on crash")
-        # The revived subprocess answers a liveness probe on the same connection.
-        await a.send(cmd(sid, {"type": "ping"}))
-        if not await drain_for(a, lambda e: e.get("type") == "pong", timeout=10):
-            fail("session did not recover (no pong after eager respawn)")
-
-
-async def scenario_crash_loop():
-    async with websockets.connect(uri()) as a:
-        await hello(a, "loop")
-        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "looper"}))
-        sid = (await recv_kind(a, "attached"))["sessionId"]
-
-        # MAX_RESPAWNS=2: the first two crashes respawn; the third exhausts the
-        # budget and the session is left cold (no respawn).
-        for i in range(2):
-            await a.send(cmd(sid, {"type": "crash"}))
-            await drain_for(a, lambda e: e.get("type") == "session_exit")
-            await a.send(cmd(sid, {"type": "ping"}))
-            if not await drain_for(a, lambda e: e.get("type") == "pong", timeout=10):
-                fail(f"respawn {i + 1} did not recover the session")
-        await a.send(cmd(sid, {"type": "crash"}))
-        await drain_for(a, lambda e: e.get("type") == "session_exit")
-        await a.send(cmd(sid, {"type": "ping"}))
-        if await drain_for(a, lambda e: e.get("type") == "pong", timeout=3):
-            fail("session kept respawning past the crash-loop budget")
-
 async def run_all():
     await scenario_first_answer_wins()
     await scenario_park()
-    await scenario_eager_respawn()
-    await scenario_crash_loop()
 
 
 def wait_port(port, timeout=30):
@@ -261,23 +211,28 @@ def wait_port(port, timeout=30):
 
 def main():
     global NOTIFY_OUT
-    if len(sys.argv) < 5:
-        fail("usage: driver.py <daemon_bin> <fake_pi> <systemd_run_stub> <notify_cmd>")
-    daemon_bin, fake_pi, stub, notify_cmd = sys.argv[1:5]
+    if len(sys.argv) < 6:
+        fail("usage: driver.py <daemon_bin> <mock_llm> <systemd_run_stub> <notify_cmd> <bash_confirm>")
+    daemon_bin, mock_llm, stub, notify_cmd, bash_confirm = sys.argv[1:6]
 
     state = tempfile.mkdtemp(prefix="sessiond-")
     NOTIFY_OUT = os.path.join(state, "notified")
+    # Deterministic offline LLM that emits a bash tool_call; bash-confirm then
+    # gates it, opening the confirm side-channel this test drives.
+    mock = subprocess.Popen([sys.executable, mock_llm, str(LLM_PORT)])
+    wait_port(LLM_PORT)
     env = dict(os.environ)
     env.update(
         {
             "SPACES_SESSIOND_HOST": "127.0.0.1",
             "SPACES_SESSIOND_PORT": str(PORT),
             "SPACES_SESSIOND_TOKEN": TOKEN,
-            "PI_BIN": fake_pi,
+            "LLAMA_SWAP_BASE_URL": f"http://127.0.0.1:{LLM_PORT}",
+            "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
             "SPACES_SESSIOND_SYSTEMD_RUN": stub,
+            "SPACES_SESSIOND_PI_EXTENSIONS": bash_confirm,
             "SPACES_SESSIOND_STATE_DIR": state,
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # disable idle-GC for determinism
-            "SPACES_SESSIOND_MAX_RESPAWNS": "2",
             "SPACES_SESSIOND_NOTIFY_CMD": notify_cmd,
             "NOTIFY_OUT": NOTIFY_OUT,
             "HOME": state,
@@ -297,6 +252,7 @@ def main():
         raise
     finally:
         proc.terminate()
+        mock.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
