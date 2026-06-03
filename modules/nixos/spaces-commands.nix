@@ -42,10 +42,11 @@ let
       text = ''
         state=$(voxtype status) || state=idle
         voxtype record toggle
+        # Short-lived (2s) transition toast.
         if [ "$state" = recording ]; then
-          spaces_notify "voice recording stopped"
+          spaces_notify "voice recording stopped" 2000
         else
-          spaces_notify "voice recording started"
+          spaces_notify "voice recording started" 2000
         fi
       '';
     };

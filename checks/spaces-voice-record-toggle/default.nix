@@ -55,6 +55,8 @@ pkgs.runCommand "spaces-voice-record-toggle-test" { } ''
   VOX_STATE=idle ${wrapper}/bin/${wrapper.name}
   grep -q 'voice recording started' "$NOTIFY_WITNESS" \
     || { echo "FAIL: toggle from idle must report 'started'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  grep -q -- '--expire-time=2000' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: recording toast must expire after 2s (--expire-time=2000)" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
   if grep -q 'stopped' "$NOTIFY_WITNESS"; then
     echo "FAIL: toggle from idle reported 'stopped'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
   fi
@@ -64,6 +66,8 @@ pkgs.runCommand "spaces-voice-record-toggle-test" { } ''
   VOX_STATE=recording ${wrapper}/bin/${wrapper.name}
   grep -q 'voice recording stopped' "$NOTIFY_WITNESS" \
     || { echo "FAIL: toggle while recording must report 'stopped'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  grep -q -- '--expire-time=2000' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: recording toast must expire after 2s (--expire-time=2000)" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
   if grep -q 'started' "$NOTIFY_WITNESS"; then
     echo "FAIL: toggle while recording reported 'started'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
   fi

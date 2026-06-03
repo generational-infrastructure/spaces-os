@@ -27,6 +27,11 @@ let
     label = "do the thing";
     text = ''spaces_notify "did the thing"'';
   };
+  notifyingTimed = mkCommand {
+    name = "spaces-probe-notifying-timed";
+    label = "do the thing";
+    text = ''spaces_notify "timed thing" 2000'';
+  };
   notifyingFail = mkCommand {
     name = "spaces-probe-notifying-fail";
     label = "do the thing";
@@ -81,6 +86,16 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
   if grep -q 'failed to' "$NOTIFY_WITNESS"; then
     echo "FAIL: success path fired a failure toast" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
   fi
+  # A bare spaces_notify (no duration arg) must not set an expire time.
+  if grep -q -- '--expire-time' "$NOTIFY_WITNESS"; then
+    echo "FAIL: bare spaces_notify must not set an expire time" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
+  fi
+
+  # A second argument to spaces_notify sets --expire-time (milliseconds).
+  : > "$NOTIFY_WITNESS"
+  ${notifyingTimed}/bin/spaces-probe-notifying-timed
+  grep -q -- '--expire-time=2000' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: spaces_notify duration arg must set --expire-time=2000" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
 
   # When that same command fails, only the failure toast fires — the
   # info message must not appear.

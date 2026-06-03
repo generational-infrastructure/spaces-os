@@ -15,11 +15,13 @@
 #     text  = "voxtype record toggle";     # shell body
 #   }
 #
-# Inside `text` the wrapper exposes `spaces_notify "<message>"`, a
+# Inside `text` the wrapper exposes `spaces_notify "<message>" [ms]`, a
 # helper that posts a normal-urgency info toast under the same "spaces"
-# app-name as the failure toast. Use it for success/transition feedback
-# (e.g. "voice recording started"); it is only reached when the command
-# is still running, so it never contradicts the failure toast.
+# app-name as the failure toast. An optional second argument sets the
+# notification's expire time in milliseconds. Use it for
+# success/transition feedback (e.g. `spaces_notify "voice recording
+# started" 2000`); it is only reached when the command is still
+# running, so it never contradicts the failure toast.
 #
 # `notify-send` and the underlying commands are resolved from PATH (the
 # compositor spawns the wrapper with the session PATH, and libnotify is
@@ -37,7 +39,9 @@ pkgs.writeShellApplication {
   inherit name runtimeInputs;
   text = ''
     spaces_notify() {
-      notify-send --app-name=spaces "Spaces" "$1" || true
+      local -a opts=(--app-name=spaces)
+      [ -n "''${2:-}" ] && opts+=(--expire-time="$2")
+      notify-send "''${opts[@]}" "Spaces" "$1" || true
     }
     spaces_notify_failure() {
       notify-send --app-name=spaces --urgency=critical \
