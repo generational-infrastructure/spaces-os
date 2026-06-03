@@ -18,6 +18,7 @@ import {
 } from "./reducer";
 
 type Envelope = Record<string, unknown>;
+interface SessionInfo { id: string; name: string; state: string; updated: number }
 
 const TOKEN_KEY = "pi-web.token";
 
@@ -43,11 +44,20 @@ function wsUrl(): string {
   return `${proto}//${location.host}/`;
 }
 
+function num(v: unknown): number {
+  return typeof v === "number" ? v : 0;
+}
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 class Client {
   private sock: WebSocket | null = null;
-  private sessionId = "";
+  private sessions: SessionInfo[] = [];
+  private active = "";
+  private lastSeq = 0; // highest event seq seen for the active session
+  private pendingCreate = false;
   private state: ChatState = emptyState();
-  private status = "disconnected";
 
   constructor(private readonly token: string) {}
 
@@ -55,10 +65,11 @@ class Client {
     this.setStatus("connecting…");
     const sock = new WebSocket(wsUrl());
     this.sock = sock;
-    sock.onopen = () => this.send({ v: 1, kind: "hello", token: this.token, client: { name: "pi-web" } });
+    sock.onopen = () =>
+      this.send({ v: 1, kind: "hello", token: this.token, client: { name: "pi-web" } });
     sock.onmessage = (e) => this.onMessage(String(e.data));
     sock.onclose = () => {
-      this.setStatus("disconnected — retrying…");
+      this.setStatus("reconnecting…");
       setTimeout(() => this.connect(), 1000);
     };
     sock.onerror = () => sock.close();
@@ -78,40 +89,96 @@ class Client {
     switch (msg.kind) {
       case "welcome":
         this.setStatus("connected");
-        // First connect: open a fresh session. (Session list / reattach: later.)
-        if (!this.sessionId) this.send({ v: 1, kind: "create_session", name: "web" });
-        else this.send({ v: 1, kind: "attach", sessionId: this.sessionId });
+        this.send({ v: 1, kind: "list_sessions" });
+        // Reconnect: re-attach the active session and replay only what we missed
+        // (seq > lastSeq), so the conversation continues without duplication.
+        if (this.active) {
+          this.send({ v: 1, kind: "attach", sessionId: this.active, lastSeq: this.lastSeq });
+        }
         break;
-      case "attached":
-        this.sessionId = String(msg.sessionId ?? "");
+      case "sessions":
+        this.sessions = (Array.isArray(msg.sessions) ? (msg.sessions as SessionInfo[]) : [])
+          .slice()
+          .sort((a, b) => num(b.updated) - num(a.updated));
+        // First connect with no active session: jump into the most recent one
+        // (so a phone mirrors the desktop's session), else open a fresh one.
+        if (!this.active && !this.pendingCreate) {
+          if (this.sessions.length > 0) this.attach(this.sessions[0].id);
+          else this.create();
+        }
+        this.renderTabs();
         break;
+      case "attached": {
+        const sid = str(msg.sessionId);
+        if (this.pendingCreate) {
+          this.pendingCreate = false;
+          // The created session post-dates the last list_sessions; add it so its
+          // tab appears immediately (a later list_sessions refreshes the rest).
+          if (!this.sessions.some((s) => s.id === sid)) {
+            this.sessions = [
+              { id: sid, name: "web", state: "live-idle", updated: Date.now() },
+              ...this.sessions,
+            ];
+          }
+          this.switchTo(sid);
+        } else if (sid === this.active && num(msg.seq) < this.lastSeq) {
+          // The session was resurrected (cold respawn → seq reset); rebuild it.
+          this.lastSeq = num(msg.seq);
+          this.state = emptyState();
+          this.render();
+        }
+        break;
+      }
       case "event":
-        if (msg.sessionId === this.sessionId) {
+        if (msg.sessionId === this.active) {
+          this.lastSeq = num(msg.seq);
           this.state = withPiEvent(this.state, msg.payload);
           this.render();
         }
         break;
       case "sidechannel_resolved":
-        this.state = withSidechannelResolved(this.state, String(msg.id ?? ""));
-        this.render();
+        if (msg.sessionId === this.active) {
+          this.state = withSidechannelResolved(this.state, str(msg.id));
+          this.render();
+        }
         break;
       case "error":
-        this.setStatus(`error: ${String(msg.error ?? "unknown")}`);
+        this.setStatus(`error: ${str(msg.error) || "unknown"}`);
         break;
       default:
         break;
     }
   }
 
+  // Switch to (and replay from the start of) an existing session.
+  attach(id: string): void {
+    if (!id || id === this.active) return;
+    this.switchTo(id);
+    this.send({ v: 1, kind: "attach", sessionId: id, lastSeq: 0 });
+  }
+
+  create(): void {
+    this.pendingCreate = true;
+    this.send({ v: 1, kind: "create_session", name: "web" });
+  }
+
+  private switchTo(id: string): void {
+    this.active = id;
+    this.lastSeq = 0;
+    this.state = emptyState();
+    this.renderTabs();
+    this.render();
+  }
+
   sendPrompt(textValue: string): void {
     const text = textValue.trim();
-    if (!text || !this.sessionId) return;
+    if (!text || !this.active) return;
     this.state = withUserPrompt(this.state, text);
     this.render();
     this.send({
       v: 1,
       kind: "command",
-      sessionId: this.sessionId,
+      sessionId: this.active,
       payload: { type: "prompt", message: text, streamingBehavior: "steer" },
     });
   }
@@ -122,14 +189,26 @@ class Client {
     this.send({
       v: 1,
       kind: "command",
-      sessionId: this.sessionId,
+      sessionId: this.active,
       payload: { type: "extension_ui_response", id, confirmed: allowed },
     });
   }
 
   private setStatus(s: string): void {
-    this.status = s;
     $("#status").textContent = s;
+  }
+
+  private renderTabs(): void {
+    const bar = $("#tabs");
+    bar.replaceChildren();
+    for (const s of this.sessions) {
+      const tab = el("button", `tab${s.id === this.active ? " active" : ""}`, s.name || s.id.slice(0, 6));
+      tab.onclick = () => this.attach(s.id);
+      bar.append(tab);
+    }
+    const add = el("button", "tab new", "+");
+    add.onclick = () => this.create();
+    bar.append(add);
   }
 
   private render(): void {
@@ -189,8 +268,6 @@ function main(): void {
   tokenInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") start(tokenInput.value.trim());
   });
-  // Best-effort PWA installability; no-ops where service workers aren't allowed
-  // (plain http on a non-localhost origin).
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
