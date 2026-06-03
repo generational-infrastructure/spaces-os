@@ -254,15 +254,86 @@ def cmd_click(args):
     )
 
 
+# Characters reachable without a modifier, plus the few that need shift.
+PUNCT = {
+    " ": "spc",
+    "\n": "ret",
+    "\t": "tab",
+    "-": "minus",
+    "=": "equal",
+    "[": "bracket_left",
+    "]": "bracket_right",
+    ";": "semicolon",
+    "'": "apostrophe",
+    ",": "comma",
+    ".": "dot",
+    "/": "slash",
+    "\\": "backslash",
+    "`": "grave_accent",
+}
+SHIFTED = {
+    "!": "1",
+    "@": "2",
+    "#": "3",
+    "$": "4",
+    "%": "5",
+    "^": "6",
+    "&": "7",
+    "*": "8",
+    "(": "9",
+    ")": "0",
+    "_": "minus",
+    "+": "equal",
+    "{": "bracket_left",
+    "}": "bracket_right",
+    ":": "semicolon",
+    '"': "apostrophe",
+    "<": "comma",
+    ">": "dot",
+    "?": "slash",
+    "~": "grave_accent",
+    "|": "backslash",
+}
+
+
+def cmd_type(args):
+    """Type a literal string into the focused field, one key per char."""
+    if not args:
+        sys.exit("agent-vm type: missing text (e.g. type 'hello world')")
+    text = " ".join(args)
+    cmds = []
+    for ch in text:
+        if ch.isalpha():
+            keys = [{"type": "qcode", "data": ch.lower()}]
+            if ch.isupper():
+                keys.insert(0, {"type": "qcode", "data": "shift"})
+        elif ch.isdigit():
+            keys = [{"type": "qcode", "data": ch}]
+        elif ch in SHIFTED:
+            keys = [
+                {"type": "qcode", "data": "shift"},
+                {"type": "qcode", "data": SHIFTED[ch]},
+            ]
+        elif ch in PUNCT:
+            keys = [{"type": "qcode", "data": PUNCT[ch]}]
+        else:
+            continue
+        cmds.append(
+            {"execute": "send-key", "arguments": {"keys": keys, "hold-time": 30}}
+        )
+    _run(cmds, "type")
+
+
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: qmp.py key|screenshot|move|click ...")
+        sys.exit("usage: qmp.py key|type|screenshot|move|click ...")
     cmd, *args = sys.argv[1:]
     handlers = {
         "key": cmd_key,
         "screenshot": cmd_screenshot,
         "move": cmd_move,
         "click": cmd_click,
+        "type": cmd_type,
     }
     handler = handlers.get(cmd)
     if handler is None:
