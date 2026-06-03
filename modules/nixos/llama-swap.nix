@@ -4,7 +4,7 @@
 # - llama-cpp with Vulkan + BLAS (+ CUDA when hardware.nvidia.enabled)
 # - Sensible defaults (listen address, health check timeout, log routing)
 # - Unix socket proxy for rootless Docker containers
-# - Suspend/resume systemd units to free GPU VRAM across sleep cycles
+# - A sleep.target hook to free GPU VRAM across suspend/resume cycles
 # - XDG cache fix for llama-cpp model downloads
 {
   lib,
@@ -116,25 +116,33 @@ in
       serviceConfig.CacheDirectory = "llama.cpp";
     };
 
-    # Stop llama-swap before suspend to free GPU VRAM, restart on resume
-    systemd.services.llama-swap-suspend = {
-      description = "Stop llama-swap before suspend";
-      before = [ "systemd-suspend.service" ];
-      wantedBy = [ "suspend.target" ];
-      serviceConfig.Type = "oneshot";
-      script = ''
-        ${pkgs.systemd}/bin/systemctl stop llama-swap.service || true
-        sleep 2
-      '';
-    };
-    systemd.services.llama-swap-resume = {
-      description = "Restart llama-swap after resume";
-      after = [ "systemd-suspend.service" ];
-      wantedBy = [ "suspend.target" ];
-      serviceConfig.Type = "oneshot";
-      script = ''
-        ${pkgs.systemd}/bin/systemctl start llama-swap.service || true
-      '';
+    # Free GPU VRAM across sleep: stop llama-swap (and the llama-server child
+    # holding VRAM) before the machine sleeps, and restart it on resume.
+    #
+    # Modeled on nixpkgs' own `sleep-actions` unit (config/power-management.nix):
+    # one oneshot with RemainAfterExit + StopWhenUnneeded, pulled in by and
+    # ordered Before sleep.target. `script` (ExecStart) runs before sleep;
+    # `preStop` (ExecStop) runs on resume, when sleep.target is no longer
+    # needed. Both phases belong to a single non-reentrant unit, so the stop
+    # (pre-sleep) and start (post-resume) of llama-swap.service are strictly
+    # serialized — they cannot collide into "Job ... canceled" the way two
+    # separate suspend.target-keyed start/stop units do, and the resume action
+    # re-fires on every sleep cycle.
+    systemd.services.llama-swap-sleep = {
+      description = "Pause llama-swap across suspend/resume";
+      wantedBy = [ "sleep.target" ];
+      before = [ "sleep.target" ];
+      unitConfig.StopWhenUnneeded = true;
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      # Before sleep: stopping the proxy also stops llama-swap-socket
+      # (Requires=llama-swap.service), freeing any model's VRAM.
+      script = "${pkgs.systemd}/bin/systemctl stop llama-swap.service";
+      # On resume: bring the proxy and its docker socket back. --no-block so a
+      # slow model warmup never stalls the resume path.
+      preStop = "${pkgs.systemd}/bin/systemctl start --no-block llama-swap.service llama-swap-socket.service";
     };
   };
 }
