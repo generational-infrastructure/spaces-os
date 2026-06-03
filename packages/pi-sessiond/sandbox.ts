@@ -1,75 +1,30 @@
-// Builds the command that launches a session's `pi --mode rpc`.
+// Builds the `systemd-run` command that confines a single `bash` tool
+// invocation.
 //
-// Each session runs inside a `systemd-run` transient unit carrying the same
-// sandbox bouquet the desktop panel's PiSession._buildCommand applies
-// (docs/remote-pi-design.md §8): ProtectHome=tmpfs + narrowed BindPaths +
-// the kernel/namespace protection set, so a remote executor confines pi just
-// like the desktop does. `--pipe` wires the unit's stdio back to the daemon
-// for the RPC channel. Kept pure (no process/fs access) so it is unit-testable.
+// With SDK-embedded execution (docs/remote-pi-design.md §2/§8) the daemon runs
+// pi in-process, so the per-session subprocess sandbox is gone. We reintroduce
+// confinement at the tool boundary: pi's built-in `bash` is replaced by a tool
+// whose BashOperations wraps every command in a `systemd-run` transient unit
+// carrying the same bouquet the desktop panel's PiSession._buildCommand applied
+// (ProtectHome=tmpfs + narrowed BindPaths + the kernel/namespace protection
+// set). `--pipe --wait` wires the unit's stdio back so output streams and the
+// exec resolves on completion. Kept pure (no process/fs access) so it is
+// unit-testable.
 
-export interface SpawnConfig {
+export interface BashSandboxConfig {
   systemdRun: string; // path to systemd-run (or a stub, in tests)
-  piBin: string;
-  sessionId: string;
-  sessionDir: string; // pi --session-dir target (persisted session.jsonl; bound rw)
-  workdir: string; // per-session cwd / workspace (bound rw)
-  agentDir: string; // PI_CODING_AGENT_DIR (bound rw when sandboxed)
-  llmUrl: string;
-  provider: string;
-  model: string;
-  memoryHigh: string;
-  path: string; // PATH to forward into the unit
+  workdir: string; // the command's cwd; bound rw and narrowed to
+  agentDir: string; // pi's agent dir (HOME); bound rw when untrusted
+  memoryHigh: string; // MemoryHigh= for the unit
   trusted: boolean; // skip filesystem narrowing (ProtectHome) when true
-  continueSession: boolean; // pass pi --continue (resume the committed jsonl)
+  extraBinds?: string[]; // additional rw paths to bind (e.g. the session dir)
 }
 
-export interface SpawnCommand {
-  argv: string[];
-  // Env for the *spawned process*. When sandboxed, pi's env travels via
-  // systemd-run --setenv (here it's empty and the daemon just inherits its
-  // own env for systemd-run itself).
-  env: Record<string, string>;
-}
-
-function piArgs(c: SpawnConfig): string[] {
-  const args = [
-    "--mode",
-    "rpc",
-    "--provider",
-    c.provider,
-    "--session-dir",
-    c.sessionDir,
-    "--offline",
-    "--no-context-files",
-  ];
-  if (c.model) args.push("--model", c.model);
-  // Resume the most recent committed jsonl in --session-dir. Only when one
-  // exists: on a fresh session the dir is empty and pi's --continue is noisy
-  // (matches the desktop panel's PiSession._buildCommand).
-  if (c.continueSession) args.push("--continue");
-  return args;
-}
-
-export function buildSpawnCommand(c: SpawnConfig): SpawnCommand {
-  // Each session runs inside a systemd-run transient unit; --pipe wires its
-  // stdio back to the daemon. pi's env travels via --setenv (the unit gets a
-  // clean env), so the daemon just inherits its own env for systemd-run.
-  const argv = [
-    c.systemdRun,
-    "--pipe",
-    "--quiet",
-    "--collect",
-    "--service-type=exec",
-    `--unit=pi-sessiond-${c.sessionId}.service`,
-    `--working-directory=${c.workdir}`,
-    `--setenv=PI_CODING_AGENT_DIR=${c.agentDir}`,
-    `--setenv=LLAMA_SWAP_BASE_URL=${c.llmUrl}`,
-    "--setenv=PI_OFFLINE=1",
-    "--setenv=PI_TELEMETRY=0",
-    `--setenv=HOME=${c.agentDir}`,
-    `--setenv=PATH=${c.path}`,
-    `--property=BindPaths=${c.workdir}:${c.workdir}`,
-    `--property=BindPaths=${c.sessionDir}:${c.sessionDir}`,
+// The kernel/namespace protection set applied to every sandboxed command,
+// trusted or not (it never narrows the filesystem, only hardens the kernel
+// surface). Shared so the bouquet stays in one place.
+function hardeningProps(c: BashSandboxConfig): string[] {
+  return [
     "--property=PrivateTmp=true",
     "--property=PrivateDevices=true",
     "--property=ProtectKernelTunables=true",
@@ -85,13 +40,31 @@ export function buildSpawnCommand(c: SpawnConfig): SpawnCommand {
     "--property=SystemCallArchitectures=native",
     `--property=MemoryHigh=${c.memoryHigh}`,
   ];
+}
+
+// argv that runs `bash -c <command>` inside a transient confinement unit.
+// The command travels as a single argv element after `--`, so there is no
+// nested-shell quoting to get wrong.
+export function buildBashSandboxArgv(c: BashSandboxConfig, command: string): string[] {
+  const argv = [
+    c.systemdRun,
+    "--pipe",
+    "--quiet",
+    "--collect",
+    "--wait",
+    "--service-type=exec",
+    `--working-directory=${c.workdir}`,
+    `--property=BindPaths=${c.workdir}:${c.workdir}`,
+    ...(c.extraBinds ?? []).map((p) => `--property=BindPaths=${p}:${p}`),
+    ...hardeningProps(c),
+  ];
   // Trusted sessions skip filesystem narrowing; the kernel/namespace
   // protections above still apply. Untrusted: hide the real home, then bind
-  // the writable agent dir back (pi mkdir's settings.json.lock there).
+  // the writable agent dir back (pi/tools mkdir lock dirs there).
   if (!c.trusted) {
     argv.push("--property=ProtectHome=tmpfs");
     argv.push(`--property=BindPaths=${c.agentDir}:${c.agentDir}`);
   }
-  argv.push("--", c.piBin, ...piArgs(c));
-  return { argv, env: {} };
+  argv.push("--", "bash", "-c", command);
+  return argv;
 }
