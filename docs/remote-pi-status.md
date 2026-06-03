@@ -88,12 +88,20 @@ path** only.
   session list keyed on `(executor, sessionId)`; `executor` field on
   `create_session` (daemon already accepts/ignores it). Panel currently holds
   exactly one executor; the daemon `list_sessions`/mirroring it needs now exist.
-- [ ] **Stage 5 — side-channels + block-and-notify.** Route
-  `extension_ui_request` confirm/input/select/editor (first-answer-wins +
-  `sidechannel_resolved`), `open_url` to the active client, `notify` broadcast;
-  park when zero clients; notifier. Today `skill-config request-input` and
-  `open_url` are **local UNIX sockets** that don't reach a remote daemon
-  (`confirm` *might* round-trip over WS but is untested).
+- [~] **Stage 5 — side-channels + block-and-notify — daemon routing done.**
+  `extension_ui_request` confirm/input/select/editor round-trips over the
+  event/command plumbing; the daemon dedupes responses **first-answer-wins**,
+  collapses the prompt on the other clients via `sidechannel_resolved`, and
+  **parks** a session whose request fired with zero clients (idle-GC leaves it
+  resident; the request replays on the next attach). Verified by
+  `checks/pi-sessiond-sidechannel` (real daemon + fake pi, no VM). Remaining:
+  - [ ] External **notifier** for true zero-client delivery (the Stage 6 chat
+    adapter doubles as it); today a parked request just waits for an attach.
+  - [ ] `open_url` routed to the **active** client; `notify` semantics.
+  - [ ] Panel renders `sidechannel_resolved` (collapse the loser's bubble).
+  - [ ] `skill-config request-input` / `open_url` are still **local UNIX
+    sockets** that don't reach a remote daemon (skill-config server-side is a
+    deferred decision).
 - [ ] **Stage 6.** Chat adapter (Signal/Matrix/ntfy; doubles as the notifier) +
   web UI / PWA.
 - [ ] **Stage 7 (deferred).** Mesh VPN; multi-user (more single-user executors).
