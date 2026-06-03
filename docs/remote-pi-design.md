@@ -253,6 +253,12 @@ The hub emits to an abstract **transport adapter**:
   quickshell / web UI / PWA attach here and keep streaming, thinking, tool
   bubbles, inline confirms, model switching, tps.
 
+The notifier — for a request that parks with zero clients attached — is an
+operator-supplied hook (`services.pi-sessiond.notifyCommand`), run with the
+parked request's `SPACES_NOTIFY_*` identity to push via ntfy / a webhook / etc.
+There is no built-in Signal/Matrix/ntfy chat adapter: the only clients are the
+quickshell panel and the PWA, both on this native WebSocket transport.
+
 ---
 
 ## 8. State & isolation

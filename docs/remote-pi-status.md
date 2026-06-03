@@ -116,10 +116,20 @@ path** only.
   (panel collapse on `sidechannel_resolved`). Remaining:
   - [ ] `open_url` routed to the **active** client over WS — still a local UNIX
     socket (gated on the skill-config socket migration, a deferred decision).
-  - [ ] A real chat adapter as the notifier *target* (Stage 6); today
-    `notifyCommand` is an operator-supplied hook (ntfy/signal-cli/…).
-- [ ] **Stage 6.** Chat adapter (Signal/Matrix/ntfy; doubles as the notifier) +
-  web UI / PWA.
+  - [x] Zero-client *notify target*: an operator-supplied `notifyCommand` hook
+    (ntfy/webhook/…), per the scope decision — **no** Signal/Matrix/ntfy chat
+    adapter is built. (Web push from the PWA could be a later add.)
+- [x] **Stage 6 — custom web client (PWA) — done.** Per the scope decision the
+  only clients are the quickshell panel (WS) and a custom **PWA**; no external
+  chat adapter. `packages/pi-web` is a vanilla-TS PWA (Bun-bundled, zero deps)
+  served by the daemon on its own port; it connects over the §12 protocol,
+  lists/creates/switches sessions, streams replies, renders + answers confirms
+  (with `sidechannel_resolved` collapse), reconnects with `lastSeq` catch-up,
+  and is installable (manifest + service worker). It mirrors a session
+  alongside the panel (n:m). Verified: `checks/pi-web-reducer` (9 unit tests),
+  `checks/pi-web-serve` (daemon serves the bundle), and a real-Chromium E2E this
+  session (connect → prompt → reply; create/switch; reconnect). Remaining: a
+  headless-browser **CI** E2E (chromium-in-nix) to lock the DOM+WS path in CI.
 - [ ] **Stage 7 (deferred).** Mesh VPN; multi-user (more single-user executors).
 
 ## Deferred by explicit decision
