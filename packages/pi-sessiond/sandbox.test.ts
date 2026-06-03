@@ -1,39 +1,35 @@
 import { expect, test } from "bun:test";
 
-import { buildSpawnCommand, type SpawnConfig } from "./sandbox";
+import { type BashSandboxConfig, buildBashSandboxArgv } from "./sandbox";
 
-const base: SpawnConfig = {
+const base: BashSandboxConfig = {
   systemdRun: "/run/wrappers/systemd-run",
-  piBin: "/store/pi/bin/pi",
-  sessionId: "abc123",
-  sessionDir: "/var/lib/pi-sessiond/sessions/abc123",
   workdir: "/var/lib/pi-sessiond/workspaces/abc123",
   agentDir: "/var/lib/pi-sessiond/pi-agent",
-  llmUrl: "http://127.0.0.1:8013",
-  provider: "local",
-  model: "mock-model",
   memoryHigh: "4G",
-  path: "/run/current-system/sw/bin",
   trusted: false,
-  continueSession: false,
+  extraBinds: ["/var/lib/pi-sessiond/sessions/abc123"],
 };
+const CMD = "echo hi && ls";
 
-test("an untrusted session is launched sandboxed via systemd-run", () => {
-  const { argv } = buildSpawnCommand(base);
+test("an untrusted bash command is wrapped sandboxed via systemd-run", () => {
+  const argv = buildBashSandboxArgv(base, CMD);
 
-  // Wrapped in systemd-run with a piped, collected transient unit.
+  // Wrapped in a piped, collected, waited transient unit.
   expect(argv[0]).toBe(base.systemdRun);
   expect(argv).toContain("--pipe");
   expect(argv).toContain("--collect");
+  expect(argv).toContain("--wait");
+  expect(argv).toContain(`--working-directory=${base.workdir}`);
 
-  // Filesystem narrowing.
+  // Filesystem narrowing: hide the real home, bind the workdir + agent dir back.
   expect(argv).toContain("--property=ProtectHome=tmpfs");
   expect(argv).toContain(`--property=BindPaths=${base.workdir}:${base.workdir}`);
   expect(argv).toContain(`--property=BindPaths=${base.agentDir}:${base.agentDir}`);
-  // Persisted session dir, bound rw so sandboxed pi can write session.jsonl.
-  expect(argv).toContain(`--property=BindPaths=${base.sessionDir}:${base.sessionDir}`);
-  expect(argv).not.toContain("--no-session");
-  expect(argv).not.toContain("--continue");
+  // extraBinds (the session dir) are bound rw too.
+  expect(argv).toContain(
+    "--property=BindPaths=/var/lib/pi-sessiond/sessions/abc123:/var/lib/pi-sessiond/sessions/abc123",
+  );
 
   // Kernel / namespace protection set.
   for (const prop of [
@@ -49,42 +45,27 @@ test("an untrusted session is launched sandboxed via systemd-run", () => {
     expect(argv).toContain(prop);
   }
 
-  // pi's env is carried into the unit, and pi connects to the executor's LLM.
-  expect(argv).toContain(`--setenv=LLAMA_SWAP_BASE_URL=${base.llmUrl}`);
-  expect(argv).toContain(`--setenv=PI_CODING_AGENT_DIR=${base.agentDir}`);
-
-  // pi itself is the unit's payload, after the `--` separator.
+  // The command is the unit's payload after `--`, passed as a single argv
+  // element to `bash -c` so there is no nested-shell quoting to get wrong.
   const sep = argv.indexOf("--");
   expect(sep).toBeGreaterThan(0);
-  expect(argv.slice(sep + 1)).toEqual([
-    base.piBin,
-    "--mode",
-    "rpc",
-    "--provider",
-    "local",
-    "--session-dir",
-    base.sessionDir,
-    "--offline",
-    "--no-context-files",
-    "--model",
-    "mock-model",
-  ]);
+  expect(argv.slice(sep + 1)).toEqual(["bash", "-c", CMD]);
 });
 
-test("a trusted session keeps protections but drops ProtectHome", () => {
-  const { argv } = buildSpawnCommand({ ...base, trusted: true });
+test("a trusted command keeps protections but drops filesystem narrowing", () => {
+  const argv = buildBashSandboxArgv({ ...base, trusted: true }, CMD);
   expect(argv).not.toContain("--property=ProtectHome=tmpfs");
+  // The agent-dir bind is only added for untrusted (alongside ProtectHome).
+  expect(argv).not.toContain(`--property=BindPaths=${base.agentDir}:${base.agentDir}`);
   // The non-filesystem protections still apply.
   expect(argv).toContain("--property=NoNewPrivileges=true");
   expect(argv).toContain("--property=RestrictNamespaces=true");
+  // The workdir is still narrowed/bound.
+  expect(argv).toContain(`--property=BindPaths=${base.workdir}:${base.workdir}`);
 });
 
-test("model is omitted when unset", () => {
-  const { argv } = buildSpawnCommand({ ...base, model: "" });
-  expect(argv).not.toContain("--model");
-});
-
-test("a resumed session passes --continue to replay the committed jsonl", () => {
-  const { argv } = buildSpawnCommand({ ...base, continueSession: true });
-  expect(argv).toContain("--continue");
+test("the command is preserved verbatim as a single argv element", () => {
+  const tricky = `echo "a b" 'c'; rm -rf "$X"`;
+  const argv = buildBashSandboxArgv(base, tricky);
+  expect(argv[argv.length - 1]).toBe(tricky);
 });

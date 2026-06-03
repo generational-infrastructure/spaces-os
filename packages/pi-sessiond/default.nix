@@ -1,20 +1,28 @@
-{ pkgs, ... }:
+{
+  pkgs,
+  inputs,
+  # The pi build whose SDK the daemon embeds. Parameterized so the NixOS module
+  # can pin it to services.pi-chat.piPackage — the daemon's in-process pi is then
+  # the exact same build as the desktop's local path uses (no version skew).
+  pi ? inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi,
+  ...
+}:
 # pi-sessiond — the remote-pi executor daemon (docs/remote-pi-design.md).
 #
-# A token-authenticated WebSocket transport in front of a registry of
-# `pi --mode rpc` subprocesses (one per session): pi's event stream is
-# forwarded verbatim inside seq-stamped envelopes, and client commands are
-# written to the owning subprocess's stdin.
-#
-# Run under Bun. Both TypeScript modules (main.ts + sandbox.ts) are assembled
-# into a single store dir so Bun can resolve the relative import; zero
-# third-party deps means no npm lockfile yet. When the daemon consumes pi's
-# exported npm types this grows into a proper buildNpmPackage / bun package.
+# A token-authenticated WebSocket transport (§12) in front of a registry of
+# in-process pi sessions. The daemon embeds pi via its SDK
+# (@mariozechner/pi-coding-agent), which ships inside the `pi` package at
+# lib/node_modules — so main.ts's import resolves from the pinned pi build via a
+# node_modules symlink, with no offline npm fetch. bash is sandboxed per command
+# through systemd-run (sandbox.ts); read/edit/write run in-process under the
+# daemon's own (module-level) confinement.
 let
   src = pkgs.runCommandLocal "pi-sessiond-src" { } ''
     mkdir -p "$out"
     cp ${./main.ts} "$out/main.ts"
     cp ${./sandbox.ts} "$out/sandbox.ts"
+    # Resolve @mariozechner/pi-coding-agent (and its deps) from the pinned pi.
+    ln -s ${pi}/lib/node_modules "$out/node_modules"
   '';
 in
 pkgs.writeShellScriptBin "pi-sessiond" ''
