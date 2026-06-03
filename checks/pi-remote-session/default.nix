@@ -6,7 +6,7 @@
 #
 #   server  — runs `services.pi-sessiond` bound on 0.0.0.0 (the remote
 #             executor), backed by a deterministic mock llama-swap so the
-#             spawned `pi --mode rpc` replies offline with "Hello, world!".
+#             in-process pi (embedded SDK) replies offline with "Hello, world!".
 #   client  — no executor of its own; reaches the server over the test
 #             network and speaks the §12 WebSocket envelope protocol.
 #
@@ -120,20 +120,6 @@ else
               timeout=15,
           )
 
-      with subtest("a cold session resumes from disk on re-attach (--continue)"):
-          # Kill the session's pi subprocess; its jsonl + meta sidecar persist.
-          server.succeed(f"systemctl stop pi-sessiond-{session_id}.service")
-          # The stopped session is now cold — still in the registry, resurrectable.
-          client.wait_until_succeeds(
-              "${clientPython}/bin/python3 ${registryDriver} expect-cold "
-              + f"ws://server:${toString wsPort} ${token} {session_id}",
-              timeout=15,
-          )
-          # Re-attach: the daemon must respawn pi --continue and restore history.
-          client.succeed(
-              "${clientPython}/bin/python3 ${driver} resume "
-              + f"ws://server:${toString wsPort} ${token} {session_id}"
-          )
 
       with subtest("two clients mirror one session"):
           client.succeed(
@@ -157,10 +143,9 @@ else
               f"resumed session {session_id} missing from registry: {listed}")
 
       with subtest("a cold session resumes after a full daemon restart"):
-          # pi exits on stdin EOF, so restarting the daemon reaps every session
-          # unit (systemd-run --pipe closes, --collect removes it) — no orphan
-          # holds the session dir. The session is cold on disk and resurrects on
-          # attach; a successful respawn proves the unit name was free.
+          # Restarting the daemon drops every in-process AgentSession; the
+          # session is cold on disk (session.jsonl) and the SDK SessionManager
+          # reloads it on the next attach.
           server.systemctl("restart pi-sessiond.service")
           server.wait_for_open_port(${toString wsPort})
           client.succeed(
