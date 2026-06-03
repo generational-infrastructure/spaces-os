@@ -54,14 +54,14 @@ in
 {
   options.services.pi-sessiond = {
     enable = lib.mkEnableOption (
-      "pi-sessiond: WebSocket daemon supervising sandboxed `pi --mode rpc` "
-      + "subprocesses for one user (a remote-pi executor)"
+      "pi-sessiond: WebSocket daemon embedding pi via its SDK (one in-process "
+      + "session per chat session) for one user (a remote-pi executor)"
     );
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
-      defaultText = lib.literalExpression "inputs.self.packages.\${system}.pi-sessiond";
+      default = import ../../../packages/pi-sessiond { inherit pkgs inputs; pi = cfg.piPackage; };
+      defaultText = lib.literalExpression "the pi-sessiond package built against config.services.pi-sessiond.piPackage";
       description = "The pi-sessiond daemon package (the WebSocket transport + session registry).";
     };
 
@@ -69,7 +69,7 @@ in
       type = lib.types.package;
       default = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
       defaultText = lib.literalExpression "inputs.llm-agents.packages.\${system}.pi";
-      description = "The pi coding agent package the daemon spawns (one `pi --mode rpc` subprocess per session).";
+      description = "The pi build whose SDK the daemon embeds. Pins the in-process pi and (via the daemon package) the desktop's local pi to one source — no version skew.";
     };
 
     serveWebUi = lib.mkEnableOption (
@@ -217,7 +217,7 @@ in
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
 
     systemd.services.pi-sessiond = {
-      description = "pi-sessiond — remote-pi executor (WebSocket transport + sandboxed pi --mode rpc sessions)";
+      description = "pi-sessiond — remote-pi executor (WebSocket transport + in-process pi sessions via the SDK)";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       environment = {
@@ -227,8 +227,7 @@ in
         SPACES_SESSIOND_DEFAULT_MODEL = cfg.defaultModel;
         SPACES_SESSIOND_DEFAULT_PROVIDER = cfg.defaultProvider;
         LLAMA_SWAP_BASE_URL = cfg.llmUrl;
-        PI_BIN = lib.getExe cfg.piPackage;
-        # Wrap each session in a systemd-run sandbox (the daemon execs this).
+        # Wrap each bash tool command in a systemd-run confinement unit (§8).
         SPACES_SESSIOND_SYSTEMD_RUN = lib.getExe' pkgs.systemd "systemd-run";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
         SPACES_SESSIOND_STATE_DIR = stateDir;
