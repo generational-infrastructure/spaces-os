@@ -61,8 +61,19 @@ Verified GREEN (formatted sources): `pi-sessiond-sandbox`,
 `pi-sessiond-sidechannel` (first-answer-wins + park + notify),
 `pi-sessiond-lifecycle` (idle-GC + ceiling), `pi-remote-session` (drive /
 jsonl-persist / 2-client mirror / list_sessions / daemon-restart cold-resume /
-get_state), `pi-web-e2e` (connect / streamed reply / confirm+Allow), plus the
-unaffected `pi-web-serve` / `pi-web-reducer` / `pi-session-ws`.
+get_state), `pi-web-e2e` (connect / streamed reply / confirm+Allow), and — the
+real quickshell panel against the migrated daemon — `pi-chat-remote` (panel →
+remote executor) + `pi-chat-local-executor` (panel → loopback executor), plus
+the unaffected `pi-web-serve` / `pi-web-reducer` / `pi-session-ws`.
+
+Running the panel↔daemon VM tests caught a migration regression the daemon-only
+checks missed: the synthesized `response` events (get_state / get_messages /
+get_available_models / set_model) dropped the `success: true` flag the panel's
+`_handleResponse` requires, so the model picker / active-model / history were
+silently dead while the reply stream still worked. Fixed (field restored) and
+now guarded both daemon-side (`pi-remote-session` asserts `success=true`) and
+end-to-end (`pi-chat-remote` asserts the panel learns its model via a new
+`sessionModel` IPC probe — reverting the fix turns it red).
 
 Remaining parity follow-ups (non-blocking): wire the `memory` extension/tool
 (needs the sediment binary — a pi-chat concern); harden the daemon systemd unit.
