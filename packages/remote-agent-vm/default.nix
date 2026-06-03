@@ -84,75 +84,83 @@ else
         };
       };
 
-    serverVm =
+    headless = {
+      services.spaces.vm-debug.headless = true;
+    };
+
+    # Server: pi-sessiond executor + mock LLM, no desktop.
+    serverModules = [
+      inputs.self.nixosModules.test-support
+      inputs.self.nixosModules.pi-sessiond
+      (netNode {
+        ip = "192.0.2.1";
+        mac = "52:54:00:ab:cd:01";
+        sshPort = 2223;
+        mem = 2048;
+      })
+      (
+        { pkgs, lib, ... }:
+        {
+          services.greetd.enable = lib.mkForce false;
+          services.llama-swap.enable = lib.mkForce false;
+          services.pi-sessiond = {
+            enable = true;
+            executorId = "server";
+            host = "0.0.0.0";
+            port = wsPort;
+            inherit token;
+            llmUrl = "http://127.0.0.1:${toString llmPort}";
+            defaultModel = "mock-model";
+            defaultProvider = "local";
+            openFirewall = true;
+          };
+          systemd.services.pi-remote-mock-llm = {
+            description = "OpenAI-compatible mock LLM for remote-agent-vm";
+            wantedBy = [ "multi-user.target" ];
+            serviceConfig = {
+              ExecStart = "${pkgs.python3}/bin/python3 ${mockLlm} ${toString llmPort}";
+              Restart = "on-failure";
+            };
+          };
+        }
+      )
+    ];
+
+    # Client: the full desktop; panel pinned at the remote executor.
+    clientModules = [
+      inputs.self.nixosModules.test-support
+      (netNode {
+        ip = "192.0.2.2";
+        mac = "52:54:00:ab:cd:02";
+        sshPort = 2224;
+        mem = 4096;
+      })
+      (
+        { lib, ... }:
+        {
+          services.pi-chat = {
+            skills = lib.mkForce { };
+            extensions.bash-confirm = false;
+            wsUrl = "ws://192.0.2.1:${toString wsPort}";
+            wsToken = token;
+          };
+          services.llama-swap.enable = lib.mkForce false;
+        }
+      )
+    ];
+
+    mkVm =
+      modules:
       (inputs.self.nixosConfigurations.test-machine.extendModules {
-        modules = [
-          inputs.self.nixosModules.test-support
-          inputs.self.nixosModules.pi-sessiond
-          { services.spaces.vm-debug.headless = true; }
-          (netNode {
-            ip = "192.0.2.1";
-            mac = "52:54:00:ab:cd:01";
-            sshPort = 2223;
-            mem = 2048;
-          })
-          (
-            { pkgs, lib, ... }:
-            {
-              # Headless executor: no desktop, no local LLM.
-              services.greetd.enable = lib.mkForce false;
-              services.llama-swap.enable = lib.mkForce false;
-              services.pi-sessiond = {
-                enable = true;
-                executorId = "server";
-                host = "0.0.0.0";
-                port = wsPort;
-                inherit token;
-                llmUrl = "http://127.0.0.1:${toString llmPort}";
-                defaultModel = "mock-model";
-                defaultProvider = "local";
-                openFirewall = true;
-              };
-              systemd.services.pi-remote-mock-llm = {
-                description = "OpenAI-compatible mock LLM for remote-agent-vm";
-                wantedBy = [ "multi-user.target" ];
-                serviceConfig = {
-                  ExecStart = "${pkgs.python3}/bin/python3 ${mockLlm} ${toString llmPort}";
-                  Restart = "on-failure";
-                };
-              };
-            }
-          )
-        ];
+        inherit modules;
       }).config.system.build.vm;
 
-    clientVm =
-      (inputs.self.nixosConfigurations.test-machine.extendModules {
-        modules = [
-          inputs.self.nixosModules.test-support
-          { services.spaces.vm-debug.headless = true; }
-          (netNode {
-            ip = "192.0.2.2";
-            mac = "52:54:00:ab:cd:02";
-            sshPort = 2224;
-            mem = 4096;
-          })
-          (
-            { lib, ... }:
-            {
-              # The panel attaches to the remote executor over the shared L2
-              # link instead of spawning pi locally; no local LLM needed.
-              services.pi-chat = {
-                skills = lib.mkForce { };
-                extensions.bash-confirm = false;
-                wsUrl = "ws://192.0.2.1:${toString wsPort}";
-                wsToken = token;
-              };
-              services.llama-swap.enable = lib.mkForce false;
-            }
-          )
-        ];
-      }).config.system.build.vm;
+    # Headless (QMP socket + VNC) for scripting and the AGENTS.md agent loop.
+    serverVm = mkVm (serverModules ++ [ headless ]);
+    clientVm = mkVm (clientModules ++ [ headless ]);
+    # Native GTK windows (vm-debug's default display) for driving by hand.
+    guiServerVm = mkVm serverModules;
+    guiClientVm = mkVm clientModules;
   in
   pkgs.writeShellApplication {
     name = "remote-agent-vm";
@@ -235,6 +243,25 @@ else
           wait
           ;;
 
+        gui)
+          mkdir -p -- "$state_dir"
+          cd "$state_dir"
+          gui_server_run=(${guiServerVm}/bin/run-*-vm)
+          gui_client_run=(${guiClientVm}/bin/run-*-vm)
+
+          NIX_DISK_IMAGE="$state_dir/gui-server.qcow2" "''${gui_server_run[0]}" &
+          spid=$!
+          NIX_DISK_IMAGE="$state_dir/gui-client.qcow2" "''${gui_client_run[0]}" &
+          cpid=$!
+
+          # shellcheck disable=SC2064
+          trap "kill $spid $cpid 2>/dev/null || true" EXIT INT TERM
+          echo "remote-agent-vm: two native QEMU windows (server pid $spid, client pid $cpid)"
+          echo "remote-agent-vm: in the CLIENT window, press Alt+A to open the chat panel, then click + type."
+          echo "remote-agent-vm: ssh also works — server :2223, client :2224 (user/pass test/test). Ctrl-C stops both."
+          wait
+          ;;
+
         wait)
           timeout="''${1:-180}"
           deadline=$(( $(date +%s) + timeout ))
@@ -294,7 +321,8 @@ else
           cat <<EOF
       Usage: remote-agent-vm <command> [args...]
 
-        run                       start both headless VMs (server + client)
+        run                       start both VMs headless (QMP + VNC; for scripting)
+        gui                       start both VMs in native QEMU windows (click around)
         wait [seconds]            block until both answer SSH (default 180s)
         ssh <node> [args...]      ssh into a guest (server=:2223, client=:2224)
         key <node> <chord>        send a synthetic key chord via QMP
