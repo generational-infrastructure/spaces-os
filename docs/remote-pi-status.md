@@ -90,11 +90,20 @@ path** only.
   mirroring (event/`response` fan-out to N clients on one session) verified.
   Covered by `checks/pi-remote-session` (list_sessions, cold-listing, two-client
   mirror). The *panel* side (consuming the registry / mirroring) is Stage 4.
-- [ ] **Stage 4 — multi-homing (panel).** Static executor list in the panel (id
-  + WS address + token); attach to local *and* server simultaneously; merged
-  session list keyed on `(executor, sessionId)`; `executor` field on
-  `create_session` (daemon already accepts/ignores it). Panel currently holds
-  exactly one executor; the daemon `list_sessions`/mirroring it needs now exist.
+- [~] **Stage 4 — multi-homing (panel) — done.** `services.pi-chat.executors`
+  is a static list (id + WS url + token); the panel attaches to all of them at
+  once (PiExecutor pool keyed by id) and pins each session to one via an
+  `executor` field (the session list is keyed on `(executor, sessionId)`).
+  `defaultExecutor` picks where new/legacy sessions land; `wsUrl`/`wsToken`
+  remain a single-executor shorthand (back-compat). Each tab shows its executor.
+  Verified by `checks/pi-chat-multihome` (a desktop pinned across two executors;
+  each session streams from its own, screenshot shows the labelled tabs) +
+  `pi-chat-remote` (single-executor back-compat). Remaining:
+  - [ ] Interactive new-session executor **picker** (today: `newSessionOn` IPC
+    / `defaultExecutor`; the "+" button uses the default).
+  - [ ] Optional: discover *other* clients' sessions via `list_sessions` and
+    merge them into the panel list (the daemon verb exists; the panel shows
+    only its own sessions today).
 - [~] **Stage 5 — side-channels + block-and-notify — daemon routing done.**
   `extension_ui_request` confirm/input/select/editor round-trips over the
   event/command plumbing; the daemon dedupes responses **first-answer-wins**,
