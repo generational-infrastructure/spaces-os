@@ -252,15 +252,6 @@ The hub emits to an abstract **transport adapter**:
 - **Native WebSocket adapter** — carries pi's full event stream verbatim.
   quickshell / web UI / PWA attach here and keep streaming, thinking, tool
   bubbles, inline confirms, model switching, tps.
-- **Chat adapter** (later; harvest opencrow's Signal/Matrix/nostr backends as
-  reference) — flattens to turn-based text + confirm-by-reply for the phone
-  away from home. Lossy, but acceptable on mobile, and reaches *any* chat
-  client through existing relays with no PWA and no mesh.
-
-**The chat adapter doubles as the notifier**: a parked request or a finished
-background task with zero WS clients connected is delivered as a chat message
-("pi wants to run `git push` — reply yes/no"). This is the convergence that
-makes opencrow's chat idea pay off without resurrecting opencrow itself (§10).
 
 ---
 
@@ -395,8 +386,6 @@ the envelope only adds addressing + the control verbs the pipe model lacked.
   no TLS. *Open:* rotation, and per-device tokens (revoke one device) as the
   bridge toward §9.
 - **Idle-GC timeout & subprocess ceiling** per `pi-sessiond`.
-- **Notifier transport for true zero-client.** Confirm the chat adapter
-  (Signal/Matrix/ntfy) is the push channel, vs. a dedicated push service.
 - **Non-image attachments under base64-only.** pi's prompt `images` array is
   typed for images; inlining a non-image blob needs a content channel or is
   deferred to the future `POST /files` handoff (the current "drop the path,

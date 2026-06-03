@@ -72,6 +72,18 @@ in
       description = "The pi coding agent package the daemon spawns (one `pi --mode rpc` subprocess per session).";
     };
 
+    serveWebUi = lib.mkEnableOption (
+      "serving the pi-web PWA client from this executor's WebSocket port "
+      + "(same origin as the protocol)"
+    );
+
+    webUiPackage = lib.mkOption {
+      type = lib.types.package;
+      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-web;
+      defaultText = lib.literalExpression "inputs.self.packages.\${system}.pi-web";
+      description = "The pi-web PWA assets served when `serveWebUi` is enabled.";
+    };
+
     executorId = lib.mkOption {
       type = lib.types.str;
       default = config.networking.hostName;
@@ -224,6 +236,8 @@ in
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
         SPACES_SESSIOND_NOTIFY_CMD =
           lib.optionalString (cfg.notifyCommand != null) (toString cfg.notifyCommand);
+        SPACES_SESSIOND_PWA_DIR =
+          lib.optionalString cfg.serveWebUi (toString cfg.webUiPackage);
         # Bun (and pi) want a writable HOME for caches.
         HOME = stateDir;
       }

@@ -1,0 +1,12 @@
+{
+  "name": "pi",
+  "short_name": "pi",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#15151b",
+  "theme_color": "#15151b",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
