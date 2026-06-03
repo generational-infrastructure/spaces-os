@@ -132,7 +132,10 @@ Item {
             NText {
               id: tabLabel
               anchors.centerIn: parent
-              text: (tabDelegate.modelData.name || "chat") + (tabDelegate.unread > 0 ? "  •" : "")
+              text: (tabDelegate.modelData.name || "chat")
+                + ((tabDelegate.modelData.executor && (root.backend?.executors?.length || 0) > 1)
+                   ? " · " + tabDelegate.modelData.executor : "")
+                + (tabDelegate.unread > 0 ? "  •" : "")
               color: tabDelegate.isActive ? Color.mOnPrimary : Color.mOnSurface
               pointSize: Style.fontSizeS
               font.bold: tabDelegate.isActive

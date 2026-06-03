@@ -154,6 +154,10 @@ else
                 dump()
                 raise
 
+        # Open the panel so the screenshot captures the multi-homed session tabs.
+        ipc("selectSession", sid_a)
+        ipc("toggle")
+
         desktop.sleep(2)
         desktop.screenshot("pi-chat-multihome")
       '';
