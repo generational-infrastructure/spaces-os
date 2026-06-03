@@ -148,7 +148,9 @@ async def run(uri, token, executor):
         # client catches up.
         await ws.send(json.dumps({"v": 1, "kind": "detach", "sessionId": session_id}))
         await ws.send(
-            json.dumps({"v": 1, "kind": "attach", "sessionId": session_id, "lastSeq": 0})
+            json.dumps(
+                {"v": 1, "kind": "attach", "sessionId": session_id, "lastSeq": 0}
+            )
         )
         await recv_kind(ws, "attached")
 

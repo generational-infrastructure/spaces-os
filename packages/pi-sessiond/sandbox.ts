@@ -45,7 +45,10 @@ function hardeningProps(c: BashSandboxConfig): string[] {
 // argv that runs `bash -c <command>` inside a transient confinement unit.
 // The command travels as a single argv element after `--`, so there is no
 // nested-shell quoting to get wrong.
-export function buildBashSandboxArgv(c: BashSandboxConfig, command: string): string[] {
+export function buildBashSandboxArgv(
+  c: BashSandboxConfig,
+  command: string,
+): string[] {
   const argv = [
     c.systemdRun,
     "--pipe",

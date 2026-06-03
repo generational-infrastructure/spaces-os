@@ -39,7 +39,7 @@ else
           enable = true;
           host = "127.0.0.1";
           port = wsPort;
-          token = token;
+          inherit token;
           llmUrl = "http://127.0.0.1:${toString llmPort}";
           defaultModel = "mock-model";
           defaultProvider = "local";
