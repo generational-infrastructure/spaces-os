@@ -43,9 +43,7 @@ async def recv_kind(ws, want):
 
 async def hello(ws, token, name):
     await ws.send(
-        json.dumps(
-            {"v": 1, "kind": "hello", "token": token, "client": {"name": name}}
-        )
+        json.dumps({"v": 1, "kind": "hello", "token": token, "client": {"name": name}})
     )
     await recv_kind(ws, "welcome")
 
@@ -73,7 +71,12 @@ async def run_mirror(uri, token):
 
         await a.send(
             json.dumps(
-                {"v": 1, "kind": "create_session", "name": "mirror", "model": "mock-model"}
+                {
+                    "v": 1,
+                    "kind": "create_session",
+                    "name": "mirror",
+                    "model": "mock-model",
+                }
             )
         )
         sid = (await recv_kind(a, "attached")).get("sessionId")
@@ -134,7 +137,9 @@ async def run_expect_cold(uri, token, sid):
 def main():
     args = sys.argv[1:]
     if len(args) < 3:
-        fail("usage: registry-driver.py <mirror|list|expect-cold> <ws_url> <token> [sessionId]")
+        fail(
+            "usage: registry-driver.py <mirror|list|expect-cold> <ws_url> <token> [sessionId]"
+        )
     mode, uri, token = args[0], args[1], args[2]
     if mode == "mirror":
         coro = run_mirror(uri, token)

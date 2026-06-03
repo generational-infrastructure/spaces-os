@@ -24,8 +24,12 @@ test("an untrusted bash command is wrapped sandboxed via systemd-run", () => {
 
   // Filesystem narrowing: hide the real home, bind the workdir + agent dir back.
   expect(argv).toContain("--property=ProtectHome=tmpfs");
-  expect(argv).toContain(`--property=BindPaths=${base.workdir}:${base.workdir}`);
-  expect(argv).toContain(`--property=BindPaths=${base.agentDir}:${base.agentDir}`);
+  expect(argv).toContain(
+    `--property=BindPaths=${base.workdir}:${base.workdir}`,
+  );
+  expect(argv).toContain(
+    `--property=BindPaths=${base.agentDir}:${base.agentDir}`,
+  );
   // extraBinds (the session dir) are bound rw too.
   expect(argv).toContain(
     "--property=BindPaths=/var/lib/pi-sessiond/sessions/abc123:/var/lib/pi-sessiond/sessions/abc123",
@@ -56,12 +60,16 @@ test("a trusted command keeps protections but drops filesystem narrowing", () =>
   const argv = buildBashSandboxArgv({ ...base, trusted: true }, CMD);
   expect(argv).not.toContain("--property=ProtectHome=tmpfs");
   // The agent-dir bind is only added for untrusted (alongside ProtectHome).
-  expect(argv).not.toContain(`--property=BindPaths=${base.agentDir}:${base.agentDir}`);
+  expect(argv).not.toContain(
+    `--property=BindPaths=${base.agentDir}:${base.agentDir}`,
+  );
   // The non-filesystem protections still apply.
   expect(argv).toContain("--property=NoNewPrivileges=true");
   expect(argv).toContain("--property=RestrictNamespaces=true");
   // The workdir is still narrowed/bound.
-  expect(argv).toContain(`--property=BindPaths=${base.workdir}:${base.workdir}`);
+  expect(argv).toContain(
+    `--property=BindPaths=${base.workdir}:${base.workdir}`,
+  );
 });
 
 test("the command is preserved verbatim as a single argv element", () => {

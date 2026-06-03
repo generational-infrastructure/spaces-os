@@ -107,11 +107,14 @@ async def scenario_first_answer_wins():
         rid = req_a["id"]
 
         # Both answer the same id. First wins; the other is dropped + told resolved.
-        await a.send(cmd(sid, {"type": "extension_ui_response", "id": rid, "confirmed": True}))
-        await b.send(cmd(sid, {"type": "extension_ui_response", "id": rid, "confirmed": False}))
+        await a.send(
+            cmd(sid, {"type": "extension_ui_response", "id": rid, "confirmed": True})
+        )
+        await b.send(
+            cmd(sid, {"type": "extension_ui_response", "id": rid, "confirmed": False})
+        )
 
         msgs_a, msgs_b = await asyncio.gather(collect_all(a), collect_all(b))
-
 
         def resolved_count(msgs):
             return sum(1 for m in msgs if m.get("kind") == "sidechannel_resolved")
@@ -125,7 +128,8 @@ async def scenario_first_answer_wins():
         ends = sum(
             1
             for m in msgs_a + msgs_b
-            if m.get("kind") == "event" and (m.get("payload") or {}).get("type") == "agent_end"
+            if m.get("kind") == "event"
+            and (m.get("payload") or {}).get("type") == "agent_end"
         )
         if ends < 1:
             fail("turn never reached agent_end")
@@ -183,12 +187,19 @@ async def scenario_park():
             fail(f"notifier missing the parked method: {marked!r}")
 
         # Re-attach: the buffered request replays; answering it unparks the session.
-        await a.send(json.dumps({"v": 1, "kind": "attach", "sessionId": sid, "lastSeq": 0}))
+        await a.send(
+            json.dumps({"v": 1, "kind": "attach", "sessionId": sid, "lastSeq": 0})
+        )
         await recv_kind(a, "attached")
         req = await drain_for(a, lambda e: e.get("type") == "extension_ui_request")
         if not req:
             fail("re-attach did not replay the parked request")
-        await a.send(cmd(sid, {"type": "extension_ui_response", "id": req["id"], "confirmed": True}))
+        await a.send(
+            cmd(
+                sid,
+                {"type": "extension_ui_response", "id": req["id"], "confirmed": True},
+            )
+        )
         await drain_for(a, lambda e: e.get("type") == "agent_end")
         await wait_state(sid, lambda st: st is not None and st != "parked")
 
@@ -212,7 +223,9 @@ def wait_port(port, timeout=30):
 def main():
     global NOTIFY_OUT
     if len(sys.argv) < 6:
-        fail("usage: driver.py <daemon_bin> <mock_llm> <systemd_run_stub> <notify_cmd> <bash_confirm>")
+        fail(
+            "usage: driver.py <daemon_bin> <mock_llm> <systemd_run_stub> <notify_cmd> <bash_confirm>"
+        )
     daemon_bin, mock_llm, stub, notify_cmd, bash_confirm = sys.argv[1:6]
 
     state = tempfile.mkdtemp(prefix="sessiond-")

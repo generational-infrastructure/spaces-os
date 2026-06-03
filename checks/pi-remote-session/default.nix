@@ -53,7 +53,7 @@ else
           executorId = "server";
           host = "0.0.0.0";
           port = wsPort;
-          token = token;
+          inherit token;
           llmUrl = "http://127.0.0.1:${toString llmPort}";
           defaultModel = "mock-model";
           defaultProvider = "local";
@@ -78,7 +78,7 @@ else
       };
 
     nodes.client =
-      { ... }:
+      _:
       {
         virtualisation = {
           memorySize = 1024;

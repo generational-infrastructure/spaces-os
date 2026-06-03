@@ -52,12 +52,15 @@ const HOST = process.env.SPACES_SESSIOND_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SPACES_SESSIOND_PORT ?? "8770");
 const EXECUTOR_ID = process.env.SPACES_SESSIOND_EXECUTOR_ID ?? "local";
 const DEFAULT_MODEL = process.env.SPACES_SESSIOND_DEFAULT_MODEL ?? "";
-const DEFAULT_PROVIDER = process.env.SPACES_SESSIOND_DEFAULT_PROVIDER ?? "local";
+const DEFAULT_PROVIDER =
+  process.env.SPACES_SESSIOND_DEFAULT_PROVIDER ?? "local";
 const LLM_URL = process.env.LLAMA_SWAP_BASE_URL ?? "";
 const SETTINGS_TEMPLATE = process.env.SPACES_SESSIOND_PI_SETTINGS ?? "";
 const PWA_DIR = process.env.SPACES_SESSIOND_PWA_DIR ?? "";
 const STATE_DIR = resolve(
-  process.env.SPACES_SESSIOND_STATE_DIR ?? process.env.STATE_DIRECTORY ?? "/tmp/pi-sessiond",
+  process.env.SPACES_SESSIOND_STATE_DIR ??
+    process.env.STATE_DIRECTORY ??
+    "/tmp/pi-sessiond",
 );
 // systemd-run that confines each `bash` tool command (or a stub, in tests).
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
@@ -68,8 +71,13 @@ const TRUSTED = (process.env.SPACES_SESSIOND_TRUSTED ?? "") === "1";
 // A live-idle session with no attached clients is disposed after
 // IDLE_TIMEOUT_MS (0 disables); MAX_LIVE caps resident sessions (0 = unlimited).
 // Both rely on the SDK SessionManager reloading the jsonl on the next attach.
-const IDLE_TIMEOUT_MS = Number(process.env.SPACES_SESSIOND_IDLE_TIMEOUT_MS ?? "1800000");
-const GC_INTERVAL_MS = Math.min(60000, Math.max(1000, Math.floor(IDLE_TIMEOUT_MS / 4)));
+const IDLE_TIMEOUT_MS = Number(
+  process.env.SPACES_SESSIOND_IDLE_TIMEOUT_MS ?? "1800000",
+);
+const GC_INTERVAL_MS = Math.min(
+  60000,
+  Math.max(1000, Math.floor(IDLE_TIMEOUT_MS / 4)),
+);
 const MAX_LIVE = Number(process.env.SPACES_SESSIOND_MAX_LIVE ?? "0");
 // Notifier (design §6/§7): run when a side-channel request parks with zero
 // clients attached, so the user is reached out-of-band. SPACES_NOTIFY_* env.
@@ -122,7 +130,8 @@ function asNumber(value: unknown): number | undefined {
 
 // A session id is always a randomUUID() we minted. Validating it before it
 // builds filesystem paths closes a path-traversal hole on attach.sessionId.
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function isSessionId(value: string): boolean {
   return SESSION_ID_RE.test(value);
 }
@@ -131,7 +140,10 @@ function isSessionId(value: string): boolean {
 
 const authStorage = AuthStorage.create(`${AGENT_DIR}/auth.json`);
 authStorage.setRuntimeApiKey("local", "dummy");
-const modelRegistry = ModelRegistry.create(authStorage, `${AGENT_DIR}/models.json`);
+const modelRegistry = ModelRegistry.create(
+  authStorage,
+  `${AGENT_DIR}/models.json`,
+);
 
 interface ProviderModel {
   id: string;
@@ -164,7 +176,8 @@ async function setupProvider(): Promise<void> {
     const res = await fetch(`${baseUrl}/models`);
     if (res.ok) {
       const payload: unknown = await res.json();
-      const data = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+      const data =
+        isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
       models = data
         .filter(isRecord)
         .map((m) =>
@@ -179,11 +192,14 @@ async function setupProvider(): Promise<void> {
   } catch (err) {
     console.error("pi-sessiond: model discovery failed:", err);
   }
-  if (models.length === 0 && DEFAULT_MODEL) models = [providerModel(DEFAULT_MODEL)];
+  if (models.length === 0 && DEFAULT_MODEL)
+    models = [providerModel(DEFAULT_MODEL)];
   // No models (unconfigured / discovery offline): still start, just can't create
   // sessions — registerProvider rejects an empty model list.
   if (models.length === 0) {
-    console.error("pi-sessiond: no models discovered; provider 'local' not registered");
+    console.error(
+      "pi-sessiond: no models discovered; provider 'local' not registered",
+    );
     return;
   }
   modelRegistry.registerProvider("local", {
@@ -200,7 +216,9 @@ async function setupProvider(): Promise<void> {
 function resolveModel(modelId: string) {
   return (
     (modelId ? modelRegistry.find(DEFAULT_PROVIDER, modelId) : undefined) ??
-    (DEFAULT_MODEL ? modelRegistry.find(DEFAULT_PROVIDER, DEFAULT_MODEL) : undefined) ??
+    (DEFAULT_MODEL
+      ? modelRegistry.find(DEFAULT_PROVIDER, DEFAULT_MODEL)
+      : undefined) ??
     modelRegistry.getAvailable()[0]
   );
 }
@@ -314,7 +332,9 @@ function sandboxedBashOperations(sessionDir: string): BashOperations {
         extraBinds: [sessionDir],
       };
       const argv = buildBashSandboxArgv(cfg, command);
-      const { promise, resolve } = Promise.withResolvers<{ exitCode: number | null }>();
+      const { promise, resolve } = Promise.withResolvers<{
+        exitCode: number | null;
+      }>();
       const child = spawn(argv[0], argv.slice(1), {
         cwd,
         env: options.env ?? process.env,
@@ -342,7 +362,9 @@ function sandboxedBashOperations(sessionDir: string): BashOperations {
 function buildTools(id: string) {
   const workdir = workdirOf(id);
   return [
-    createBashToolDefinition(workdir, { operations: sandboxedBashOperations(sessionDirOf(id)) }),
+    createBashToolDefinition(workdir, {
+      operations: sandboxedBashOperations(sessionDirOf(id)),
+    }),
     createReadToolDefinition(workdir),
     createEditToolDefinition(workdir),
     createWriteToolDefinition(workdir),
@@ -396,11 +418,22 @@ function askSideChannel(
 // First-answer-wins: resolve pi's pending uiContext promise with the first
 // client's response, tell the other attached clients to collapse, and unpark.
 // A later (lost-race) answer just collapses the sender's prompt.
-function resolveSidechannel(session: Session, from: Conn, id: string | undefined, response: Record<string, unknown>): void {
+function resolveSidechannel(
+  session: Session,
+  from: Conn,
+  id: string | undefined,
+  response: Record<string, unknown>,
+): void {
   if (id === undefined) return;
   const resolver = session.resolvers.get(id);
   if (!resolver || !session.pendingSidechannels.has(id)) {
-    send(from, { v: 1, kind: "sidechannel_resolved", sessionId: session.id, id, by: "" });
+    send(from, {
+      v: 1,
+      kind: "sidechannel_resolved",
+      sessionId: session.id,
+      id,
+      by: "",
+    });
     return;
   }
   session.pendingSidechannels.delete(id);
@@ -424,15 +457,27 @@ function resolveSidechannel(session: Session, from: Conn, id: string | undefined
 function makeUiContext(session: Session): ExtensionUIContext {
   return {
     async confirm(title, message, opts) {
-      const r = await askSideChannel(session, "confirm", { title, message, timeout: opts?.timeout });
+      const r = await askSideChannel(session, "confirm", {
+        title,
+        message,
+        timeout: opts?.timeout,
+      });
       return r.confirmed === true;
     },
     async select(title, options, opts) {
-      const r = await askSideChannel(session, "select", { title, options, timeout: opts?.timeout });
+      const r = await askSideChannel(session, "select", {
+        title,
+        options,
+        timeout: opts?.timeout,
+      });
       return typeof r.value === "string" ? r.value : undefined;
     },
     async input(title, placeholder, opts) {
-      const r = await askSideChannel(session, "input", { title, placeholder, timeout: opts?.timeout });
+      const r = await askSideChannel(session, "input", {
+        title,
+        placeholder,
+        timeout: opts?.timeout,
+      });
       return typeof r.value === "string" ? r.value : undefined;
     },
     async editor(title, prefill) {
@@ -440,8 +485,16 @@ function makeUiContext(session: Session): ExtensionUIContext {
       return typeof r.value === "string" ? r.value : undefined;
     },
     notify(message, type) {
-      if (session.subscribers.size === 0) fireNotifier(session, "notify", message);
-      else broadcast(session, { type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType: type });
+      if (session.subscribers.size === 0)
+        fireNotifier(session, "notify", message);
+      else
+        broadcast(session, {
+          type: "extension_ui_request",
+          id: randomUUID(),
+          method: "notify",
+          message,
+          notifyType: type,
+        });
     },
     onTerminalInput() {
       return () => {};
@@ -516,7 +569,11 @@ async function registerSession(
 
 // A brand-new session: mint an id, create a fresh persisted session, and record
 // its provider/model/name so it can be reloaded from disk later.
-async function createSession(provider: string, model: string, name: string): Promise<Session> {
+async function createSession(
+  provider: string,
+  model: string,
+  name: string,
+): Promise<Session> {
   enforceCeiling();
   const id = randomUUID();
   mkdirSync(sessionDirOf(id), { recursive: true });
@@ -618,7 +675,13 @@ function coldUpdatedMs(id: string): number {
 function listSessions(): SessionInfo[] {
   const out: SessionInfo[] = [];
   for (const s of sessions.values()) {
-    out.push({ id: s.id, name: s.name, executor: EXECUTOR_ID, state: liveState(s), updated: s.lastActivity });
+    out.push({
+      id: s.id,
+      name: s.name,
+      executor: EXECUTOR_ID,
+      state: liveState(s),
+      updated: s.lastActivity,
+    });
   }
   for (const id of coldSessionIds()) {
     if (sessions.has(id)) continue;
@@ -636,26 +699,41 @@ function listSessions(): SessionInfo[] {
 // ---- command dispatch into the session -------------------------------------
 
 // A pi-rpc `response` event (the shape the panel's _handleResponse consumes).
-function responsePayload(command: string, data: Record<string, unknown>): Record<string, unknown> {
+function responsePayload(
+  command: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
   return { type: "response", command, data };
 }
 // Send an event envelope to a single client (query replies; not buffered).
 function sendEvent(ws: Conn, session: Session, payload: unknown): void {
-  send(ws, { v: 1, kind: "event", sessionId: session.id, seq: session.seq, payload });
+  send(ws, {
+    v: 1,
+    kind: "event",
+    sessionId: session.id,
+    seq: session.seq,
+    payload,
+  });
 }
 
 // Route a §12 `command` payload (pi's own command shape) into the session.
 // prompt/abort/set_model/set_thinking act; get_state / get_messages /
 // get_available_models answer with a `response` event the panel consumes
 // (queries reply to the requester; set_model broadcasts so mirrors update).
-function dispatchCommand(session: Session, ws: Conn, payload: Record<string, unknown>): void {
+function dispatchCommand(
+  session: Session,
+  ws: Conn,
+  payload: Record<string, unknown>,
+): void {
   const type = asString(payload.type);
   switch (type) {
     case "prompt": {
       const message = asString(payload.message) ?? "";
       const streamingBehavior = asString(payload.streamingBehavior);
       const opts =
-        streamingBehavior === "steer" || streamingBehavior === "followUp" ? { streamingBehavior } : undefined;
+        streamingBehavior === "steer" || streamingBehavior === "followUp"
+          ? { streamingBehavior }
+          : undefined;
       void session.agent.prompt(message, opts).catch((err: unknown) => {
         broadcast(session, { type: "error", error: String(err) });
       });
@@ -672,14 +750,27 @@ function dispatchCommand(session: Session, ws: Conn, payload: Record<string, unk
       if (model) {
         void session.agent
           .setModel(model)
-          .then(() => broadcast(session, responsePayload("set_model", { provider: model.provider, id: model.id })))
-          .catch((err: unknown) => broadcast(session, { type: "error", error: String(err) }));
+          .then(() =>
+            broadcast(
+              session,
+              responsePayload("set_model", {
+                provider: model.provider,
+                id: model.id,
+              }),
+            ),
+          )
+          .catch((err: unknown) =>
+            broadcast(session, { type: "error", error: String(err) }),
+          );
       }
       return;
     }
     case "set_thinking": {
       const level = asString(payload.level);
-      if (level) session.agent.setThinkingLevel(level as Parameters<AgentSession["setThinkingLevel"]>[0]);
+      if (level)
+        session.agent.setThinkingLevel(
+          level as Parameters<AgentSession["setThinkingLevel"]>[0],
+        );
       return;
     }
     case "get_state":
@@ -687,26 +778,39 @@ function dispatchCommand(session: Session, ws: Conn, payload: Record<string, unk
         ws,
         session,
         responsePayload("get_state", {
-          model: session.agent.model ? { provider: session.agent.model.provider, id: session.agent.model.id } : null,
+          model: session.agent.model
+            ? {
+                provider: session.agent.model.provider,
+                id: session.agent.model.id,
+              }
+            : null,
           messageCount: session.agent.messages.length,
           isStreaming: session.agent.isStreaming,
         }),
       );
       return;
     case "get_messages":
-      sendEvent(ws, session, responsePayload("get_messages", { messages: session.agent.messages }));
+      sendEvent(
+        ws,
+        session,
+        responsePayload("get_messages", { messages: session.agent.messages }),
+      );
       return;
     case "get_available_models":
       sendEvent(
         ws,
         session,
         responsePayload("get_available_models", {
-          models: modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
+          models: modelRegistry
+            .getAvailable()
+            .map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
         }),
       );
       return;
     default:
-      console.error(`pi-sessiond: ignoring unknown command type: ${type ?? "(none)"}`);
+      console.error(
+        `pi-sessiond: ignoring unknown command type: ${type ?? "(none)"}`,
+      );
   }
 }
 
@@ -733,7 +837,12 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     ws.data.authed = true;
-    send(ws, { v: 1, kind: "welcome", connectionId: ws.data.id, caps: { executor: EXECUTOR_ID } });
+    send(ws, {
+      v: 1,
+      kind: "welcome",
+      connectionId: ws.data.id,
+      caps: { executor: EXECUTOR_ID },
+    });
     return;
   }
 
@@ -750,7 +859,12 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       const name = asString(parsed.name) ?? "";
       const session = await createSession(provider, model, name);
       session.subscribers.add(ws);
-      send(ws, { v: 1, kind: "attached", sessionId: session.id, seq: session.seq });
+      send(ws, {
+        v: 1,
+        kind: "attached",
+        sessionId: session.id,
+        seq: session.seq,
+      });
       return;
     }
     case "list_sessions": {
@@ -763,13 +877,19 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;
       }
-      const session = sessions.get(sessionId) ?? (await resumeSession(sessionId));
+      const session =
+        sessions.get(sessionId) ?? (await resumeSession(sessionId));
       if (!session) {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;
       }
       session.subscribers.add(ws);
-      send(ws, { v: 1, kind: "attached", sessionId: session.id, seq: session.seq });
+      send(ws, {
+        v: 1,
+        kind: "attached",
+        sessionId: session.id,
+        seq: session.seq,
+      });
       const lastSeq = asNumber(parsed.lastSeq) ?? 0;
       for (const ev of session.buffer) {
         if (ev.seq > lastSeq) ws.send(ev.data);
@@ -801,7 +921,11 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     default:
-      send(ws, { v: 1, kind: "error", error: `unknown kind: ${kind ?? "(none)"}` });
+      send(ws, {
+        v: 1,
+        kind: "error",
+        error: `unknown kind: ${kind ?? "(none)"}`,
+      });
   }
 }
 
@@ -815,7 +939,10 @@ function serveStatic(req: Request): Response {
   if (pathname === "/" || pathname === "") pathname = "/index.html";
   const full = resolve(PWA_DIR, `.${pathname}`);
   const inDir = full === PWA_DIR || full.startsWith(`${PWA_DIR}/`);
-  const served = inDir && existsSync(full) && statSync(full).isFile() ? full : `${PWA_DIR}/index.html`;
+  const served =
+    inDir && existsSync(full) && statSync(full).isFile()
+      ? full
+      : `${PWA_DIR}/index.html`;
   return new Response(Bun.file(served));
 }
 
@@ -834,7 +961,10 @@ Bun.serve<ConnData>({
   },
   websocket: {
     message(ws, message) {
-      void handleMessage(ws, typeof message === "string" ? message : message.toString("utf8"));
+      void handleMessage(
+        ws,
+        typeof message === "string" ? message : message.toString("utf8"),
+      );
     },
     close(ws) {
       for (const session of sessions.values()) session.subscribers.delete(ws);

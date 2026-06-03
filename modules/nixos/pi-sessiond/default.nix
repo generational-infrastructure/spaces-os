@@ -36,10 +36,13 @@ let
   # — so the file is absent from the executor's store at runtime and pi
   # silently skips the extension (the `local` provider never registers).
   # `builtins.path` copies just the file to a standalone, tracked store path.
-  extPaths = map (e: builtins.path {
-    path = e;
-    name = baseNameOf (toString e);
-  }) cfg.extensions;
+  extPaths = map (
+    e:
+    builtins.path {
+      path = e;
+      name = baseNameOf (toString e);
+    }
+  ) cfg.extensions;
 
   # pi's settings.json (provider/model defaults), copied into the daemon's
   # writable agent dir at startup. Extensions are NOT listed here: the daemon
@@ -61,7 +64,10 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = import ../../../packages/pi-sessiond { inherit pkgs inputs; pi = cfg.piPackage; };
+      default = import ../../../packages/pi-sessiond {
+        inherit pkgs inputs;
+        pi = cfg.piPackage;
+      };
       defaultText = lib.literalExpression "the pi-sessiond package built against config.services.pi-sessiond.piPackage";
       description = "The pi-sessiond daemon package (the WebSocket transport + session registry).";
     };
@@ -236,10 +242,10 @@ in
         SPACES_SESSIOND_STATE_DIR = stateDir;
         SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
-        SPACES_SESSIOND_NOTIFY_CMD =
-          lib.optionalString (cfg.notifyCommand != null) (toString cfg.notifyCommand);
-        SPACES_SESSIOND_PWA_DIR =
-          lib.optionalString cfg.serveWebUi (toString cfg.webUiPackage);
+        SPACES_SESSIOND_NOTIFY_CMD = lib.optionalString (cfg.notifyCommand != null) (
+          toString cfg.notifyCommand
+        );
+        SPACES_SESSIOND_PWA_DIR = lib.optionalString cfg.serveWebUi (toString cfg.webUiPackage);
         # Bun (and pi) want a writable HOME for caches.
         HOME = stateDir;
       }
