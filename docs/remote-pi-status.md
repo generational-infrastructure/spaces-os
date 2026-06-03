@@ -52,8 +52,10 @@ path** only.
     so it survives a daemon restart). Verified by `pi-remote-session`
     (jsonl-persisted + cold-resume subtests; `get_state` shows the reloaded
     history). `attach.sessionId` is UUID-validated before it touches the fs.
-  - [ ] Panel re-attaches its sessions on WS reconnect (sending `lastSeq`);
-    today PiExecutor reconnects the socket but the sessions don't re-attach.
+  - [x] Panel re-attaches its sessions on WS reconnect (sends `lastSeq`); the
+    executor keeps subscribers across a drop and replays the gap on the next
+    welcome (resets the high-water mark on a resurrected session). Verified by
+    the drop→reconnect→catch-up flow in `checks/pi-session-ws`.
   - [ ] `get_messages` snapshot for history older than the buffer window.
 - [~] **Lifecycle: idle-GC + subprocess ceiling — done.** A live-idle session
   with no clients is stopped after `idleTimeoutMs` (default 30min); `maxLive`
