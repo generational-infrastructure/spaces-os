@@ -253,7 +253,7 @@ await evalIn(
   `document.querySelector('#input').value = 'hello'; document.querySelector('#send').click(); true`,
 );
 await waitFor(
-  `(document.querySelector('#log').textContent || '').includes('Hello from pi-web!')`,
+  `(document.querySelector('#log').textContent || '').includes('Hello, world!')`,
   "streamed reply never rendered",
 );
 log("streamed reply rendered");
