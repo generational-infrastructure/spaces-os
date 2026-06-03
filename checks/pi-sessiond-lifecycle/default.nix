@@ -1,4 +1,4 @@
-# Focused check: pi-sessiond idle-GC + subprocess ceiling (design §5.1, §397).
+# Focused check: pi-sessiond idle-GC + resident-session ceiling (design §5.1).
 #
 # Two independent single-purpose executors (no cross-node traffic; each drives
 # itself over localhost), because one daemon carries one idle-timeout/ceiling:
@@ -7,8 +7,8 @@
 #   cap — long idle timeout, ceiling = 1: creating a second session evicts the
 #         least-recently-active idle one, which is then resurrected on attach.
 #
-# Both lean on cold respawn-on-attach: GC/eviction only ever stop a live-idle
-# session, so the committed jsonl is intact and `pi --continue` restores it.
+# Both lean on cold respawn-on-attach: GC/eviction only ever dispose a live-idle
+# session, so the committed jsonl is intact and the SDK SessionManager reloads it.
 # Reuses the remote-session driver (create/drive/detach + `resume`) and mock LLM.
 #
 # x86_64-linux only: runNixOSTest needs a kvm + nixos-test builder; other
@@ -25,6 +25,7 @@ else
     llmPort = 8013;
 
     driver = ../pi-remote-session/driver.py;
+    registryDriver = ../pi-remote-session/registry-driver.py;
     mockLlm = ../pi-remote-session/mock-llm.py;
     py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
 
@@ -90,35 +91,36 @@ else
           raise Exception(f"driver reported no SESSION_ID: {out!r}")
 
 
-      def unit(sid):
-          return f"pi-sessiond-{sid}.service"
-
-
       def resume(node, sid):
           node.succeed(f"${py}/bin/python3 ${driver} resume {ws} {tok} {sid}")
 
+      def expect_cold(node, sid):
+          # idle-GC / eviction disposes the in-process session; it then reports
+          # `cold` in the registry, resurrectable from the committed jsonl.
+          node.wait_until_succeeds(
+              f"${py}/bin/python3 ${registryDriver} expect-cold {ws} {tok} {sid}",
+              timeout=30,
+          )
 
       for node in (gc, cap):
           node.wait_for_unit("pi-lifecycle-mock-llm.service")
           node.wait_for_unit("pi-sessiond.service")
           node.wait_for_open_port(${toString wsPort})
 
-      with subtest("idle-GC stops a detached session; attach resurrects it"):
+      with subtest("idle-GC disposes a detached session; attach resurrects it"):
           sid = drive(gc)
-          # The driver has exited, so the session has no clients: idle-GC must
-          # stop its subprocess on its own (we never kill it here).
-          gc.wait_until_fails(f"systemctl is-active {unit(sid)}", timeout=30)
-          # Cold attach respawns `pi --continue` with the committed history
+          # The driver exited (no clients): idle-GC disposes the session on its
+          # own after the timeout (we never touch it), then reports it cold.
+          expect_cold(gc, sid)
+          # Cold attach reloads the committed history via the SDK SessionManager
           # (the resume driver asserts get_state messageCount >= 2).
           resume(gc, sid)
 
       with subtest("ceiling evicts the idle LRU session; attach resurrects it"):
           first = drive(cap)
-          cap.wait_for_unit(unit(first))
-          # ceiling = 1: creating a second session must evict `first` (idle LRU).
-          second = drive(cap)
-          cap.wait_for_unit(unit(second))
-          cap.wait_until_fails(f"systemctl is-active {unit(first)}", timeout=30)
+          # ceiling = 1: creating a second session evicts `first` (idle LRU).
+          drive(cap)
+          expect_cold(cap, first)
           # The evicted session is cold, not lost: attach resurrects it.
           resume(cap, first)
     '';
