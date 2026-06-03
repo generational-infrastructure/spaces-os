@@ -104,20 +104,20 @@ path** only.
   - [ ] Optional: discover *other* clients' sessions via `list_sessions` and
     merge them into the panel list (the daemon verb exists; the panel shows
     only its own sessions today).
-- [~] **Stage 5 — side-channels + block-and-notify — daemon routing done.**
+- [~] **Stage 5 — side-channels + block-and-notify — mostly done.**
   `extension_ui_request` confirm/input/select/editor round-trips over the
-  event/command plumbing; the daemon dedupes responses **first-answer-wins**,
-  collapses the prompt on the other clients via `sidechannel_resolved`, and
-  **parks** a session whose request fired with zero clients (idle-GC leaves it
-  resident; the request replays on the next attach). Verified by
-  `checks/pi-sessiond-sidechannel` (real daemon + fake pi, no VM). Remaining:
-  - [ ] External **notifier** for true zero-client delivery (the Stage 6 chat
-    adapter doubles as it); today a parked request just waits for an attach.
-  - [ ] `open_url` routed to the **active** client; `notify` semantics.
-  - [ ] Panel renders `sidechannel_resolved` (collapse the loser's bubble).
-  - [ ] `skill-config request-input` / `open_url` are still **local UNIX
-    sockets** that don't reach a remote daemon (skill-config server-side is a
-    deferred decision).
+  event/command plumbing; the daemon dedupes responses **first-answer-wins** and
+  tells the other clients to collapse via `sidechannel_resolved` (the **panel
+  now renders that** — the loser's confirm collapses); a request that fires with
+  zero clients **parks** (idle-GC leaves it resident; replays on next attach)
+  **and fires a notifier** (`services.pi-sessiond.notifyCommand`) so the user is
+  reached out-of-band. Verified by `checks/pi-sessiond-sidechannel` (dedupe +
+  park + notifier, real daemon + fake pi) and `checks/pi-session-ws`
+  (panel collapse on `sidechannel_resolved`). Remaining:
+  - [ ] `open_url` routed to the **active** client over WS — still a local UNIX
+    socket (gated on the skill-config socket migration, a deferred decision).
+  - [ ] A real chat adapter as the notifier *target* (Stage 6); today
+    `notifyCommand` is an operator-supplied hook (ntfy/signal-cli/…).
 - [ ] **Stage 6.** Chat adapter (Signal/Matrix/ntfy; doubles as the notifier) +
   web UI / PWA.
 - [ ] **Stage 7 (deferred).** Mesh VPN; multi-user (more single-user executors).
