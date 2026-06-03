@@ -137,6 +137,9 @@ interface Session {
   busy: boolean; // mid-turn (agent_start..agent_end); never GC a busy session
   parked: boolean; // blocked on a human (§6); never GC a parked session
   lastActivity: number; // epoch ms of last event/command; drives idle-GC + LRU
+  // Open side-channel requests (extension_ui id -> method) awaiting an answer;
+  // used to dedupe responses first-answer-wins and to drive the parked state.
+  pendingSidechannels: Map<string, string>;
 }
 const sessions = new Map<string, Session>();
 
@@ -286,6 +289,7 @@ function spawnSession(opts: SpawnOpts): Session {
     busy: false,
     parked: false,
     lastActivity: Date.now(),
+    pendingSidechannels: new Map(),
   };
   sessions.set(id, session);
 
@@ -304,6 +308,7 @@ function spawnSession(opts: SpawnOpts): Session {
         const t = asString(event.type);
         if (t === "agent_start") session.busy = true;
         else if (t === "agent_end") session.busy = false;
+        else if (t === "extension_ui_request") onSidechannelRequest(session, event);
       }
       broadcast(session, event);
     }),
@@ -457,6 +462,50 @@ function listSessions(): SessionInfo[] {
   return out;
 }
 
+// ---- side channels (extension_ui, design §6) -------------------------------
+
+// pi opened a side channel (confirm/input/select/editor). Track it pending so a
+// second answer is deduped (first-answer-wins), and park the session if no
+// client is attached to answer it (design §6) so idle-GC leaves it resident.
+function onSidechannelRequest(
+  session: Session,
+  event: Record<string, unknown>,
+): void {
+  const id = asString(event.id);
+  if (id === undefined) return;
+  session.pendingSidechannels.set(id, asString(event.method) ?? "");
+  if (session.subscribers.size === 0) session.parked = true;
+}
+
+// First-answer-wins for a side-channel request: forward the first response to
+// pi and tell the other attached clients to collapse the prompt; drop a later
+// response (already resolved) and tell its sender to collapse too. Returns
+// whether this response should be forwarded to the subprocess.
+function resolveSidechannel(
+  session: Session,
+  from: Conn,
+  id: string | undefined,
+): boolean {
+  if (id === undefined) return true; // malformed; let pi reject it
+  if (!session.pendingSidechannels.has(id)) {
+    send(from, { v: 1, kind: "sidechannel_resolved", sessionId: session.id, id, by: "" });
+    return false;
+  }
+  session.pendingSidechannels.delete(id);
+  if (session.pendingSidechannels.size === 0) session.parked = false;
+  const resolved = JSON.stringify({
+    v: 1,
+    kind: "sidechannel_resolved",
+    sessionId: session.id,
+    id,
+    by: from.data.id,
+  });
+  for (const other of session.subscribers) {
+    if (other !== from) other.send(resolved);
+  }
+  return true;
+}
+
 // ---- envelope dispatch -----------------------------------------------------
 
 function handleMessage(ws: Conn, text: string): void {
@@ -545,8 +594,18 @@ function handleMessage(ws: Conn, text: string): void {
         return;
       }
       touch(session);
+      const payload = parsed.payload;
+      // Side-channel responses (confirm/input/...) are deduped first-answer-wins
+      // before reaching pi (design §6); a later answer is dropped.
+      if (
+        isRecord(payload) &&
+        asString(payload.type) === "extension_ui_response" &&
+        !resolveSidechannel(session, ws, asString(payload.id))
+      ) {
+        return;
+      }
       // The payload is pi's own command, forwarded verbatim to stdin.
-      session.stdin.write(`${JSON.stringify(parsed.payload)}\n`);
+      session.stdin.write(`${JSON.stringify(payload)}\n`);
       return;
     }
     default:
