@@ -8,7 +8,7 @@ All work is on branch **`pi-remote-chat`** (not pushed). Checks run with
 `nix build .#checks.x86_64-linux.<name>`.
 
 ---
-## Architecture revision — SDK-embedded execution (in progress)
+## Architecture revision — SDK-embedded execution (complete)
 
 **Decision reversed: the daemon embeds pi via its SDK instead of spawning
 `pi --mode rpc` subprocesses.** The original "sandboxed subprocess per session"
@@ -30,10 +30,12 @@ architecture the project always described, and it's fewer moving parts.
   `services.pi-chat.piPackage` pins both the desktop's local Process path and
   the executor's embedded SDK from one source — no version skew. Supersedes the
   `bun main.ts` zero-dep shim.
-- **Sandbox** (§8): the daemon runs as a hardened systemd unit; pi's built-in
-  `bash` is replaced by a custom `defineTool` `bash` wrapping each command in the
-  `systemd-run` bouquet `sandbox.ts` already builds. Trade: per-session crash
-  isolation is weaker (accepted, single-user).
+- **Sandbox** (§8): pi's built-in `bash` is replaced by a tool whose operations
+  wrap each command in the `systemd-run` confinement bouquet `sandbox.ts` builds
+  (`buildBashSandboxArgv`); read/edit/write run in-process. Trade: per-session
+  crash isolation is weaker (accepted, single-user). Hardening the daemon's own
+  unit (ProtectHome etc.) is a follow-up — left out for now so it can't interfere
+  with the daemon spawning systemd-run.
 - **Scope is daemon-internal.** The §12 protocol and both clients (quickshell
   panel + PWA) and their checks (`pi-session-ws`, `pi-web-*`, `pi-chat-*`) are
   unaffected — the daemon forwards the *same* pi event shapes, now from
@@ -41,16 +43,29 @@ architecture the project always described, and it's fewer moving parts.
   (`pi-remote-session`, `pi-sessiond-{sandbox,lifecycle,sidechannel}`) are
   re-ported from fake-pi-subprocess to real-pi-via-SDK + a mock model.
 
-Migration tasks:
+Migration tasks — **done**:
 - [x] Confirm the SDK is importable in the Bun/Nix build.
 - [x] Update the design doc + this tracker to SDK-embedded.
-- [ ] Research the SDK API (session create w/ local provider, events, prompt,
-  confirm/extension-UI, custom tools, `SessionManager` resume).
-- [ ] Rewrite `pi-sessiond` core (events→§12, command→`session.*`,
-  side-channels→extension hooks); repurpose `sandbox.ts` into the custom `bash`.
-- [ ] Package the executor (SDK from the pinned pi, parameterized by `pi`) +
-  harden the systemd unit in the module.
-- [ ] Re-port the daemon checks (mock model + real pi) and run all affected GREEN.
+- [x] Research the SDK API (session create w/ local provider, events, prompt,
+  confirm via `uiContext`/`bindExtensions`, custom bash tool, `SessionManager`).
+- [x] Rewrite `pi-sessiond` core (events→§12; command→`session.*` incl.
+  get_state / get_messages / get_available_models; confirm via the SDK
+  `uiContext`; `sandbox.ts` → the per-command bash wrapper).
+- [x] Package the executor (SDK from the pinned pi, parameterized by `pi`);
+  module pins it to `piPackage`, drops `PI_BIN`.
+- [x] Load `bash-confirm` per session (`SPACES_SESSIOND_PI_EXTENSIONS`) so the
+  confirm side-channel works.
+- [x] Re-port the daemon checks and run all affected GREEN.
+
+Verified GREEN (formatted sources): `pi-sessiond-sandbox`,
+`pi-sessiond-sidechannel` (first-answer-wins + park + notify),
+`pi-sessiond-lifecycle` (idle-GC + ceiling), `pi-remote-session` (drive /
+jsonl-persist / 2-client mirror / list_sessions / daemon-restart cold-resume /
+get_state), `pi-web-e2e` (connect / streamed reply / confirm+Allow), plus the
+unaffected `pi-web-serve` / `pi-web-reducer` / `pi-session-ws`.
+
+Remaining parity follow-ups (non-blocking): wire the `memory` extension/tool
+(needs the sediment binary — a pi-chat concern); harden the daemon systemd unit.
 
 ---
 
