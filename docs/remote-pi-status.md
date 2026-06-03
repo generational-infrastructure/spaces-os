@@ -81,9 +81,13 @@ path** only.
   `ws://127.0.0.1:8770`, and drives a sandboxed session end-to-end (daemon +
   panel coexisting on one machine). Decision: **keep dual-transport** — the WS
   path doesn't yet carry skill-config / side-channels, so cutting the local
-  Process path would regress the desktop. Remaining: a one-flag bundle toggle
-  + a `wsToken` tokenFile indirection (loopback token is world-readable today),
-  flipped on once side-channels land.
+  Process path would regress the desktop. The **client-side `tokenFile` is now
+  done** — `services.pi-chat.wsTokenFile` (+ a per-executor `tokenFile`) stages
+  the `hello` token into `/run/spaces-secrets` (root:users 0640), read by the
+  panel at connect time instead of from the world-readable config; verified by
+  `checks/pi-session-ws` (token-from-file auth) + `checks/pi-chat-tokenfile-nix-eval`.
+  Remaining: a one-flag bundle toggle to default the WS path on, once it reaches
+  skill-config / side-channel parity.
 - [x] **Stage 2 — registry/n:m — done (daemon side).** `list_sessions` verb +
   `sessions` envelope merge live + cold sessions ({id, name, executor, state,
   updated}); `create_session.name` persisted in the meta sidecar. Multi-client
@@ -99,8 +103,11 @@ path** only.
   Verified by `checks/pi-chat-multihome` (a desktop pinned across two executors;
   each session streams from its own, screenshot shows the labelled tabs) +
   `pi-chat-remote` (single-executor back-compat). Remaining:
-  - [ ] Interactive new-session executor **picker** (today: `newSessionOn` IPC
-    / `defaultExecutor`; the "+" button uses the default).
+  - [x] Interactive new-session executor **picker** — the "+" button opens a
+    popup of executors when more than one is configured (single-executor creates
+    directly); selecting one pins the session via `newSession(name, executorId)`.
+    Verified by `pi-chat-qmllint` + `pi-chat-multihome` (the pinning it drives);
+    the click gesture itself is compositor-only (agent-vm).
   - [ ] Optional: discover *other* clients' sessions via `list_sessions` and
     merge them into the panel list (the daemon verb exists; the panel shows
     only its own sessions today).
@@ -128,8 +135,9 @@ path** only.
   and is installable (manifest + service worker). It mirrors a session
   alongside the panel (n:m). Verified: `checks/pi-web-reducer` (9 unit tests),
   `checks/pi-web-serve` (daemon serves the bundle), and a real-Chromium E2E this
-  session (connect → prompt → reply; create/switch; reconnect). Remaining: a
-  headless-browser **CI** E2E (chromium-in-nix) to lock the DOM+WS path in CI.
+  session (connect → prompt → reply; create/switch; reconnect), and locked in CI
+  by `checks/pi-web-e2e` — a headless-chromium E2E (raw CDP-over-Bun, no npm)
+  driving connect + streamed reply + confirm/Allow against the served PWA.
 - [ ] **Stage 7 (deferred).** Mesh VPN; multi-user (more single-user executors).
 
 ## Deferred by explicit decision
@@ -143,7 +151,10 @@ path** only.
 
 ## Test coverage gaps (code exists, no assertion)
 
-- [ ] Bad-token rejection; `tokenFile`/credential-dir path (tests use an inline token).
+- [~] Bad-token rejection; `tokenFile` path — the client `tokenFile` is now
+  exercised (`checks/pi-session-ws` authenticates from a file; the module is
+  covered by `pi-chat-tokenfile-nix-eval`). Bad-token rejection is still only
+  via the fake daemon's check, not asserted directly.
 - [ ] Reconnect (kill the daemon mid-session, assert recovery).
 - [ ] Several sessions multiplexed over one connection (only one tested).
 - [ ] n:m mirroring (2 clients, 1 session).
