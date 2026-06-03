@@ -164,6 +164,18 @@ in
       '';
     };
 
+    notifyCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.either lib.types.str lib.types.path);
+      default = null;
+      description = ''
+        Executable run when a side-channel request parks with zero clients
+        attached, so the user is reached out-of-band (design §6/§7) — e.g. a
+        script that pushes via ntfy or signal-cli. It receives the parked
+        request's identity as SPACES_NOTIFY_SESSION_ID / _SESSION_NAME /
+        _METHOD / _TITLE / _EXECUTOR. null disables it.
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -210,6 +222,8 @@ in
         SPACES_SESSIOND_STATE_DIR = stateDir;
         SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
+        SPACES_SESSIOND_NOTIFY_CMD =
+          lib.optionalString (cfg.notifyCommand != null) (toString cfg.notifyCommand);
         # Bun (and pi) want a writable HOME for caches.
         HOME = stateDir;
       }
