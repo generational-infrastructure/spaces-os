@@ -26,6 +26,7 @@ import websockets
 
 TOKEN = "sidechannel-secret"
 PORT = 8771
+NOTIFY_OUT = ""  # set by main(); the notifier stub appends parked requests here
 
 
 def fail(msg):
@@ -176,6 +177,23 @@ async def scenario_park():
         await a.send(cmd(sid, {"type": "prompt", "message": "go"}))
         await wait_state(sid, "parked")
 
+        # The zero-client park must fire the notifier (block-and-notify, §6/§7).
+        marked = ""
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with open(NOTIFY_OUT) as fh:
+                    marked = fh.read()
+            except FileNotFoundError:
+                marked = ""
+            if sid in marked:
+                break
+            await asyncio.sleep(0.2)
+        else:
+            fail("notifier did not fire when the request parked")
+        if "confirm" not in marked:
+            fail(f"notifier missing the parked method: {marked!r}")
+
         # Re-attach: the buffered request replays; answering it unparks the session.
         await a.send(json.dumps({"v": 1, "kind": "attach", "sessionId": sid, "lastSeq": 0}))
         await recv_kind(a, "attached")
@@ -242,11 +260,13 @@ def wait_port(port, timeout=30):
 
 
 def main():
-    if len(sys.argv) < 4:
-        fail("usage: driver.py <daemon_bin> <fake_pi> <systemd_run_stub>")
-    daemon_bin, fake_pi, stub = sys.argv[1], sys.argv[2], sys.argv[3]
+    global NOTIFY_OUT
+    if len(sys.argv) < 5:
+        fail("usage: driver.py <daemon_bin> <fake_pi> <systemd_run_stub> <notify_cmd>")
+    daemon_bin, fake_pi, stub, notify_cmd = sys.argv[1:5]
 
     state = tempfile.mkdtemp(prefix="sessiond-")
+    NOTIFY_OUT = os.path.join(state, "notified")
     env = dict(os.environ)
     env.update(
         {
@@ -258,6 +278,8 @@ def main():
             "SPACES_SESSIOND_STATE_DIR": state,
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # disable idle-GC for determinism
             "SPACES_SESSIOND_MAX_RESPAWNS": "2",
+            "SPACES_SESSIOND_NOTIFY_CMD": notify_cmd,
+            "NOTIFY_OUT": NOTIFY_OUT,
             "HOME": state,
         }
     )

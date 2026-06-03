@@ -5,6 +5,7 @@
 #     pi receives exactly one response; the loser gets `sidechannel_resolved`.
 #   - park: a zero-client request marks the session `parked` (list_sessions),
 #     survives, and is resolvable on re-attach.
+#   - notifier: a zero-client park fires SPACES_SESSIOND_NOTIFY_CMD out-of-band.
 #
 # Cheap (~seconds, no VM): bun runs the daemon on loopback in the build sandbox.
 # x86_64-linux only to match the other daemon checks; stub elsewhere.
@@ -27,6 +28,11 @@ else
       install -Dm755 ${./systemd-run-stub} $out/bin/systemd-run
       patchShebangs $out/bin/systemd-run
     '';
+
+    notifyStub = pkgs.runCommandLocal "notify-stub" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      install -Dm755 ${./notify-stub.py} $out/bin/notify-stub
+      patchShebangs $out/bin/notify-stub
+    '';
   in
   pkgs.runCommand "pi-sessiond-sidechannel-test"
     {
@@ -40,6 +46,7 @@ else
       ${py}/bin/python3 ${./driver.py} \
         ${pkgs.lib.getExe daemon} \
         ${fakePi}/bin/fake-pi \
-        ${stub}/bin/systemd-run
+        ${stub}/bin/systemd-run \
+        ${notifyStub}/bin/notify-stub
       touch "$out"
     ''

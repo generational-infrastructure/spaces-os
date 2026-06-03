@@ -74,6 +74,11 @@ const RESPAWN_WINDOW_MS = Number(
   process.env.SPACES_SESSIOND_RESPAWN_WINDOW_MS ?? "30000",
 );
 const crashHistory = new Map<string, number[]>();
+// Notifier (design §6/§7): a command run when a side-channel request parks with
+// zero clients attached, so the user is reached out-of-band (chat/ntfy push).
+// The session id/name/method/title/executor arrive as SPACES_NOTIFY_* env vars.
+// Empty disables it; spawned directly (no shell), so it's an executable path.
+const NOTIFY_CMD = process.env.SPACES_SESSIOND_NOTIFY_CMD ?? "";
 
 function loadToken(): string {
   const credDir = process.env.CREDENTIALS_DIRECTORY;
@@ -513,8 +518,33 @@ function onSidechannelRequest(
 ): void {
   const id = asString(event.id);
   if (id === undefined) return;
-  session.pendingSidechannels.set(id, asString(event.method) ?? "");
-  if (session.subscribers.size === 0) session.parked = true;
+  const method = asString(event.method) ?? "";
+  session.pendingSidechannels.set(id, method);
+  if (session.subscribers.size === 0) {
+    session.parked = true;
+    fireNotifier(session, method, asString(event.title) ?? "");
+  }
+}
+
+// Run the configured notifier for a parked request, so a zero-client session
+// blocked on a human reaches the user out-of-band (design §6/§7). Best-effort,
+// fire-and-forget; the command reads SPACES_NOTIFY_* from its environment.
+function fireNotifier(session: Session, method: string, title: string): void {
+  if (NOTIFY_CMD.length === 0) return;
+  const child = spawn(NOTIFY_CMD, [], {
+    stdio: "ignore",
+    detached: true,
+    env: {
+      ...process.env,
+      SPACES_NOTIFY_SESSION_ID: session.id,
+      SPACES_NOTIFY_SESSION_NAME: session.name,
+      SPACES_NOTIFY_METHOD: method,
+      SPACES_NOTIFY_TITLE: title,
+      SPACES_NOTIFY_EXECUTOR: EXECUTOR_ID,
+    },
+  });
+  child.on("error", () => {}); // notifier is best-effort
+  child.unref();
 }
 
 // First-answer-wins for a side-channel request: forward the first response to
