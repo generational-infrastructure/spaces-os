@@ -30,6 +30,7 @@
 }:
 let
   cfg = config.services.spaces.niri;
+  cmds = config.services.spaces.commands;
   niriConfig = pkgs.runCommand "niri-config.kdl" { } ''
         cp ${pkgs.niri.src}/resources/default-config.kdl $out
         chmod +w $out
@@ -55,29 +56,32 @@ let
 
     ' $out
         # Mod+A toggles the standalone pi-chat panel.
-        sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "pi-chat-toggle"; }' $out
-        # Mod+/ summons the quick-launch agent bar (fire-and-forget). The
-        # `quickLaunch` arg is forwarded verbatim by pi-chat-toggle to the
-        # shell's IPC verb. XKB keysym for `/` is Slash.
-        sed -i '/^binds {$/a\    Mod+Slash hotkey-overlay-title="Quick-launch Agent" { spawn "pi-chat-toggle" "quickLaunch"; }' $out
+        sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "${cmds.chat-toggle.name}"; }' $out
+        # Mod+/ summons the quick-launch agent bar (fire-and-forget).
+        # XKB keysym for `/` is Slash.
+        sed -i '/^binds {$/a\    Mod+Slash hotkey-overlay-title="Quick-launch Agent" { spawn "${cmds.chat-quick-launch.name}"; }' $out
         # Mod+S toggles voice-to-text recording.
-        sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "voxtype" "record" "toggle"; }' $out
-        # Mod+Shift+N reloads the noctalia bar. Mod+Shift+A reloads
-        # pi-chat: daemon-reload picks up a rebuild's new unit defs, then
-        # restart re-runs the panel's materialize ExecStartPre and
-        # relaunches against the fresh QML — no session logout needed.
-        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "systemctl" "--user" "restart" "noctalia-shell.service"; }' $out
-        sed -i '/^binds {$/a\    Mod+Shift+A hotkey-overlay-title="Reload pi-chat" { spawn "sh" "-c" "systemctl --user daemon-reload; systemctl --user restart pi-chat.service"; }' $out
+        sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "${cmds.voice-record-toggle.name}"; }' $out
+        # Mod+Shift+N reloads the noctalia bar; Mod+Shift+A reloads the
+        # pi-chat agent (see spaces-commands.nix for what each wrapper
+        # does) — no session logout needed.
+        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "${cmds.bar-reload.name}"; }' $out
+        sed -i '/^binds {$/a\    Mod+Shift+A hotkey-overlay-title="Reload pi-chat" { spawn "${cmds.chat-reload.name}"; }' $out
         # Mod+L and Ctrl+Alt+L lock the screen with swaylock. Mod+L
         # overrides upstream's focus-column-right (Mod+Right / Mod+L
         # both did that — Mod+Right still works).
         grep -q '^    Mod+L     { focus-column-right; }$' $out  # fail loudly if upstream renamed it
         sed -i '/^    Mod+L     { focus-column-right; }$/d' $out
-        sed -i '/^binds {$/a\    Mod+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' $out
-        sed -i '/^binds {$/a\    Ctrl+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' $out
+        sed -i '/^binds {$/a\    Mod+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "${cmds.screen-lock.name}"; }' $out
+        sed -i '/^binds {$/a\    Ctrl+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "${cmds.screen-lock.name}"; }' $out
   '';
 in
 {
+  # The shortcut commands niri spawns are wrappers built here; importing
+  # the module declares the dependency and supplies
+  # `config.services.spaces.commands` used above.
+  imports = [ ./spaces-commands.nix ];
+
   options.services.spaces.niri.modKey = lib.mkOption {
     type = lib.types.enum [
       "Super"

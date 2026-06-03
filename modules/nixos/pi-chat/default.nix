@@ -592,10 +592,11 @@ in
       # notifications. spaces-notify-forward then bridges those
       # straight back into the chat panel via the IPC `send` verb.
       pkgs.libnotify
-      # Convenience wrapper for compositor keybinds:
-      #     bind = Super+Space, pi-chat-toggle
-      # All it does is invoke the IPC; kept in /run/current-system/sw
-      # so it's discoverable on PATH.
+      # Low-level IPC helper for the chat panel: `pi-chat-toggle [verb]`
+      # forwards `verb` (default `toggle`) to the shell's IPC. The
+      # notifying shortcut wrappers (spaces-chat-toggle /
+      # spaces-chat-quick-launch in modules/nixos/spaces-commands.nix)
+      # call this; kept on PATH so it is also usable directly.
       (pkgs.writeShellScriptBin "pi-chat-toggle" ''
         exec ${pkgs.quickshell}/bin/quickshell ipc -c ${shellName} call ${shellName} "''${1:-toggle}"
       '')

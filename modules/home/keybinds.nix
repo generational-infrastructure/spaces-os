@@ -1,29 +1,33 @@
 { lib }:
 let
 
+  # spaces-* spawns are the notifying shortcut wrappers from
+  # modules/nixos/spaces-commands.nix (on PATH on every spaces host);
+  # going through them means a failed shortcut posts a desktop
+  # notification instead of silently doing nothing.
   spawnDefaults = {
     "Mod+A" = {
-      spawn = "pi-chat-toggle";
+      spawn = "spaces-chat-toggle";
       description = "Toggle AI Chat";
     };
     "Mod+Slash" = {
-      spawn = "pi-chat-toggle quickLaunch";
+      spawn = "spaces-chat-quick-launch";
       description = "Quick-launch Agent";
     };
     "Mod+S" = {
-      spawn = "voxtype record toggle";
+      spawn = "spaces-voice-record-toggle";
       description = "Voice to Text";
     };
     "Mod+L" = {
-      spawn = "swaylock";
+      spawn = "spaces-screen-lock";
       description = "Lock screen";
     };
     "Ctrl+Alt+L" = {
-      spawn = "swaylock";
+      spawn = "spaces-screen-lock";
       description = "Lock screen";
     };
     "Mod+Shift+N" = {
-      spawn = "systemctl --user restart noctalia-shell.service";
+      spawn = "spaces-bar-reload";
       description = "Reload bar";
     };
     "Mod+Return" = {
