@@ -620,16 +620,27 @@ function listSessions(): SessionInfo[] {
 
 // ---- command dispatch into the session -------------------------------------
 
-// Route a §12 `command` payload (pi's own command shape) to the AgentSession.
-// Errors stream back through the event channel; prompt is not awaited so the
-// turn streams while the handler returns.
-function dispatchCommand(session: Session, payload: Record<string, unknown>): void {
+// A pi-rpc `response` event (the shape the panel's _handleResponse consumes).
+function responsePayload(command: string, data: Record<string, unknown>): Record<string, unknown> {
+  return { type: "response", command, data };
+}
+// Send an event envelope to a single client (query replies; not buffered).
+function sendEvent(ws: Conn, session: Session, payload: unknown): void {
+  send(ws, { v: 1, kind: "event", sessionId: session.id, seq: session.seq, payload });
+}
+
+// Route a §12 `command` payload (pi's own command shape) into the session.
+// prompt/abort/set_model/set_thinking act; get_state / get_messages /
+// get_available_models answer with a `response` event the panel consumes
+// (queries reply to the requester; set_model broadcasts so mirrors update).
+function dispatchCommand(session: Session, ws: Conn, payload: Record<string, unknown>): void {
   const type = asString(payload.type);
   switch (type) {
     case "prompt": {
       const message = asString(payload.message) ?? "";
       const streamingBehavior = asString(payload.streamingBehavior);
-      const opts = streamingBehavior === "steer" || streamingBehavior === "followUp" ? { streamingBehavior } : undefined;
+      const opts =
+        streamingBehavior === "steer" || streamingBehavior === "followUp" ? { streamingBehavior } : undefined;
       void session.agent.prompt(message, opts).catch((err: unknown) => {
         broadcast(session, { type: "error", error: String(err) });
       });
@@ -639,8 +650,16 @@ function dispatchCommand(session: Session, payload: Record<string, unknown>): vo
       void session.agent.abort().catch(() => {});
       return;
     case "set_model": {
-      const model = resolveModel(asString(payload.model) ?? "");
-      if (model) void session.agent.setModel(model).catch(() => {});
+      const model = modelRegistry.find(
+        asString(payload.provider) ?? DEFAULT_PROVIDER,
+        asString(payload.modelId) ?? asString(payload.model) ?? "",
+      );
+      if (model) {
+        void session.agent
+          .setModel(model)
+          .then(() => broadcast(session, responsePayload("set_model", { provider: model.provider, id: model.id })))
+          .catch((err: unknown) => broadcast(session, { type: "error", error: String(err) }));
+      }
       return;
     }
     case "set_thinking": {
@@ -648,6 +667,29 @@ function dispatchCommand(session: Session, payload: Record<string, unknown>): vo
       if (level) session.agent.setThinkingLevel(level as Parameters<AgentSession["setThinkingLevel"]>[0]);
       return;
     }
+    case "get_state":
+      sendEvent(
+        ws,
+        session,
+        responsePayload("get_state", {
+          model: session.agent.model ? { provider: session.agent.model.provider, id: session.agent.model.id } : null,
+          messageCount: session.agent.messages.length,
+          isStreaming: session.agent.isStreaming,
+        }),
+      );
+      return;
+    case "get_messages":
+      sendEvent(ws, session, responsePayload("get_messages", { messages: session.agent.messages }));
+      return;
+    case "get_available_models":
+      sendEvent(
+        ws,
+        session,
+        responsePayload("get_available_models", {
+          models: modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
+        }),
+      );
+      return;
     default:
       console.error(`pi-sessiond: ignoring unknown command type: ${type ?? "(none)"}`);
   }
@@ -740,7 +782,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         resolveSidechannel(session, ws, asString(payload.id), payload);
         return;
       }
-      dispatchCommand(session, payload);
+      dispatchCommand(session, ws, payload);
       return;
     }
     default:
