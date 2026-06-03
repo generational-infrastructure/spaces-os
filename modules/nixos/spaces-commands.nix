@@ -37,7 +37,17 @@ let
     voice-record-toggle = mkCommand {
       name = "spaces-voice-record-toggle";
       label = "toggle voice recording";
-      text = "voxtype record toggle";
+      # voxtype's own toggle stops recording only when the state is
+      # "recording"; read the state first so we can name the transition.
+      text = ''
+        state=$(voxtype status) || state=idle
+        voxtype record toggle
+        if [ "$state" = recording ]; then
+          spaces_notify "voice recording stopped"
+        else
+          spaces_notify "voice recording started"
+        fi
+      '';
     };
     bar-reload = mkCommand {
       name = "spaces-bar-reload";

@@ -22,6 +22,20 @@ let
     label = "do the thing";
     text = "true";
   };
+  notifying = mkCommand {
+    name = "spaces-probe-notifying";
+    label = "do the thing";
+    text = ''spaces_notify "did the thing"'';
+  };
+  notifyingFail = mkCommand {
+    name = "spaces-probe-notifying-fail";
+    label = "do the thing";
+    # Fails before it can reach the spaces_notify call.
+    text = ''
+      ( exit 7 )
+      spaces_notify "did the thing"
+    '';
+  };
 
   # Records every notify-send invocation's argv (one line) so the
   # assertions can match the title/body/urgency.
@@ -54,6 +68,34 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
   ${ok}/bin/spaces-probe-ok
   [ ! -s "$NOTIFY_WITNESS" ] \
     || { echo "FAIL: notification fired on success" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+
+  # A wrapper whose body calls `spaces_notify` posts an info toast: the
+  # message fires, and it is neither critical nor a failure toast.
+  : > "$NOTIFY_WITNESS"
+  ${notifying}/bin/spaces-probe-notifying
+  grep -q 'did the thing' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: success notification missing" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  if grep -q -- '--urgency=critical' "$NOTIFY_WITNESS"; then
+    echo "FAIL: success notification marked critical" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
+  fi
+  if grep -q 'failed to' "$NOTIFY_WITNESS"; then
+    echo "FAIL: success path fired a failure toast" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
+  fi
+
+  # When that same command fails, only the failure toast fires — the
+  # info message must not appear.
+  : > "$NOTIFY_WITNESS"
+  set +e
+  ${notifyingFail}/bin/spaces-probe-notifying-fail
+  status=$?
+  set -e
+  [ "$status" -eq 7 ] \
+    || { echo "FAIL: notifying wrapper changed exit status (got $status, want 7)" >&2; exit 1; }
+  grep -q 'failed to do the thing' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: failure toast missing on failing notify wrapper" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  if grep -q 'did the thing' "$NOTIFY_WITNESS"; then
+    echo "FAIL: info toast fired despite command failure" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
+  fi
 
   touch $out
 ''
