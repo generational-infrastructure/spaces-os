@@ -39,6 +39,7 @@ import {
   createEditToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  DefaultResourceLoader,
   type ExtensionUIContext,
   ModelRegistry,
   SessionManager,
@@ -86,6 +87,13 @@ function loadToken(): string {
   return (process.env.SPACES_SESSIOND_TOKEN ?? "").trim();
 }
 const TOKEN = loadToken();
+
+// Bundled pi extensions loaded into every session (e.g. bash-confirm, which
+// drives the confirm side-channel). Colon-separated paths; the daemon does its
+// own provider discovery, so llama-swap-discover is intentionally not here.
+const EXTENSION_PATHS = (process.env.SPACES_SESSIOND_PI_EXTENSIONS ?? "")
+  .split(":")
+  .filter((p) => p.length > 0);
 
 // One writable pi agent dir (HOME / PI_CODING_AGENT_DIR), seeded from the
 // module's settings.json template. pi reads settings.json here and writes
@@ -466,6 +474,12 @@ async function registerSession(
   sessionManager: SessionManager,
   model: string,
 ): Promise<Session> {
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workdirOf(id),
+    agentDir: AGENT_DIR,
+    additionalExtensionPaths: EXTENSION_PATHS,
+  });
+  await resourceLoader.reload();
   const { session: agent } = await createAgentSession({
     agentDir: AGENT_DIR,
     cwd: workdirOf(id),
@@ -473,6 +487,7 @@ async function registerSession(
     modelRegistry,
     model: resolveModel(model),
     sessionManager,
+    resourceLoader,
     noTools: "builtin",
     customTools: buildTools(id),
   });

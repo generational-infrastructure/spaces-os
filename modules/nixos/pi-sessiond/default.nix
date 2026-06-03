@@ -41,11 +41,12 @@ let
     name = baseNameOf (toString e);
   }) cfg.extensions;
 
-  # pi's settings.json: which extensions/provider/model a spawned
-  # `pi --mode rpc` starts with. The daemon copies this template into its
-  # writable agent dir at startup (pi also writes auth.json / lock dirs there).
+  # pi's settings.json (provider/model defaults), copied into the daemon's
+  # writable agent dir at startup. Extensions are NOT listed here: the daemon
+  # loads them itself (SPACES_SESSIOND_PI_EXTENSIONS) and does its own provider
+  # discovery, so a settings-based list would double-register the provider.
   piSettings = jsonFormat.generate "pi-sessiond-settings.json" {
-    extensions = map toString extPaths;
+    extensions = [ ];
     inherit (cfg) defaultProvider defaultModel;
     quietStartup = true;
     enableInstallTelemetry = false;
@@ -196,12 +197,13 @@ in
 
     extensions = lib.mkOption {
       type = lib.types.listOf lib.types.path;
-      default = [ ../pi-chat/extensions/llama-swap-discover.ts ];
-      defaultText = lib.literalExpression "[ ../pi-chat/extensions/llama-swap-discover.ts ]";
+      default = [ ../pi-chat/extensions/bash-confirm.ts ];
+      defaultText = lib.literalExpression "[ ../pi-chat/extensions/bash-confirm.ts ]";
       description = ''
-        pi extensions every spawned session loads. Defaults to the bundled
-        llama-swap-discover extension so the session's model list is
-        discovered from `''${llmUrl}/v1/models`.
+        pi extensions loaded into every session via the SDK ResourceLoader.
+        Defaults to bash-confirm, which gates `bash` behind the confirm
+        side-channel. The model list is discovered by the daemon itself from
+        `''${llmUrl}/v1/models`, so llama-swap-discover is not needed here.
       '';
     };
   };
@@ -230,6 +232,7 @@ in
         # Wrap each bash tool command in a systemd-run confinement unit (§8).
         SPACES_SESSIOND_SYSTEMD_RUN = lib.getExe' pkgs.systemd "systemd-run";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
+        SPACES_SESSIOND_PI_EXTENSIONS = lib.concatStringsSep ":" (map toString extPaths);
         SPACES_SESSIOND_STATE_DIR = stateDir;
         SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
