@@ -4,7 +4,7 @@ transport.
 
 Runs the real PiExecutor + PiSession (WS mode) in a headless quickshell
 against a fake pi-sessiond, then asserts the panel:
-  - connects + authenticates (hello -> welcome),
+  - connects + authenticates with a token read from a file (hello -> welcome),
   - creates a session and sends a prompt over the wire,
   - renders the streamed reply ("Hello, world!") into session.messages.
 
@@ -46,6 +46,7 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
             return True
         time.sleep(interval_s)
     return False
+
 
 def wait_for_port(port: int, *, timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
@@ -105,6 +106,13 @@ def main():
         )
         fail(f"fake daemon never listened on port {port} (exit={daemon.poll()})")
 
+    # The panel authenticates with a token read from a file (PI_WS_TOKEN_PATH) —
+    # the production secret path (/run/spaces-secrets) — not an inline value. The
+    # trailing newline ensures the panel's read is trimmed.
+    token_path = os.path.join(work_dir, "ws-token")
+    with open(token_path, "w") as fh:
+        fh.write(TOKEN + "\n")
+
     env = {
         "HOME": work_dir,
         "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
@@ -112,14 +120,19 @@ def main():
         "QT_QPA_PLATFORM": "offscreen",
         "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
         "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "NIXPKGS_QT6_QML_IMPORT_PATH": os.environ.get("NIXPKGS_QT6_QML_IMPORT_PATH", ""),
+        "NIXPKGS_QT6_QML_IMPORT_PATH": os.environ.get(
+            "NIXPKGS_QT6_QML_IMPORT_PATH", ""
+        ),
         "PI_WS_URL": ws_url,
-        "PI_WS_TOKEN": TOKEN,
+        "PI_WS_TOKEN": "",
+        "PI_WS_TOKEN_PATH": token_path,
     }
 
     qs_out = open(os.path.join(work_dir, "qs.out.log"), "w")
     qs_err = open(os.path.join(work_dir, "qs.err.log"), "w")
-    qs = subprocess.Popen([qs_bin, "-p", shell_qml], env=env, stdout=qs_out, stderr=qs_err)
+    qs = subprocess.Popen(
+        [qs_bin, "-p", shell_qml], env=env, stdout=qs_out, stderr=qs_err
+    )
 
     def dump():
         for name in ("qs.out.log", "qs.err.log", "daemon.log"):
@@ -158,13 +171,15 @@ def main():
             die("quickshell never bound the test:ws IPC target")
 
         if not wait_until(lambda: ipc("connected") == "true", timeout_s=15):
-            die("panel never connected/authenticated to the executor over WS")
+            die("panel never connected/authenticated over WS (token read from file)")
 
         ipc("send", "hi")
 
         # Turn 1 streams live over the first connection.
         if not wait_until(lambda: EXPECTED in ipc("reply"), timeout_s=30):
-            die(f"turn 1 never streamed over WS (reply={ipc('reply')!r}, count={ipc('msgCount')})")
+            die(
+                f"turn 1 never streamed over WS (reply={ipc('reply')!r}, count={ipc('msgCount')})"
+            )
 
         # The fake daemon buffers a turn the client MISSES, then drops the
         # connection. The panel must observe the drop, reconnect, re-attach with
@@ -180,14 +195,23 @@ def main():
         # sidechannel_resolved (another mirrored client answered first) must
         # collapse it (first-answer-wins, design §6).
         ipc("send", "confirm")
-        if not wait_until(lambda: ipc("confirmState", "sc-1") == "pending", timeout_s=15):
-            die(f"confirm bubble never appeared (state={ipc('confirmState', 'sc-1')!r})")
+        if not wait_until(
+            lambda: ipc("confirmState", "sc-1") == "pending", timeout_s=15
+        ):
+            die(
+                f"confirm bubble never appeared (state={ipc('confirmState', 'sc-1')!r})"
+            )
         ipc("send", "resolve")
-        if not wait_until(lambda: ipc("confirmState", "sc-1") == "resolved", timeout_s=15):
-            die(f"confirm not collapsed on resolve (state={ipc('confirmState', 'sc-1')!r})")
+        if not wait_until(
+            lambda: ipc("confirmState", "sc-1") == "resolved", timeout_s=15
+        ):
+            die(
+                f"confirm not collapsed on resolve (state={ipc('confirmState', 'sc-1')!r})"
+            )
 
         sys.stderr.write(
-            "PASS: reconnect catch-up + sidechannel_resolved collapse over WebSocket\n")
+            "PASS: token-from-file auth + reconnect catch-up + sidechannel_resolved collapse\n"
+        )
     finally:
         qs.terminate()
         try:

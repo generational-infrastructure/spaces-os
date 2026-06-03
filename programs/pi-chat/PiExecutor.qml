@@ -17,6 +17,7 @@
 // creates resolve FIFO — the panel creates sessions one at a time.
 import QtQuick
 import QtWebSockets
+import Quickshell.Io
 import qs.Commons
 
 QtObject {
@@ -24,6 +25,9 @@ QtObject {
 
   required property string url
   property string token: ""
+  // When set, the `hello` token is read from this file at connect time instead
+  // of from the inline `token` (see _helloToken).
+  property string tokenPath: ""
   property bool active: false
 
   readonly property bool connected: _sock.status === WebSocket.Open && _welcomed
@@ -38,6 +42,19 @@ QtObject {
   onActiveChanged: _live = active
   Component.onCompleted: _live = active
 
+  // Authenticate with a token read from `tokenPath` — a file staged outside the
+  // world-readable panel config (e.g. /run/spaces-secrets, root:users 0640) —
+  // when set, else the inline `token`. blockLoading makes text() return the
+  // content synchronously, so the value is ready when `hello` is sent on open.
+  property FileView _tokenFile: FileView {
+    path: executor.tokenPath
+    blockLoading: true
+    printErrors: false
+  }
+  function _helloToken() {
+    return executor.tokenPath !== "" ? (_tokenFile.text() || "").trim() : executor.token;
+  }
+
   property WebSocket _sock: WebSocket {
     url: executor.url
     active: executor._live
@@ -46,7 +63,7 @@ QtObject {
         sendTextMessage(JSON.stringify({
           v: 1,
           kind: "hello",
-          token: executor.token,
+          token: executor._helloToken(),
           client: { name: "pi-chat" },
         }));
       } else if (status === WebSocket.Closed || status === WebSocket.Error) {

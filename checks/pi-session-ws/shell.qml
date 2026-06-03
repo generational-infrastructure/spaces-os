@@ -17,11 +17,13 @@ FloatingWindow {
 
   property string wsUrl: String(Quickshell.env("PI_WS_URL"))
   property string wsToken: String(Quickshell.env("PI_WS_TOKEN"))
+  property string wsTokenPath: String(Quickshell.env("PI_WS_TOKEN_PATH"))
 
   PiExecutor {
     id: exec
     url: win.wsUrl
     token: win.wsToken
+    tokenPath: win.wsTokenPath
     active: win.wsUrl !== ""
   }
 
