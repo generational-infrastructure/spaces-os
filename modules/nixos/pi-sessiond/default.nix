@@ -2,11 +2,11 @@
 #
 # See docs/remote-pi-design.md. pi-sessiond is the resident, single-user
 # daemon that owns a machine's pi sessions: a token-authenticated WebSocket
-# listener that spawns one `systemd-run`-sandboxed `pi --mode rpc` subprocess
-# per session, stamps + fans pi's event stream out to attached clients, and
-# serializes client commands into each subprocess's stdin. The same binary
-# runs on the desktop (a local executor on `localhost`) and on the always-on
-# server; clients hold a static list of executors and attach over the uniform
+# listener that embeds pi via its SDK (one in-process `AgentSession` per
+# session, with `bash` sandboxed at the tool boundary), fans pi's event stream
+# out to attached clients, and routes client commands into each session. The
+# same binary runs on the desktop (a local executor on `localhost`) and on the
+# always-on server; clients hold a static list of executors and attach over the uniform
 # WebSocket transport (no TLS for now — the `hello` token is the only gate;
 # §1).
 #
@@ -165,7 +165,7 @@ in
       type = lib.types.int;
       default = 1800000;
       description = ''
-        Stop a live-idle session's subprocess after this many milliseconds with
+        Dispose a live-idle session's in-process pi after this many milliseconds with
         no attached clients (design §5.1). The committed session.jsonl persists,
         so the next attach resurrects it (`pi --continue`). 0 disables idle-GC.
         A busy (mid-turn) or parked session is never stopped.
@@ -176,7 +176,7 @@ in
       type = lib.types.int;
       default = 0;
       description = ''
-        Ceiling on resident `pi --mode rpc` subprocesses (design §397). When a
+        Ceiling on resident in-process pi sessions (design §5.1). When a
         new session would exceed it, the least-recently-active idle session is
         evicted (stopped → cold, resurrected on its next attach). 0 = unlimited.
         Busy/parked/attached sessions are never evicted.
