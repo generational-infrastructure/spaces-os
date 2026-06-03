@@ -22,6 +22,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -127,6 +128,7 @@ const BUFFER_CAP = 4096;
 
 interface Session {
   id: string;
+  name: string; // display label (create_session.name); "" if unnamed
   proc: ChildProcess;
   stdin: Writable;
   seq: number;
@@ -193,6 +195,7 @@ function metaPathOf(id: string): string {
 interface SessionMeta {
   provider: string;
   model: string;
+  name: string;
 }
 function writeSessionMeta(id: string, meta: SessionMeta): void {
   writeFileSync(metaPathOf(id), JSON.stringify(meta));
@@ -214,7 +217,7 @@ function readSessionMeta(id: string): SessionMeta | undefined {
   const provider = asString(parsed.provider);
   const model = asString(parsed.model);
   if (provider === undefined || model === undefined) return undefined;
-  return { provider, model };
+  return { provider, model, name: asString(parsed.name) ?? "" };
 }
 // Has pi committed at least one turn here? --continue only makes sense then;
 // on an empty dir pi falls back to a fresh session (noisily).
@@ -230,12 +233,13 @@ interface SpawnOpts {
   id: string;
   provider: string;
   model: string;
+  name: string;
   continueSession: boolean;
 }
 
 // Spawn a sandboxed `pi --mode rpc` for a session and register it live.
 function spawnSession(opts: SpawnOpts): Session {
-  const { id, provider, model, continueSession } = opts;
+  const { id, name, provider, model, continueSession } = opts;
   // Stay under the resident-subprocess ceiling before adding another.
   enforceCeiling();
   const workdir = workdirOf(id);
@@ -273,6 +277,7 @@ function spawnSession(opts: SpawnOpts): Session {
 
   const session: Session = {
     id,
+    name,
     proc,
     stdin,
     seq: 0,
@@ -314,10 +319,10 @@ function spawnSession(opts: SpawnOpts): Session {
 
 // A brand-new session: mint an id, spawn fresh (no --continue), and persist
 // its provider/model so it can be resurrected from disk later.
-function createSession(provider: string, model: string): Session {
+function createSession(provider: string, model: string, name: string): Session {
   const id = randomUUID();
-  const session = spawnSession({ id, provider, model, continueSession: false });
-  writeSessionMeta(id, { provider, model });
+  const session = spawnSession({ id, name, provider, model, continueSession: false });
+  writeSessionMeta(id, { provider, model, name });
   return session;
 }
 
@@ -330,6 +335,7 @@ function resumeSession(id: string): Session | undefined {
   if (!meta) return undefined;
   return spawnSession({
     id,
+    name: meta.name,
     provider: meta.provider,
     model: meta.model,
     continueSession: hasCommittedSession(id),
@@ -388,6 +394,69 @@ function gcIdleSessions(): void {
   }
 }
 
+// ---- session registry (list_sessions, design §12) --------------------------
+
+type SessionState = "cold" | "live-idle" | "live-busy" | "parked";
+
+interface SessionInfo {
+  id: string;
+  name: string;
+  executor: string;
+  state: SessionState;
+  updated: number; // epoch ms: last activity (live) / last commit mtime (cold)
+}
+
+function liveState(session: Session): SessionState {
+  if (session.parked) return "parked";
+  return session.busy ? "live-busy" : "live-idle";
+}
+
+// Cold sessions are the meta sidecars on disk with no live subprocess.
+function coldSessionIds(): string[] {
+  try {
+    return readdirSync(`${STATE_DIR}/sessions`)
+      .filter((f) => f.endsWith(".meta.json"))
+      .map((f) => f.slice(0, -".meta.json".length))
+      .filter(isSessionId);
+  } catch {
+    return [];
+  }
+}
+
+function coldUpdatedMs(id: string): number {
+  try {
+    return statSync(sessionDirOf(id)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+// Every session this executor knows: live ones from the registry, plus cold
+// ones resurrectable from disk (design §12 `sessions` envelope).
+function listSessions(): SessionInfo[] {
+  const out: SessionInfo[] = [];
+  for (const s of sessions.values()) {
+    out.push({
+      id: s.id,
+      name: s.name,
+      executor: EXECUTOR_ID,
+      state: liveState(s),
+      updated: s.lastActivity,
+    });
+  }
+  for (const id of coldSessionIds()) {
+    if (sessions.has(id)) continue; // already listed as live
+    out.push({
+      id,
+      name: readSessionMeta(id)?.name ?? "",
+      executor: EXECUTOR_ID,
+      state: "cold",
+      updated: coldUpdatedMs(id),
+    });
+  }
+  return out;
+}
+
 // ---- envelope dispatch -----------------------------------------------------
 
 function handleMessage(ws: Conn, text: string): void {
@@ -430,9 +499,14 @@ function handleMessage(ws: Conn, text: string): void {
     case "create_session": {
       const provider = asString(parsed.provider) ?? DEFAULT_PROVIDER;
       const model = asString(parsed.model) ?? DEFAULT_MODEL;
-      const session = createSession(provider, model);
+      const name = asString(parsed.name) ?? "";
+      const session = createSession(provider, model, name);
       session.subscribers.add(ws);
       send(ws, { v: 1, kind: "attached", sessionId: session.id, seq: session.seq });
+      return;
+    }
+    case "list_sessions": {
+      send(ws, { v: 1, kind: "sessions", sessions: listSessions() });
       return;
     }
     case "attach": {

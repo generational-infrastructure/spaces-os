@@ -35,6 +35,7 @@ else
     llmPort = 8013;
 
     driver = ./driver.py;
+    registryDriver = ./registry-driver.py;
     mockLlm = ./mock-llm.py;
     clientPython = pkgs.python3.withPackages (ps: [ ps.websockets ]);
   in
@@ -86,6 +87,8 @@ else
       };
 
     testScript = ''
+      import json
+
       start_all()
 
       with subtest("server executor comes up and listens"):
@@ -120,10 +123,37 @@ else
       with subtest("a cold session resumes from disk on re-attach (--continue)"):
           # Kill the session's pi subprocess; its jsonl + meta sidecar persist.
           server.succeed(f"systemctl stop pi-sessiond-{session_id}.service")
+          # The stopped session is now cold — still in the registry, resurrectable.
+          client.wait_until_succeeds(
+              "${clientPython}/bin/python3 ${registryDriver} expect-cold "
+              + f"ws://server:${toString wsPort} ${token} {session_id}",
+              timeout=15,
+          )
           # Re-attach: the daemon must respawn pi --continue and restore history.
           client.succeed(
               "${clientPython}/bin/python3 ${driver} resume "
               + f"ws://server:${toString wsPort} ${token} {session_id}"
           )
+
+      with subtest("two clients mirror one session"):
+          client.succeed(
+              "${clientPython}/bin/python3 ${registryDriver} mirror "
+              + "ws://server:${toString wsPort} ${token}"
+          )
+
+      with subtest("list_sessions reports sessions on the executor"):
+          listed = json.loads(
+              client.succeed(
+                  "${clientPython}/bin/python3 ${registryDriver} list "
+                  + "ws://server:${toString wsPort} ${token}"
+              )
+          )
+          assert listed, f"registry is empty: {listed!r}"
+          for s in listed:
+              assert s["executor"] == "server", f"wrong executor: {s}"
+              assert s["state"] in ("cold", "live-idle", "live-busy", "parked"), s
+              assert "id" in s and "name" in s and "updated" in s, s
+          assert any(s["id"] == session_id for s in listed), (
+              f"resumed session {session_id} missing from registry: {listed}")
     '';
   }
