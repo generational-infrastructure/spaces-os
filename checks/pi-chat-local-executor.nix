@@ -5,7 +5,7 @@
 # services.pi-sessiond bound on 127.0.0.1 and a deterministic mock LLM, with
 # services.pi-chat.wsUrl pointed at ws://127.0.0.1:8770. Proves a desktop can
 # self-host the executor (daemon + panel coexisting on one machine over loopback
-# WS) end to end — the sandboxed `pi --mode rpc` path a desktop uses once it
+# WS) end to end — the in-process-pi executor path a desktop uses once it
 # stops spawning pi from the panel directly.
 #
 # This keeps the dual transport: the panel only takes the WS path because
@@ -21,7 +21,6 @@ if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
 else
 
   let
-    inherit (pkgs) lib;
     token = "local-executor-secret";
     wsPort = 8770;
     llmPort = 8013;
@@ -59,7 +58,7 @@ else
           enable = true;
           host = "127.0.0.1";
           port = wsPort;
-          token = token;
+          inherit token;
           llmUrl = "http://127.0.0.1:${toString llmPort}";
           defaultModel = "mock-model";
           defaultProvider = "local";
