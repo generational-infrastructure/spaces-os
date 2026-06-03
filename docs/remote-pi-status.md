@@ -62,10 +62,12 @@ path** only.
   caps resident subprocesses and evicts the idle LRU. Busy/parked sessions are
   never stopped; resurrection rides cold respawn-on-attach. Verified by
   `checks/pi-sessiond-lifecycle` (idle-GC + eviction, both with re-attach).
-  Crash respawn is lazy (a non-zero exit surfaces `session_exit`; the next
-  attach resurrects). Remaining:
-  - [ ] Eager crash-respawn for *attached* subscribers (with crash-loop
-    backoff), so a live mirror recovers without a manual re-attach.
+  Crash respawn is both lazy (a non-zero exit surfaces `session_exit`; the next
+  attach resurrects) **and eager**: a crash with clients attached respawns in
+  place (`--continue`, subscribers moved over) so a live mirror keeps streaming
+  without a manual re-attach; a crash-loop guard (MAX_RESPAWNS within a window)
+  then leaves it cold. Verified by `checks/pi-sessiond-sidechannel`
+  (eager-respawn + crash-loop scenarios).
   - [x] ~~Reap pi units orphaned by a daemon restart~~ — **non-issue.** pi
     exits on stdin EOF, so a daemon restart closes each `systemd-run --pipe`,
     pi exits, and `--collect` removes the unit; nothing holds the session dir.
