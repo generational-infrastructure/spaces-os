@@ -187,9 +187,47 @@ async def scenario_park():
         await wait_state(sid, lambda st: st is not None and st != "parked")
 
 
+async def scenario_eager_respawn():
+    async with websockets.connect(uri()) as a:
+        await hello(a, "respawn")
+        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "crashy"}))
+        sid = (await recv_kind(a, "attached"))["sessionId"]
+
+        # Crash pi with a client attached: the daemon must respawn it in place.
+        await a.send(cmd(sid, {"type": "crash"}))
+        if not await drain_for(a, lambda e: e.get("type") == "session_exit"):
+            fail("client never saw session_exit on crash")
+        # The revived subprocess answers a liveness probe on the same connection.
+        await a.send(cmd(sid, {"type": "ping"}))
+        if not await drain_for(a, lambda e: e.get("type") == "pong", timeout=10):
+            fail("session did not recover (no pong after eager respawn)")
+
+
+async def scenario_crash_loop():
+    async with websockets.connect(uri()) as a:
+        await hello(a, "loop")
+        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "looper"}))
+        sid = (await recv_kind(a, "attached"))["sessionId"]
+
+        # MAX_RESPAWNS=2: the first two crashes respawn; the third exhausts the
+        # budget and the session is left cold (no respawn).
+        for i in range(2):
+            await a.send(cmd(sid, {"type": "crash"}))
+            await drain_for(a, lambda e: e.get("type") == "session_exit")
+            await a.send(cmd(sid, {"type": "ping"}))
+            if not await drain_for(a, lambda e: e.get("type") == "pong", timeout=10):
+                fail(f"respawn {i + 1} did not recover the session")
+        await a.send(cmd(sid, {"type": "crash"}))
+        await drain_for(a, lambda e: e.get("type") == "session_exit")
+        await a.send(cmd(sid, {"type": "ping"}))
+        if await drain_for(a, lambda e: e.get("type") == "pong", timeout=3):
+            fail("session kept respawning past the crash-loop budget")
+
 async def run_all():
     await scenario_first_answer_wins()
     await scenario_park()
+    await scenario_eager_respawn()
+    await scenario_crash_loop()
 
 
 def wait_port(port, timeout=30):
@@ -219,6 +257,7 @@ def main():
             "SPACES_SESSIOND_SYSTEMD_RUN": stub,
             "SPACES_SESSIOND_STATE_DIR": state,
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # disable idle-GC for determinism
+            "SPACES_SESSIOND_MAX_RESPAWNS": "2",
             "HOME": state,
         }
     )

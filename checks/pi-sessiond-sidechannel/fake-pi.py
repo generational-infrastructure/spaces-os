@@ -35,6 +35,11 @@ def main():
         except json.JSONDecodeError:
             continue
         kind = cmd.get("type")
+        if kind == "crash":
+            sys.exit(1)  # simulate a pi crash; the daemon should eager-respawn
+        if kind == "ping":
+            emit({"type": "pong"})  # liveness probe after a respawn
+            continue
         if kind == "prompt":
             emit({"type": "agent_start"})
             emit(
