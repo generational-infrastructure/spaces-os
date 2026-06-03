@@ -77,14 +77,17 @@ path** only.
   Process path would regress the desktop. Remaining: a one-flag bundle toggle
   + a `wsToken` tokenFile indirection (loopback token is world-readable today),
   flipped on once side-channels land.
-- [ ] **Stage 2 — registry/n:m.** `list_sessions` daemon verb + `sessions`
-  envelope; multi-client mirroring (event/`response` fan-out to N clients on one
-  session). Single-session multiplexing already works; mirroring + `list_sessions`
-  do not.
-- [ ] **Stage 4 — multi-homing.** Static executor list in the panel (id + WS
-  address + token); attach to local *and* server simultaneously; merged session
-  list keyed on `(executor, sessionId)`; `executor` field on `create_session`.
-  Panel currently holds exactly one executor.
+- [x] **Stage 2 — registry/n:m — done (daemon side).** `list_sessions` verb +
+  `sessions` envelope merge live + cold sessions ({id, name, executor, state,
+  updated}); `create_session.name` persisted in the meta sidecar. Multi-client
+  mirroring (event/`response` fan-out to N clients on one session) verified.
+  Covered by `checks/pi-remote-session` (list_sessions, cold-listing, two-client
+  mirror). The *panel* side (consuming the registry / mirroring) is Stage 4.
+- [ ] **Stage 4 — multi-homing (panel).** Static executor list in the panel (id
+  + WS address + token); attach to local *and* server simultaneously; merged
+  session list keyed on `(executor, sessionId)`; `executor` field on
+  `create_session` (daemon already accepts/ignores it). Panel currently holds
+  exactly one executor; the daemon `list_sessions`/mirroring it needs now exist.
 - [ ] **Stage 5 — side-channels + block-and-notify.** Route
   `extension_ui_request` confirm/input/select/editor (first-answer-wins +
   `sidechannel_resolved`), `open_url` to the active client, `notify` broadcast;
