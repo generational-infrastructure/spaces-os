@@ -176,8 +176,18 @@ def main():
         if not wait_until(lambda: CAUGHT_UP in ipc("reply"), timeout_s=30):
             die(f"panel never caught up to the missed turn (reply={ipc('reply')!r})")
 
+        # Side-channel: a "confirm" prompt opens a pending confirm bubble;
+        # sidechannel_resolved (another mirrored client answered first) must
+        # collapse it (first-answer-wins, design §6).
+        ipc("send", "confirm")
+        if not wait_until(lambda: ipc("confirmState", "sc-1") == "pending", timeout_s=15):
+            die(f"confirm bubble never appeared (state={ipc('confirmState', 'sc-1')!r})")
+        ipc("send", "resolve")
+        if not wait_until(lambda: ipc("confirmState", "sc-1") == "resolved", timeout_s=15):
+            die(f"confirm not collapsed on resolve (state={ipc('confirmState', 'sc-1')!r})")
+
         sys.stderr.write(
-            "PASS: panel streamed a reply, survived a drop, and caught up on reconnect\n")
+            "PASS: reconnect catch-up + sidechannel_resolved collapse over WebSocket\n")
     finally:
         qs.terminate()
         try:

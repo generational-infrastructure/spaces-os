@@ -49,5 +49,14 @@ FloatingWindow {
       }
       return out;
     }
+
+    // State of the confirm bubble with id `reqId` ("pending"/"resolved"/…); "" if absent.
+    function confirmState(reqId: string): string {
+      for (var i = 0; i < sess.messages.length; i++) {
+        var m = sess.messages[i];
+        if (m && (m.type || "") === "confirm" && m.id === reqId) return m.confirmState || "";
+      }
+      return "";
+    }
   }
 }

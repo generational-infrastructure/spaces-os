@@ -91,6 +91,29 @@ async def handler(ws, *_):
             payload = msg.get("payload") or {}
             if payload.get("type") != "prompt":
                 continue
+            message = payload.get("message") or ""
+            # Side-channel: a prompt of "confirm" opens an extension_ui_request;
+            # "resolve" then sends sidechannel_resolved (as if another mirrored
+            # client answered first), which must collapse the panel's prompt.
+            if message == "confirm":
+                st = SESSIONS.setdefault(sid, {"seq": 0, "buffer": []})
+                st["seq"] += 1
+                await send_event(sid, st["seq"], {
+                    "type": "extension_ui_request",
+                    "id": "sc-1",
+                    "method": "confirm",
+                    "title": "Run it?",
+                })
+                continue
+            if message == "resolve":
+                await ws.send(json.dumps({
+                    "v": 1,
+                    "kind": "sidechannel_resolved",
+                    "sessionId": sid,
+                    "id": "sc-1",
+                    "by": "other",
+                }))
+                continue
             st = SESSIONS.setdefault(sid, {"seq": 0, "buffer": []})
             # Turn 1: stream live + buffer.
             for ev in turn_events(CHUNKS):

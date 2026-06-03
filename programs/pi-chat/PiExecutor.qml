@@ -110,6 +110,11 @@ QtObject {
       if (obj) obj._onEnvelopeEvent(msg.payload);
       break;
     }
+    case "sidechannel_resolved": {
+      // Another client answered a shared side-channel request; collapse ours.
+      _subscribers[msg.sessionId]?._onSidechannelResolved?.(msg.id, msg.by);
+      break;
+    }
     case "error":
       Logger.w("PiExecutor", "server error", JSON.stringify(msg));
       break;
