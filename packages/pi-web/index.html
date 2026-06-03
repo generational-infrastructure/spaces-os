@@ -32,6 +32,10 @@
       .typing { color: var(--muted); align-self: flex-start; padding: 0 12px; }
       footer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
       #input { flex: 1; }
+      #tabs { display: flex; gap: 6px; padding: 8px 14px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+      .tab { background: var(--peer); color: var(--on); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; white-space: nowrap; cursor: pointer; }
+      .tab.active { background: var(--me); color: var(--on-me); border-color: var(--me); }
+      .tab.new { font-weight: 700; }
     </style>
   </head>
   <body>
@@ -42,6 +46,7 @@
     </div>
     <div id="app">
       <header><b>pi</b><span id="status">disconnected</span></header>
+      <div id="tabs"></div>
       <div id="log"></div>
       <footer>
         <input id="input" placeholder="Message…" autocomplete="off" />
