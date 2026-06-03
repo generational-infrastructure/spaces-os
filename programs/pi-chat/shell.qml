@@ -108,6 +108,10 @@ PanelWindow {
     function newSession(name: string): string {
       return backend.newSession?.(name) ?? "";
     }
+    // Multi-homing: create a session pinned to a specific executor id.
+    function newSessionOn(name: string, executorId: string): string {
+      return backend.newSession?.(name, executorId) ?? "";
+    }
     function selectSession(id: string) {
       backend.selectSession?.(id);
     }

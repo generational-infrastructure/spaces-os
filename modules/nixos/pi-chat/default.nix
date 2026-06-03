@@ -319,6 +319,42 @@ in
       '';
     };
 
+    executors = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          id = lib.mkOption {
+            type = lib.types.str;
+            description = "Stable executor id; shown per session and used as create_session's target.";
+          };
+          url = lib.mkOption {
+            type = lib.types.str;
+            description = "pi-sessiond WebSocket URL (e.g. ws://server:8770).";
+          };
+          token = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Pre-shared `hello` token for this executor.";
+          };
+        };
+      });
+      default = [ ];
+      description = ''
+        Remote pi-sessiond executors the panel attaches to simultaneously; each
+        chat session is pinned to one by its `id` (multi-homing, design stage 4).
+        `wsUrl`/`wsToken` are a deprecated shorthand for a single
+        `{ id = "remote"; ... }` entry.
+      '';
+    };
+
+    defaultExecutor = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Executor id new (and legacy, un-pinned) sessions are created on. Empty
+        falls back to the lone configured executor, else the local in-process pi.
+      '';
+    };
+
     defaultModel = lib.mkOption {
       type = lib.types.str;
       default = "gemma4:e4b";
@@ -770,6 +806,14 @@ in
       inherit (cfg) llmUrl;
       inherit (cfg) wsUrl;
       inherit (cfg) wsToken;
+      executors =
+        cfg.executors
+        ++ lib.optional (cfg.wsUrl != "") {
+          id = "remote";
+          url = cfg.wsUrl;
+          token = cfg.wsToken;
+        };
+      inherit (cfg) defaultExecutor;
       inherit (cfg) defaultModel;
       inherit (cfg) defaultProvider;
       piBin = lib.getExe piPkg;

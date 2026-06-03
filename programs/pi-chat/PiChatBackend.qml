@@ -10,6 +10,7 @@
 // socket — same NDJSON protocol the skill-config daemon publishes.
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtQml
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -70,6 +71,11 @@ Item {
       // pi locally; wsToken is the pre-shared `hello` secret.
       property string wsUrl: ""
       property string wsToken: ""
+      // Multi-homing: remote executors the panel attaches to at once; each chat
+      // session is pinned to one by its id. wsUrl/wsToken are the single-executor
+      // shorthand, folded into this list below.
+      property var executors: []
+      property string defaultExecutor: ""
     }
   }
 
@@ -121,16 +127,50 @@ Item {
   function signalApprove(token) { signalConfirm.approve(token); }
   function signalDeny(token) { signalConfirm.deny(token); }
 
-  // Single WebSocket connection to the configured remote executor
-  // (pi-sessiond). Null in local mode (wsUrl empty); each PiSession
-  // multiplexes over it by its daemon-assigned session id.
-  PiExecutor {
-    id: piExecutor
-    url: root.wsUrl
-    token: root.wsToken
-    active: root.wsUrl !== ""
+  // Multi-homing: the panel attaches to every configured executor at once and
+  // each PiSession routes over the one its entry is pinned to (design stage 4).
+  // `wsUrl`/`wsToken` remain a single-executor shorthand.
+  readonly property var executors: {
+    const list = (root._cfg.executors || []).slice();
+    if (list.length === 0 && root.wsUrl !== "")
+      list.push({ id: "remote", url: root.wsUrl, token: root.wsToken });
+    return list;
   }
-  readonly property var executor: root.wsUrl !== "" ? piExecutor : null
+  // Default executor for new/legacy sessions: the lone configured one (so an
+  // old single-wsUrl deployment keeps putting sessions there), else "" = the
+  // local in-process pi.
+  readonly property string defaultExecutorId: root._cfg.defaultExecutor || (executors.length === 1 ? executors[0].id : "")
+
+  property var _executorById: ({})
+  Instantiator {
+    id: executorPool
+    model: root.executors
+    delegate: PiExecutor {
+      required property var modelData
+      url: modelData.url
+      token: modelData.token || ""
+      active: modelData.url !== ""
+    }
+    onObjectAdded: root._rebuildExecutors()
+    onObjectRemoved: root._rebuildExecutors()
+  }
+
+  // Map each executor id to its live PiExecutor. Built from the model (so the
+  // id's type is known to the linter); objectAt(i) aligns with executors[i].
+  function _rebuildExecutors() {
+    const m = ({});
+    for (let i = 0; i < executorPool.count; i++) {
+      const obj = executorPool.objectAt(i);
+      if (obj && root.executors[i]) m[root.executors[i].id] = obj;
+    }
+    root._executorById = m;
+  }
+
+  // Resolve a session's executor id to its live PiExecutor (null = local pi).
+  function executorFor(id) {
+    if (!id) return null;
+    return root._executorById[id] || null;
+  }
 
   // ── sessions index ──
   // Plain-JS array so QML bindings re-evaluate on assignment.
@@ -194,7 +234,7 @@ Item {
     return String(t + r).slice(0, 21);
   }
 
-  function _freshSessionEntry(id, name) {
+  function _freshSessionEntry(id, name, executor) {
     return {
       id: id,
       name: name,
@@ -208,6 +248,8 @@ Item {
       // header surfaces a per-chat toggle that writes the opt-out
       // marker the extension reads at each hook entry.
       memoryEnabled: true,
+      // Which executor this chat is pinned to ("" / "local" = in-process pi).
+      executor: executor !== undefined ? executor : root.defaultExecutorId,
     };
   }
 
@@ -242,9 +284,9 @@ Item {
 
   // ── public IPC surface (used by Main.qml's IpcHandler) ──
 
-  function newSession(name) {
+  function newSession(name, executorId) {
     const id = _newId();
-    const entry = _freshSessionEntry(id, (name && String(name).trim()) || ("Chat " + (sessionsList.length + 1)));
+    const entry = _freshSessionEntry(id, (name && String(name).trim()) || ("Chat " + (sessionsList.length + 1)), executorId);
     _ensureSessionDirs(entry.id, entry.workspacePath);
     sessionsList = sessionsList.concat([entry]);
     activeSessionId = id;
@@ -584,7 +626,7 @@ Item {
           memoryDbDir: Qt.binding(() => root.memoryDbDir),
           memoryHfHome: Qt.binding(() => root.memoryHfHome),
           sandboxBinds: Qt.binding(() => root.sandboxBinds),
-          executor: Qt.binding(() => root.executor),
+          executor: Qt.binding(() => root.executorFor(s.executor !== undefined ? s.executor : root.defaultExecutorId)),
         });
         _registerSession(obj);
       } else {
