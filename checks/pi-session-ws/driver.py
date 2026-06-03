@@ -22,6 +22,7 @@ import sys
 import time
 
 EXPECTED = "Hello, world!"
+CAUGHT_UP = "Caught up!"
 TOKEN = "ws-check-secret"
 
 
@@ -161,10 +162,22 @@ def main():
 
         ipc("send", "hi")
 
+        # Turn 1 streams live over the first connection.
         if not wait_until(lambda: EXPECTED in ipc("reply"), timeout_s=30):
-            die(f"reply never streamed over WS (reply={ipc('reply')!r}, count={ipc('msgCount')})")
+            die(f"turn 1 never streamed over WS (reply={ipc('reply')!r}, count={ipc('msgCount')})")
 
-        sys.stderr.write("PASS: panel created a session and streamed a reply over WebSocket\n")
+        # The fake daemon buffers a turn the client MISSES, then drops the
+        # connection. The panel must observe the drop, reconnect, re-attach with
+        # lastSeq, and replay the missed turn (reconnect-with-history).
+        if not wait_until(lambda: ipc("connected") == "false", timeout_s=15):
+            die("panel never saw the executor connection drop")
+        if not wait_until(lambda: ipc("connected") == "true", timeout_s=15):
+            die("panel never reconnected to the executor")
+        if not wait_until(lambda: CAUGHT_UP in ipc("reply"), timeout_s=30):
+            die(f"panel never caught up to the missed turn (reply={ipc('reply')!r})")
+
+        sys.stderr.write(
+            "PASS: panel streamed a reply, survived a drop, and caught up on reconnect\n")
     finally:
         qs.terminate()
         try:

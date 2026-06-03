@@ -575,6 +575,14 @@ QtObject {
     _rejectInflight("executor disconnected");
   }
 
+  // WS mode: the executor reconnected and re-attached this session. The daemon
+  // replays the events missed while we were gone (attach lastSeq); resume
+  // sending and flush any commands buffered during the outage.
+  function _onExecutorReattached() {
+    _wsAttached = true;
+    _wsFlush();
+  }
+
   function _handleEvent(ev) {
     switch (ev.type) {
     case "agent_start":

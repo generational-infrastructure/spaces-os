@@ -3,17 +3,22 @@
 
 Speaks just enough of the §12 envelope protocol to exercise the panel's
 WebSocket transport (PiExecutor + PiSession) without a real daemon, pi, or
-LLM:
+LLM — including reconnect-with-history:
 
   hello          -> welcome
-  create_session -> attached {sessionId}
+  create_session -> attached {sessionId, seq:0}
   command{prompt}-> a stream of event{payload: pi event} envelopes carrying
-                    text_delta deltas that concatenate to "Hello, world!",
-                    terminated by agent_end.
+                    text_delta deltas that concatenate to "Hello, world!"
+                    (terminated by agent_end). Each event is also buffered with
+                    a monotonic seq. Then a SECOND turn ("Caught up!") is
+                    buffered but NOT sent, and the connection is dropped — as if
+                    a turn streamed while the client was away.
+  attach {lastSeq} (on the reconnect) -> replay every buffered event with
+                    seq > lastSeq, so the panel catches up to the turn it
+                    missed (design §5: warm reconnect).
 
-The payloads are pi's real stdout event shapes (captured from a live run), so
-they drive PiSession._handleMessageUpdate exactly as the daemon's forwarded
-events would. Binds 127.0.0.1:<argv[1]>.
+Per-session state (seq + full event buffer) lives module-level so it survives
+across the dropped/reconnected connections. Binds 127.0.0.1:<argv[1]>.
 """
 
 import asyncio
@@ -22,19 +27,33 @@ import sys
 
 import websockets
 
-CHUNKS = ["Hello", ", ", "world", "!"]
+CHUNKS = ["Hello", ", ", "world", "!"]      # turn 1 (streamed live)
+CATCHUP = ["Caught", " up", "!"]            # turn 2 (missed; replayed on reattach)
 TOKEN = sys.argv[2] if len(sys.argv) > 2 else ""
+
+# sid -> {"seq": int, "buffer": [(seq, payload)]}, persisted across connections.
+SESSIONS = {}
+
+
+def turn_events(chunks):
+    yield {"type": "agent_start"}
+    yield {"type": "message_update",
+           "assistantMessageEvent": {"type": "text_start", "contentIndex": 0}}
+    acc = ""
+    for c in chunks:
+        acc += c
+        yield {"type": "message_update",
+               "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": c}}
+    yield {"type": "message_update",
+           "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": acc}}
+    yield {"type": "agent_end",
+           "messages": [{"role": "assistant", "content": [{"type": "text", "text": acc}]}]}
 
 
 async def handler(ws, *_):
-    seq = 0
-
-    async def event(sid, payload):
-        nonlocal seq
-        seq += 1
-        await ws.send(
-            json.dumps({"v": 1, "kind": "event", "sessionId": sid, "seq": seq, "payload": payload})
-        )
+    async def send_event(sid, seq, payload):
+        await ws.send(json.dumps(
+            {"v": 1, "kind": "event", "sessionId": sid, "seq": seq, "payload": payload}))
 
     async for raw in ws:
         try:
@@ -48,32 +67,46 @@ async def handler(ws, *_):
                 await ws.send(json.dumps({"v": 1, "kind": "error", "error": "unauthorized"}))
                 await ws.close()
                 return
-            await ws.send(
-                json.dumps({"v": 1, "kind": "welcome", "connectionId": "c1", "caps": {}})
-            )
+            await ws.send(json.dumps(
+                {"v": 1, "kind": "welcome", "connectionId": "c1", "caps": {}}))
+
         elif kind == "create_session":
-            await ws.send(
-                json.dumps({"v": 1, "kind": "attached", "sessionId": "s1", "seq": 0})
-            )
+            SESSIONS["s1"] = {"seq": 0, "buffer": []}
+            await ws.send(json.dumps(
+                {"v": 1, "kind": "attached", "sessionId": "s1", "seq": 0}))
+
+        elif kind == "attach":
+            sid = msg.get("sessionId")
+            last = msg.get("lastSeq") or 0
+            st = SESSIONS.get(sid)
+            await ws.send(json.dumps(
+                {"v": 1, "kind": "attached", "sessionId": sid, "seq": st["seq"] if st else 0}))
+            if st:
+                for seq, payload in st["buffer"]:
+                    if seq > last:
+                        await send_event(sid, seq, payload)
+
         elif kind == "command":
             sid = msg.get("sessionId")
             payload = msg.get("payload") or {}
             if payload.get("type") != "prompt":
                 continue
-            await event(sid, {"type": "agent_start"})
-            await event(sid, {"type": "message_update",
-                              "assistantMessageEvent": {"type": "text_start", "contentIndex": 0}})
-            acc = ""
-            for c in CHUNKS:
-                acc += c
-                await event(sid, {"type": "message_update",
-                                  "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": c}})
+            st = SESSIONS.setdefault(sid, {"seq": 0, "buffer": []})
+            # Turn 1: stream live + buffer.
+            for ev in turn_events(CHUNKS):
+                st["seq"] += 1
+                st["buffer"].append((st["seq"], ev))
+                await send_event(sid, st["seq"], ev)
                 await asyncio.sleep(0.02)
-            await event(sid, {"type": "message_update",
-                              "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": acc}})
-            await event(sid, {"type": "agent_end",
-                              "messages": [{"role": "assistant",
-                                            "content": [{"type": "text", "text": acc}]}]})
+            # Give the driver a beat to observe turn 1, then buffer a turn the
+            # client will MISS and drop the connection. The panel must reconnect,
+            # re-attach with lastSeq, and replay it.
+            await asyncio.sleep(1.0)
+            for ev in turn_events(CATCHUP):
+                st["seq"] += 1
+                st["buffer"].append((st["seq"], ev))
+            await ws.close()
+            return
 
 
 async def main():
