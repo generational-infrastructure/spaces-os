@@ -1,8 +1,13 @@
-{ lib, ... }:
+{ config, lib, ... }:
 let
   kb = import ./keybinds.nix { inherit lib; };
 
-  modifier = kb.modifierDefault;
+  cfg = config.wayland.windowManager.sway;
+  # "Mod" -> the window-manager modifier (config.modifier, the native sway
+  # option). "SMod" -> the spaces command modifier (spaces.commandModifier),
+  # which defaults to the WM modifier but may be set independently.
+  wmModifier = cfg.config.modifier;
+  spacesModifier = config.spaces.commandModifier;
 
   # Neutral chords ("Mod+Shift+H") -> sway tokens: resolve the modifier,
   # lowercase single letters to xkb keysyms ("A" -> "a"), rename the few
@@ -14,7 +19,9 @@ let
   resolveToken =
     tok:
     if tok == "Mod" then
-      modifier
+      wmModifier
+    else if tok == "SMod" then
+      spacesModifier
     else
       keyRenames.${tok} or (if isSingleLetter tok then lib.toLower tok else tok);
   resolveChord = chord: lib.concatMapStringsSep "+" resolveToken (lib.splitString "+" chord);
@@ -61,30 +68,45 @@ let
   ) kb.defaults;
 in
 {
-  # Guard distro's own data: exactly one of spawn/action/command per bind.
-  assertions = lib.mapAttrsToList (chord: bind: {
-    assertion =
-      lib.count (x: x != null) [
-        (bind.spawn or null)
-        (bind.action or null)
-        (bind.command or null)
-      ] == 1;
-    message = "keybinds.nix defaults.\"${chord}\": set exactly one of spawn/action/command.";
-  }) kb.defaults;
+  options.spaces.commandModifier = lib.mkOption {
+    type = lib.types.str;
+    default = wmModifier;
+    defaultText = lib.literalExpression "config.wayland.windowManager.sway.config.modifier";
+    example = "Mod4";
+    description = ''
+      Modifier key for the spaces agent shortcuts (AI chat, quick-launch,
+      voice-to-text, screen lock, bar reload). Defaults to the window-manager
+      modifier (config.modifier), so the agent binds follow it. Override to pin
+      them independently -- e.g. set this to "Mod4" (Super) while window
+      management moves to "Mod1" (Alt) via config.modifier.
+    '';
+  };
 
-  wayland.windowManager.sway = {
-    enable = true;
-    config = {
-      # mkDefault so an importer overrides through the native option:
-      # config.keybindings."Mod4+Return" = "exec ghostty" wins for that
-      # chord while every other default survives; config.modifier is the
-      # single knob, sourced from keybinds.nix.
-      modifier = lib.mkDefault modifier;
-      keybindings = lib.mapAttrs (_chord: lib.mkDefault) rendered;
-      # No bar by default: home-manager ships a populated i3status bar
-      # otherwise, and bars stay the importer's business. Set at normal
-      # priority; importers re-add one with config.bars = lib.mkForce [ ].
-      bars = [ ];
+  config = {
+    # Guard distro's own data: exactly one of spawn/action/command per bind.
+    assertions = lib.mapAttrsToList (chord: bind: {
+      assertion =
+        lib.count (x: x != null) [
+          (bind.spawn or null)
+          (bind.action or null)
+          (bind.command or null)
+        ] == 1;
+      message = "keybinds.nix defaults.\"${chord}\": set exactly one of spawn/action/command.";
+    }) kb.defaults;
+
+    wayland.windowManager.sway = {
+      enable = true;
+      config = {
+        # mkDefault so an importer overrides through the native option:
+        # config.modifier = "Mod1" relocates every "Mod" bind, while
+        # spaces.commandModifier governs the "SMod" agent binds.
+        modifier = lib.mkDefault kb.modifierDefault;
+        keybindings = lib.mapAttrs (_chord: lib.mkDefault) rendered;
+        # No bar by default: home-manager ships a populated i3status bar
+        # otherwise, and bars stay the importer's business. Set at normal
+        # priority; importers re-add one with config.bars = lib.mkForce [ ].
+        bars = [ ];
+      };
     };
   };
 }

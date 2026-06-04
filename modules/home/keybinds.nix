@@ -5,20 +5,25 @@ let
   # modules/nixos/spaces-commands.nix (on PATH on every spaces host);
   # going through them means a failed shortcut posts a desktop
   # notification instead of silently doing nothing.
+  #
+  # These agent shortcuts use the "SMod" token (the spaces command modifier),
+  # not "Mod" (the window-manager modifier), so a downstream config can relocate
+  # just the agent binds -- e.g. keep them on Super while window management moves
+  # to Alt. SMod defaults to Mod; see modules/home/sway.nix.
   spawnDefaults = {
-    "Mod+A" = {
+    "SMod+A" = {
       spawn = "spaces-chat-toggle";
       description = "Toggle AI Chat";
     };
-    "Mod+Slash" = {
+    "SMod+Slash" = {
       spawn = "spaces-chat-quick-launch";
       description = "Quick-launch Agent";
     };
-    "Mod+S" = {
+    "SMod+S" = {
       spawn = "spaces-voice-record-toggle";
       description = "Voice to Text";
     };
-    "Mod+L" = {
+    "SMod+L" = {
       spawn = "spaces-screen-lock";
       description = "Lock screen";
     };
@@ -26,7 +31,7 @@ let
       spawn = "spaces-screen-lock";
       description = "Lock screen";
     };
-    "Mod+Shift+N" = {
+    "SMod+Shift+N" = {
       spawn = "spaces-bar-reload";
       description = "Reload bar";
     };
