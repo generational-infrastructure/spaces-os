@@ -135,3 +135,68 @@ test("unknown events are ignored", () => {
   expect(withPiEvent(s, "garbage")).toEqual(s);
   expect(withPiEvent(s, null)).toEqual(s);
 });
+
+function userMessageStart(text: string) {
+  return {
+    type: "message_start",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    },
+  };
+}
+
+test("message_start with role=user from a sibling client renders a new user bubble", () => {
+  // We had been mid-conversation: a prior turn finished. A sibling client
+  // typed; the daemon emits a user message_start. We render it.
+  let s = withUserPrompt(emptyState(), "hi");
+  s = withPiEvent(s, { type: "agent_start" });
+  s = withPiEvent(s, {
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", delta: "hello!" },
+  });
+  s = withPiEvent(s, { type: "agent_end" });
+
+  s = withPiEvent(s, userMessageStart("sibling-typed this"));
+  expect(s.messages.map((m) => [m.role, m.text])).toEqual([
+    ["user", "hi"],
+    ["assistant", "hello!"],
+    ["user", "sibling-typed this"],
+  ]);
+});
+
+test("message_start matching the originator's optimistic bubble dedups", () => {
+  // We just optimistically rendered our own prompt; the daemon echoes the
+  // committed user message back via message_start. Don't double-render.
+  let s = withUserPrompt(emptyState(), "hello there");
+  s = withPiEvent(s, userMessageStart("hello there"));
+  expect(s.messages).toEqual([
+    { role: "user", text: "hello there", streaming: false },
+  ]);
+});
+
+test("message_start with multi-part text content concatenates", () => {
+  const s = withPiEvent(emptyState(), {
+    type: "message_start",
+    message: {
+      role: "user",
+      content: [
+        { type: "text", text: "first line" },
+        { type: "image", url: "data:..." },
+        { type: "text", text: "second line" },
+      ],
+    },
+  });
+  expect(s.messages).toEqual([
+    { role: "user", text: "first line\nsecond line", streaming: false },
+  ]);
+});
+
+test("message_start with role=assistant is a no-op", () => {
+  const s = withPiEvent(emptyState(), {
+    type: "message_start",
+    message: { role: "assistant", content: [{ type: "text", text: "x" }] },
+  });
+  expect(s.messages).toEqual([]);
+});

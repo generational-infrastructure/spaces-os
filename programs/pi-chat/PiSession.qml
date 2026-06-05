@@ -641,14 +641,21 @@ QtObject {
       _assistantLastTextBubbleId = "";
       break;
 
-    // Lifecycle markers from pi >=0.70. The chat panel does not need
-    // per-turn/per-message bracket events — text content arrives via
-    // message_update, finalisation via agent_end — but pi emits these
-    // around user message echoes and assistant turns, so silently
-    // accept them instead of spamming the journal.
+    // Lifecycle markers from pi >=0.70. Bracket events around every
+    // committed message (user *and* assistant). For user messages we mirror
+    // pi's content into a panel bubble so *sibling* clients (n:m sync)
+    // see what was typed in a different client; the originator dedups
+    // against its own optimistic bubble added in send(). Assistant text
+    // arrives via message_update / text_delta so message_start/message_end
+    // for the assistant side stays a quiet bracket.
     case "turn_start":
     case "turn_end":
+      break;
+
     case "message_start":
+      if (ev.message && ev.message.role === "user") {
+        _mirrorRemoteUserMessage(ev.message);
+      }
       break;
 
     case "message_end":
@@ -957,6 +964,49 @@ QtObject {
       messages = out.concat(messages);
       _existingSessionFlag = true;
     }
+  }
+
+  // Append a user bubble from a pi message_start event when it didn't
+  // originate locally — i.e. another client (the PWA, another panel)
+  // attached to the same daemon session sent the prompt. The originating
+  // client's send() already added an optimistic "me" bubble; dedup by
+  // matching the most recent user bubble's text, scanning at most a 30s
+  // window so a legitimate identical prompt far later still renders.
+  function _mirrorRemoteUserMessage(message) {
+    const text = _extractUserMessageText(message);
+    if (!text) return;
+    const cutoff = _now() - 30000;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m || (m.ts || 0) < cutoff) break;
+      if (m.from === "me" && m.text === text) return; // own echo
+    }
+    _appendMessage({
+      id: "user-" + _now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36),
+      from: "me",
+      text: text,
+      ts: message.timestamp || _now(),
+      state: "sent",
+      tries: 0,
+      ack: "",
+      image: "",
+      replyTo: "",
+      type: "",
+    });
+  }
+
+  function _extractUserMessageText(message) {
+    if (!message) return "";
+    const c = message.content;
+    if (typeof c === "string") return c;
+    if (!Array.isArray(c)) return "";
+    let out = "";
+    for (const part of c) {
+      if (part && part.type === "text" && typeof part.text === "string") {
+        out += (out ? "\n" : "") + part.text;
+      }
+    }
+    return out.trim();
   }
 
   function _readImage(path) {

@@ -93,6 +93,47 @@ function withConfirmRequest(
   };
 }
 
+function extractUserText(message: Record<string, unknown>): string {
+  const c = message.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  let out = "";
+  for (const part of c) {
+    if (
+      isRecord(part) &&
+      part.type === "text" &&
+      typeof part.text === "string"
+    ) {
+      out += (out ? "\n" : "") + part.text;
+    }
+  }
+  return out.trim();
+}
+
+// Mirror a remote-originated user message into the local conversation.
+// The originating client added an optimistic `withUserPrompt` bubble in
+// sendPrompt(); dedup by matching the most recent user message's text so
+// we don't double-render our own echo while still picking up prompts sent
+// from a different client attached to the same daemon session.
+function withUserMessageStart(
+  state: ChatState,
+  message: Record<string, unknown>,
+): ChatState {
+  const text = extractUserText(message);
+  if (!text) return state;
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const m = state.messages[i];
+    if (m.role === "user") {
+      if (m.text === text) return state;
+      break;
+    }
+  }
+  return {
+    ...state,
+    messages: [...state.messages, { role: "user", text, streaming: false }],
+  };
+}
+
 // Fold one pi event (the envelope's `payload`) into the conversation.
 export function withPiEvent(state: ChatState, ev: unknown): ChatState {
   if (!isRecord(ev)) return state;
@@ -103,6 +144,10 @@ export function withPiEvent(state: ChatState, ev: unknown): ChatState {
       return finalizeStreaming({ ...state, typing: false });
     case "message_update":
       return withMessageUpdate(state, ev.assistantMessageEvent);
+    case "message_start":
+      return isRecord(ev.message) && ev.message.role === "user"
+        ? withUserMessageStart(state, ev.message)
+        : state;
     case "extension_ui_request":
       return str(ev.method) === "confirm"
         ? withConfirmRequest(state, ev)
