@@ -147,10 +147,20 @@ Item {
     model: root.executors
     delegate: PiExecutor {
       required property var modelData
+      // The executor id from the inventory (kiwi / traube / …). Used so
+      // auto-imports stamp the panel entry with the right `executor`
+      // field — that's the id PiChatBackend.executorFor() resolves back
+      // to this delegate.
+      readonly property string inventoryId: modelData.id
       url: modelData.url
       token: modelData.token || ""
       tokenPath: modelData.tokenPath || ""
       active: modelData.url !== ""
+      // Every list-shaping push from this executor (the daemon broadcasts
+      // one on create_session / gcSession / cold→live attach, plus the
+      // one-shot reply to our own list_sessions on welcome) triggers a
+      // merge pass over the union of all executors' lists.
+      onRemoteSessionsChanged: root._importRemoteSessions()
     }
     onObjectAdded: root._rebuildExecutors()
     onObjectRemoved: root._rebuildExecutors()
@@ -251,6 +261,11 @@ Item {
       memoryEnabled: true,
       // Which executor this chat is pinned to ("" / "local" = in-process pi).
       executor: executor !== undefined ? executor : root.defaultExecutorId,
+      // Daemon-side session id, set after the executor's first
+      // create_session ack (or pre-populated when auto-imported from an
+      // executor's `sessions` push). Empty on freshly-minted local
+      // entries that haven't talked to a daemon yet.
+      daemonSessionId: "",
     };
   }
 
@@ -281,6 +296,61 @@ Item {
     const map = Object.assign({}, _sessionObjs);
     delete map[id];
     _sessionObjs = map;
+  }
+
+  // Called by PiSession after a fresh create_session ack assigns it a
+  // daemon-side id. Stamping the value on the persisted entry locks the
+  // (panel ↔ daemon) session correspondence so future panel restarts
+  // attach to the same daemon session (history continues) and so the
+  // daemon's broadcast of the new id is recognised as "already ours" by
+  // _importRemoteSessions instead of being auto-imported as a duplicate.
+  function _onDaemonSessionAssigned(panelId, daemonId) {
+    if (!panelId || !daemonId) return;
+    let dirty = false;
+    sessionsList = sessionsList.map(s => {
+      if (s.id !== panelId || s.daemonSessionId === daemonId) return s;
+      dirty = true;
+      return Object.assign({}, s, { daemonSessionId: daemonId });
+    });
+    if (dirty) _persist();
+  }
+
+  // Merge every executor's `remoteSessions` view (populated by the
+  // daemon's `list_sessions` reply on hello + every unsolicited
+  // `kind:"sessions"` push) into sessionsList. New ids — sessions
+  // created on this executor by *another* client (the PWA, another
+  // panel) — land as panel entries pinned to the right executor with
+  // daemonSessionId set, so the reconciler will `attach` (not create) on
+  // their first spawn and `get_messages` will replay the conversation.
+  function _importRemoteSessions() {
+    const known = new Set();
+    for (const s of sessionsList) {
+      if (s.daemonSessionId) known.add(s.daemonSessionId);
+    }
+    const adds = [];
+    for (let i = 0; i < executorPool.count; i += 1) {
+      const exec = executorPool.objectAt(i);
+      if (!exec) continue;
+      const inv = exec.inventoryId;
+      const list = exec.remoteSessions || [];
+      for (let j = 0; j < list.length; j += 1) {
+        const r = list[j];
+        if (!r || !r.id || known.has(r.id)) continue;
+        known.add(r.id);
+        const entry = _freshSessionEntry(
+          r.id,
+          r.name || ("[" + inv + "] " + r.id.slice(0, 8)),
+          inv
+        );
+        entry.daemonSessionId = r.id;
+        adds.push(entry);
+        _ensureSessionDirs(entry.id, entry.workspacePath);
+      }
+    }
+    if (adds.length > 0) {
+      sessionsList = sessionsList.concat(adds);
+      _persist();
+    }
   }
 
   // ── public IPC surface (used by Main.qml's IpcHandler) ──
@@ -782,6 +852,15 @@ Item {
           memoryHfHome: Qt.binding(() => root.memoryHfHome),
           sandboxBinds: Qt.binding(() => root.sandboxBinds),
           executor: Qt.binding(() => root.executorFor(s.executor !== undefined ? s.executor : root.defaultExecutorId)),
+          // Re-attach to an existing daemon session instead of minting a
+          // new one. Populated when this entry was either:
+          //   - auto-imported from an executor's remoteSessions push (a
+          //     session created on this executor by another client — the
+          //     PWA, another panel, …); or
+          //   - persisted after a previous panel run's create_session
+          //     (cross-restart history continuity).
+          // Empty string falls through to create_session on first spawn.
+          initialDaemonSessionId: s.daemonSessionId || "",
         });
         _registerSession(obj);
       } else {

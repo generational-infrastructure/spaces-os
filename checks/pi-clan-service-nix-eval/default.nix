@@ -66,6 +66,9 @@ let
     }).config;
 
   execDefaults = evalSettings serviceModule.roles.executor.interface { };
+  traubeOverrides = evalSettings serviceModule.roles.executor.interface {
+    webUi.enable = true;
+  };
   clientDefaults = evalSettings serviceModule.roles.client.interface { };
 
   rolesOnInstance = {
@@ -73,7 +76,7 @@ let
       settings = execDefaults;
       machines = {
         kiwi.settings = execDefaults;
-        traube.settings = execDefaults;
+        traube.settings = traubeOverrides;
       };
     };
     client = {
@@ -84,7 +87,12 @@ let
     };
   };
 
-  mkRoleModule =
+  # Stub mkExports — clan-core uses a scope-key wrapper for dedupe across
+  # roles × machines × instances; our test never reads .exports, so a
+  # minimal per-machine wrapper is enough to satisfy the option type.
+  mkExportsStub = machineName: v: { ${machineName} = v; };
+
+  mkRoleConfig =
     roleName: machineName:
     (evalPerInstance serviceModule.roles.${roleName}.perInstance {
       instanceName = "pi";
@@ -95,7 +103,10 @@ let
       inherit (rolesOnInstance.${roleName}.machines.${machineName}) settings;
       roles = rolesOnInstance;
       inherit meta;
-    }).nixosModule;
+      mkExports = mkExportsStub machineName;
+    });
+
+  mkRoleModule = roleName: machineName: (mkRoleConfig roleName machineName).nixosModule;
 
   # Stub the slice of `clan.core.vars.generators` that pi-sessiond / pi-chat /
   # our service read at NixOS-eval time. We only need `.files.<f>.path` to be
@@ -180,6 +191,8 @@ let
   kiwiSessiond = kiwiSystem.config.services.pi-sessiond;
   kiwiChat = kiwiSystem.config.services.pi-chat;
   traubeSessiond = traubeSystem.config.services.pi-sessiond;
+  traubeCaddy = traubeSystem.config.services.caddy;
+  kiwiCaddy = kiwiSystem.config.services.caddy;
 in
 pkgs.runCommand "pi-clan-service-nix-eval-test"
   {
@@ -197,6 +210,15 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
     traubeSessiondFirewall = if traubeSessiond.openFirewall then "true" else "false";
     traubeSessiondId = traubeSessiond.executorId;
     traubeTokenFile = toString traubeSessiond.tokenFile;
+
+    traubeServeWebUi = if traubeSessiond.serveWebUi then "true" else "false";
+    traubeCaddyEnabled = if traubeCaddy.enable then "true" else "false";
+    traubeCaddyVhosts = builtins.toJSON (lib.attrNames (traubeCaddy.virtualHosts or { }));
+    traubeOpenPorts = builtins.toJSON traubeSystem.config.networking.firewall.allowedTCPPorts;
+
+    kiwiServeWebUi = if kiwiSessiond.serveWebUi then "true" else "false";
+    kiwiCaddyEnabled = if kiwiCaddy.enable then "true" else "false";
+    kiwiOpenPorts = builtins.toJSON kiwiSystem.config.networking.firewall.allowedTCPPorts;
   }
   ''
     set -euo pipefail
@@ -237,6 +259,32 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
     [ "$traubeSessiondId" = "traube" ] \
       || { echo "FAIL: traube executorId = $traubeSessiondId"; exit 1; }
 
-    echo "OK: kiwi (loopback exec + client) + traube (dual-stack exec) auto-wired"
+    # Traube PWA: webUi.enable = true → serveWebUi + Caddy reverse-proxy
+    # at the auto-derived `agent-traube.<meta.domain>` hostname, exported
+    # so pinpox's pki + dm-dns services pick it up.
+    [ "$traubeServeWebUi" = "true" ] \
+      || { echo "FAIL: traube serveWebUi = $traubeServeWebUi"; exit 1; }
+    [ "$traubeCaddyEnabled" = "true" ] \
+      || { echo "FAIL: traube services.caddy.enable = $traubeCaddyEnabled"; exit 1; }
+    echo "$traubeCaddyVhosts" | jq -e '. | index("agent-traube.pin")' > /dev/null \
+      || { echo "FAIL: traube caddy vhosts = $traubeCaddyVhosts"; exit 1; }
+    # Caddy's HTTP(S) ports must be in traube's firewall — without them
+    # the vhost above is unreachable from anywhere off-machine.
+    echo "$traubeOpenPorts" | jq -e '. | index(80)' > /dev/null \
+      || { echo "FAIL: traube firewall open ports = $traubeOpenPorts (missing 80)"; exit 1; }
+    echo "$traubeOpenPorts" | jq -e '. | index(443)' > /dev/null \
+      || { echo "FAIL: traube firewall open ports = $traubeOpenPorts (missing 443)"; exit 1; }
+
+    # Kiwi has webUi.enable = false (default) — neither serveWebUi nor
+    # Caddy gets wired up by the role on this machine, and the firewall
+    # stays closed for 80/443.
+    [ "$kiwiServeWebUi" = "false" ] \
+      || { echo "FAIL: kiwi serveWebUi = $kiwiServeWebUi (expected false)"; exit 1; }
+    [ "$kiwiCaddyEnabled" = "false" ] \
+      || { echo "FAIL: kiwi caddy enabled = $kiwiCaddyEnabled (expected false)"; exit 1; }
+    echo "$kiwiOpenPorts" | jq -e '. | index(443) | not' > /dev/null \
+      || { echo "FAIL: kiwi firewall open ports = $kiwiOpenPorts (443 unexpectedly open)"; exit 1; }
+
+    echo "OK: kiwi (loopback exec + client) + traube (dual-stack exec + PWA at agent-traube.pin) auto-wired"
     touch "$out"
   ''

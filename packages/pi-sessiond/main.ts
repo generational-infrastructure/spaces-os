@@ -274,6 +274,12 @@ interface Session {
   resolvers: Map<string, (response: Record<string, unknown>) => void>;
 }
 const sessions = new Map<string, Session>();
+// All authenticated websockets, regardless of which session(s) they're
+// attached to. The session-list is a per-executor concern (not per-session),
+// so broadcasts of `kind: "sessions"` (design §12) fan out over this set —
+// not per-session `subscribers`. A conn lands here on a valid `hello`, leaves
+// on socket close.
+const authedConns = new Set<Conn>();
 
 function send(ws: Conn, msg: unknown): void {
   ws.send(JSON.stringify(msg));
@@ -293,6 +299,24 @@ function broadcast(session: Session, payload: unknown): void {
   session.buffer.push({ seq: session.seq, data });
   if (session.buffer.length > BUFFER_CAP) session.buffer.shift();
   for (const ws of session.subscribers) ws.send(data);
+}
+
+// Push the current session list to every authenticated client. Called on the
+// list-shaping transitions: a new session was created, a live session was
+// disposed (live → cold), or a cold session was just reloaded (cold →
+// live-idle). Idle browsers / panels get a live-updated tab strip without
+// polling. State changes inside a turn (live-idle ↔ live-busy ↔ parked) do
+// *not* broadcast here — the per-session event stream already covers those
+// for attached clients, and rebroadcasting the whole list on every step
+// would be chatty.
+function broadcastSessionsList(): void {
+  if (authedConns.size === 0) return;
+  const data = JSON.stringify({
+    v: 1,
+    kind: "sessions",
+    sessions: listSessions(),
+  });
+  for (const ws of authedConns) ws.send(data);
 }
 
 // ---- session paths & metadata ---------------------------------------------
@@ -624,11 +648,14 @@ function isEvictable(session: Session): boolean {
 }
 
 // Dispose a session's in-process AgentSession; its committed jsonl persists, so
-// the next attach reloads it (cold). Only ever called on idle sessions.
+// the next attach reloads it (cold). Only ever called on idle sessions. The
+// session's listSessions state flips from "live-idle" back to "cold"; siblings
+// learn via the broadcast below.
 function gcSession(session: Session): void {
   sessions.delete(session.id);
   session.unsubscribe();
   session.agent.dispose();
+  broadcastSessionsList();
 }
 
 function enforceCeiling(): void {
@@ -856,6 +883,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     ws.data.authed = true;
+    authedConns.add(ws);
     send(ws, {
       v: 1,
       kind: "welcome",
@@ -884,6 +912,9 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         sessionId: session.id,
         seq: session.seq,
       });
+      // Fan the new entry out to every authenticated client so siblings'
+      // tab strips refresh without polling (design §12 "n:m clients").
+      broadcastSessionsList();
       return;
     }
     case "list_sessions": {
@@ -896,8 +927,8 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;
       }
-      const session =
-        sessions.get(sessionId) ?? (await resumeSession(sessionId));
+      const live = sessions.get(sessionId);
+      const session = live ?? (await resumeSession(sessionId));
       if (!session) {
         send(ws, { v: 1, kind: "error", error: "no such session" });
         return;
@@ -913,6 +944,9 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       for (const ev of session.buffer) {
         if (ev.seq > lastSeq) ws.send(ev.data);
       }
+      // Cold → live-idle is a list-shaping change: the session's state moves
+      // from "cold" to "live-idle" for everyone else's view. Refresh siblings.
+      if (!live) broadcastSessionsList();
       return;
     }
     case "detach": {
@@ -987,6 +1021,7 @@ Bun.serve<ConnData>({
     },
     close(ws) {
       for (const session of sessions.values()) session.subscribers.delete(ws);
+      authedConns.delete(ws);
     },
   },
 });

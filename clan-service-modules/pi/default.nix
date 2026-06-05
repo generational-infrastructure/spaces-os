@@ -39,6 +39,7 @@
   manifest.name = "pi";
   manifest.description = "Spaces OS pi: pi-sessiond executor (LLM + PI Harness) + pi-chat panel client";
   manifest.categories = [ "AI" ];
+  manifest.exports.out = [ "endpoints" ];
   manifest.readme = ''
     Spaces OS `pi` clan service — the remote-pi *executor* (`pi-sessiond`,
     an "LLM + PI" Harness embedding pi via its SDK over a token-auth
@@ -157,6 +158,27 @@
               '';
             };
           };
+
+          webUi = {
+            enable = lib.mkEnableOption ''
+              serving the pi-web PWA from this executor and exposing it
+              at a stable clan hostname via a Caddy reverse proxy
+            '';
+            host = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "agent-foo.pin";
+              description = ''
+                Hostname the PWA is reachable at when `webUi.enable = true`.
+                `null` (the default) auto-derives `agent-<machineName>.<meta.domain>`
+                — a per-host convention that scales to several executors
+                sharing one clan. The hostname is exported via
+                `manifest.exports.endpoints.hosts`, so the `pki` and
+                `dm-dns` clan services auto-issue its certificate and
+                distribute its CNAME.
+              '';
+            };
+          };
         };
       };
 
@@ -165,10 +187,23 @@
         settings,
         roles,
         machine,
+        meta,
+        mkExports,
         instanceName,
         ...
       }:
+      let
+        effectiveWebUiHost =
+          if settings.webUi.host != null then settings.webUi.host else "agent-${machine.name}.${meta.domain}";
+      in
       {
+        # Endpoint export — picked up by pinpox's `pki` and `dm-dns` clan
+        # services: the cert for `effectiveWebUiHost` is auto-issued by
+        # the local Caddy and a CNAME for it is distributed cluster-wide.
+        exports = mkExports {
+          endpoints.hosts = if settings.webUi.enable then [ effectiveWebUiHost ] else [ ];
+        };
+
         nixosModule =
           {
             config,
@@ -248,7 +283,26 @@
                   else
                     null;
               };
+              serveWebUi = settings.webUi.enable;
             };
+
+            # Caddy reverse-proxy in front of the daemon's HTTP/WS port for
+            # the PWA's stable hostname (TLS terminated by Caddy with the
+            # pki-issued cert; Caddy 2 passes WS upgrades through verbatim,
+            # so the same vhost serves the static assets *and* the live WS
+            # the PWA opens against same-origin).
+            services.caddy = lib.mkIf settings.webUi.enable {
+              enable = true;
+              virtualHosts."${effectiveWebUiHost}".extraConfig =
+                "reverse_proxy 127.0.0.1:${toString settings.port}";
+            };
+
+            # Open the HTTP(S) ports Caddy listens on. 443 is the actual
+            # PWA entrypoint; 80 is Caddy's automatic HTTP→HTTPS redirect.
+            networking.firewall.allowedTCPPorts = lib.mkIf settings.webUi.enable [
+              80
+              443
+            ];
           };
       };
   };

@@ -110,7 +110,14 @@ QtObject {
   property bool _shouldRun: false     // intent (true between spawn() and stop())
   // ── WebSocket transport state (used when `executor` is set) ──
   readonly property bool _useWs: executor !== null
-  property string _daemonSessionId: ""  // id the executor assigned on create
+  // Set by PiChatBackend when constructing this session from a persisted
+  // entry that carries a `daemonSessionId` (auto-imported from a remote
+  // executor's session list, or persisted from this entry's previous
+  // create_session ack). Drives _wsSpawn to *attach* to that id instead
+  // of minting a new one — preserving the conversation across panel
+  // restarts and across PWA-created sessions.
+  property string initialDaemonSessionId: ""
+  property string _daemonSessionId: initialDaemonSessionId  // id the executor assigned on create / replays / imports
   property bool   _wsAttached: false
   property var    _wsPending: []         // commands buffered until attached
   // Request/response correlation. Each entry is { resolve, reject }; pi
@@ -329,6 +336,12 @@ QtObject {
       executor.createSession(opts).then(id => {
         if (!_shouldRun) { executor.detach(id); return; }
         _daemonSessionId = id;
+        // Persist on the panel entry so a panel restart re-attaches to the
+        // same daemon session (cross-restart history continuity) and so
+        // an unsolicited `sessions` push that includes this id is dedup'd
+        // against an existing entry instead of being auto-imported again.
+        if (backend && backend._onDaemonSessionAssigned)
+          backend._onDaemonSessionAssigned(sessionId, id);
         executor.subscribe(id, session);
         _wsAttached = true;
         _wsFlush();

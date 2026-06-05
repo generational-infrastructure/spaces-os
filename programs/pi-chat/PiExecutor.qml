@@ -34,7 +34,6 @@ QtObject {
   property string executorId: ""
 
   readonly property bool connected: _sock.status === WebSocket.Open && _welcomed
-
   // daemonSessionId -> PiSession (the subscriber fed incoming events)
   property var _subscribers: ({})
   property var _lastSeq: ({})        // daemonSessionId -> highest seq seen
@@ -42,6 +41,19 @@ QtObject {
   property var _pendingCreates: []   // FIFO of { resolve, reject }
   property var _connectWaiters: []   // callbacks fired once welcomed
   property bool _live: false         // drives the socket; toggled to reconnect
+
+  // Sessions known to the daemon. Populated by `list_sessions` on welcome,
+  // refreshed by every unsolicited `kind:"sessions"` push (the daemon fans
+  // one out on create_session / gcSession / cold→live attach). PiChatBackend
+  // merges this per-executor view into its tab strip so a session created
+  // on this executor by another client (the PWA, another panel) shows up
+  // here, and vice versa.
+  //
+  // Each entry is `{ id, name, executorId, state, updated }`; `state` is
+  // one of "cold" / "live-idle" / "live-busy" / "parked"; `updated` is the
+  // daemon's last-activity ms-since-epoch.
+  property var remoteSessions: []
+
   onActiveChanged: _live = active
   Component.onCompleted: _live = active
 
@@ -111,6 +123,11 @@ QtObject {
         }));
         _subscribers[sid]?._onExecutorReattached?.();
       }
+      // Bootstrap the per-executor session-list view. The daemon answers
+      // once with a `kind:"sessions"` envelope; the same envelope is then
+      // fanned out unsolicited on every list-shaping change (create / gc /
+      // cold→live), so this single request seeds + subscribes in one step.
+      _sock.sendTextMessage(JSON.stringify({ v: 1, kind: "list_sessions" }));
       break;
     }
     case "attached": {
@@ -136,6 +153,27 @@ QtObject {
       _subscribers[msg.sessionId]?._onSidechannelResolved?.(msg.id, msg.by);
       break;
     }
+    case "sessions": {
+      // Both the response to `list_sessions` and the unsolicited pushes
+      // arrive as the same shape; the merge is idempotent.
+      const list = msg.sessions || [];
+      const next = new Array(list.length);
+      for (let i = 0; i < list.length; i += 1) {
+        const s = list[i];
+        next[i] = {
+          id: s.id,
+          name: s.name || "",
+          // Daemons stamp every entry with their own executorId; fall back to
+          // ours so the panel can still route attaches when an older daemon
+          // omits the field.
+          executorId: s.executor || executor.executorId,
+          state: s.state || "cold",
+          updated: s.updated || 0,
+        };
+      }
+      remoteSessions = next;
+      break;
+    }
     case "error":
       Logger.w("PiExecutor", "server error", JSON.stringify(msg));
       break;
@@ -151,6 +189,9 @@ QtObject {
     for (const p of creates) p.reject("executor disconnected");
     // Keep _subscribers so they re-attach (with lastSeq) on the next welcome.
     for (const sid in _subscribers) _subscribers[sid]?._onExecutorClosed?.();
+    // Stale remote-list view goes away when the link drops; a fresh
+    // list_sessions on next welcome reseeds it.
+    remoteSessions = [];
     if (reason) Logger.w("PiExecutor", "closed", reason);
   }
 
