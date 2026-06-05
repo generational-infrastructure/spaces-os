@@ -96,6 +96,21 @@ function loadToken(): string {
 }
 const TOKEN = loadToken();
 
+// OpenRouter (optional): the module stages its API key via LoadCredential, so
+// it lands in $CREDENTIALS_DIRECTORY alongside the token. Empty = not enabled.
+function loadOpenRouterKey(): string {
+  const credDir = process.env.CREDENTIALS_DIRECTORY;
+  if (credDir) {
+    try {
+      return readFileSync(`${credDir}/openrouter-api-key`, "utf8").trim();
+    } catch {
+      // OpenRouter not configured for this executor.
+    }
+  }
+  return "";
+}
+const OPENROUTER_KEY = loadOpenRouterKey();
+
 // Bundled pi extensions loaded into every session (e.g. bash-confirm, which
 // drives the confirm side-channel). Colon-separated paths; the daemon does its
 // own provider discovery, so llama-swap-discover is intentionally not here.
@@ -140,6 +155,10 @@ function isSessionId(value: string): boolean {
 
 const authStorage = AuthStorage.create(`${AGENT_DIR}/auth.json`);
 authStorage.setRuntimeApiKey("local", "dummy");
+// OpenRouter is a built-in provider: setting its key surfaces its whole model
+// catalog in getAvailable() next to the local llama-swap provider, so clients
+// pick OpenRouter models from the same picker.
+if (OPENROUTER_KEY) authStorage.setRuntimeApiKey("openrouter", OPENROUTER_KEY);
 const modelRegistry = ModelRegistry.create(
   authStorage,
   `${AGENT_DIR}/models.json`,

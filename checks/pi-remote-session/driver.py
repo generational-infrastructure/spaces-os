@@ -234,12 +234,75 @@ async def run_resume(uri, token, session_id):
         print("OK")
 
 
+async def run_models(uri, token):
+    """Assert get_available_models surfaces the OpenRouter catalog (registered
+    in the daemon's AuthStorage from its API key) alongside the local provider."""
+    async with websockets.connect(uri) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "hello",
+                    "token": token,
+                    "client": {"name": "pi-remote-session-models"},
+                }
+            )
+        )
+        await recv_kind(ws, "welcome")
+
+        await ws.send(
+            json.dumps({"v": 1, "kind": "create_session", "name": "models-test"})
+        )
+        attached = await recv_kind(ws, "attached")
+        session_id = attached.get("sessionId")
+        if not session_id:
+            fail(f"attached envelope missing sessionId: {attached}")
+
+        await ws.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "command",
+                    "sessionId": session_id,
+                    "payload": {"type": "get_available_models"},
+                }
+            )
+        )
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
+            msg = json.loads(raw)
+            if msg.get("kind") == "error":
+                fail(f"server error awaiting models: {msg}")
+            if msg.get("kind") != "event":
+                continue
+            ev = msg.get("payload") or {}
+            if (
+                ev.get("type") == "response"
+                and ev.get("command") == "get_available_models"
+            ):
+                if ev.get("success") is not True:
+                    fail(f"get_available_models not success=true: {ev!r}")
+                models = (ev.get("data") or {}).get("models") or []
+                or_models = [m for m in models if m.get("provider") == "openrouter"]
+                if not or_models:
+                    providers = sorted({m.get("provider") for m in models})
+                    fail(f"OpenRouter not registered; providers={providers}")
+                print(f"OPENROUTER_MODELS={len(or_models)}")
+                break
+
+        print("OK")
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "resume":
         if len(args) < 4:
             fail("usage: driver.py resume <ws_url> <token> <sessionId>")
         coro = run_resume(args[1], args[2], args[3])
+    elif args and args[0] == "models":
+        if len(args) < 3:
+            fail("usage: driver.py models <ws_url> <token>")
+        coro = run_models(args[1], args[2])
     else:
         if len(args) < 2:
             fail("usage: driver.py <ws_url> <token> [executor-id]")

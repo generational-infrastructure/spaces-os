@@ -212,6 +212,23 @@ in
         `''${llmUrl}/v1/models`, so llama-swap-discover is not needed here.
       '';
     };
+
+    openrouter = {
+      enable = lib.mkEnableOption (
+        "the OpenRouter provider — its model catalog is registered in the "
+        + "daemon's AuthStorage and exposed to clients alongside the local provider"
+      );
+      apiKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          Path to a file holding the OpenRouter API key, loaded via systemd
+          `LoadCredential` (never copied into the store) and registered in the
+          daemon's AuthStorage so OpenRouter's models appear in the picker.
+          Required when `openrouter.enable = true`.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -219,6 +236,10 @@ in
       {
         assertion = (cfg.token != null) != (cfg.tokenFile != null);
         message = "services.pi-sessiond: set exactly one of `token` or `tokenFile`.";
+      }
+      {
+        assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
+        message = "services.pi-sessiond: set openrouter.apiKeyFile when openrouter.enable = true.";
       }
     ];
 
@@ -252,18 +273,25 @@ in
       // lib.optionalAttrs (cfg.token != null) {
         SPACES_SESSIOND_TOKEN = cfg.token;
       };
-      serviceConfig = {
-        ExecStart = lib.getExe' cfg.package "pi-sessiond";
-        Restart = "on-failure";
-        RestartSec = 2;
-        # Per-session jsonl + the daemon-owned session index live here.
-        StateDirectory = "pi-sessiond";
-        StateDirectoryMode = "0700";
-      }
-      // lib.optionalAttrs (cfg.tokenFile != null) {
-        # Green reads the token from $CREDENTIALS_DIRECTORY/token.
-        LoadCredential = [ "token:${toString cfg.tokenFile}" ];
-      };
+      serviceConfig =
+        let
+          # Both secrets are read by the daemon from $CREDENTIALS_DIRECTORY:
+          # the token (loadToken) and the OpenRouter key (loadOpenRouterKey).
+          creds =
+            lib.optional (cfg.tokenFile != null) "token:${toString cfg.tokenFile}"
+            ++ lib.optional cfg.openrouter.enable "openrouter-api-key:${toString cfg.openrouter.apiKeyFile}";
+        in
+        {
+          ExecStart = lib.getExe' cfg.package "pi-sessiond";
+          Restart = "on-failure";
+          RestartSec = 2;
+          # Per-session jsonl + the daemon-owned session index live here.
+          StateDirectory = "pi-sessiond";
+          StateDirectoryMode = "0700";
+        }
+        // lib.optionalAttrs (creds != [ ]) {
+          LoadCredential = creds;
+        };
     };
   };
 }

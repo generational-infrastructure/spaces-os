@@ -58,10 +58,14 @@ else
           defaultModel = "mock-model";
           defaultProvider = "local";
           openFirewall = true;
+          openrouter = {
+            enable = true;
+            apiKeyFile = pkgs.writeText "or-test-key" "sk-or-dummy-test";
+          };
         };
 
         # This executor's "llama-swap": a deterministic, offline mock so the
-        # pi subprocess streams a fixed reply instead of doing real inference.
+        # embedded pi streams a fixed reply instead of doing real inference.
         systemd.services.pi-remote-mock-llm = {
           description = "OpenAI-compatible mock LLM for the remote-pi session test";
           wantedBy = [ "multi-user.target" ];
@@ -77,14 +81,12 @@ else
         };
       };
 
-    nodes.client =
-      _:
-      {
-        virtualisation = {
-          memorySize = 1024;
-          cores = 1;
-        };
+    nodes.client = _: {
+      virtualisation = {
+        memorySize = 1024;
+        cores = 1;
       };
+    };
 
     testScript = ''
       import json
@@ -152,5 +154,17 @@ else
               "${clientPython}/bin/python3 ${driver} resume "
               + f"ws://server:${toString wsPort} ${token} {session_id}"
           )
+
+      with subtest("get_available_models surfaces the OpenRouter catalog"):
+          got = client.succeed(
+              "${clientPython}/bin/python3 ${driver} models "
+              + "ws://server:${toString wsPort} ${token}"
+          )
+          n = int(next(
+              (line.split("=", 1)[1] for line in got.splitlines()
+               if line.startswith("OPENROUTER_MODELS=")),
+              "0",
+          ))
+          assert n > 0, f"no OpenRouter models registered: {got!r}"
     '';
   }
