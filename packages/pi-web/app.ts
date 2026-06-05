@@ -18,7 +18,12 @@ import {
 } from "./reducer";
 
 type Envelope = Record<string, unknown>;
-interface SessionInfo { id: string; name: string; state: string; updated: number }
+interface SessionInfo {
+  id: string;
+  name: string;
+  state: string;
+  updated: number;
+}
 
 const TOKEN_KEY = "pi-web.token";
 
@@ -66,7 +71,12 @@ class Client {
     const sock = new WebSocket(wsUrl());
     this.sock = sock;
     sock.onopen = () =>
-      this.send({ v: 1, kind: "hello", token: this.token, client: { name: "pi-web" } });
+      this.send({
+        v: 1,
+        kind: "hello",
+        token: this.token,
+        client: { name: "pi-web" },
+      });
     sock.onmessage = (e) => this.onMessage(String(e.data));
     sock.onclose = () => {
       this.setStatus("reconnecting…");
@@ -76,7 +86,8 @@ class Client {
   }
 
   private send(env: Envelope): void {
-    if (this.sock && this.sock.readyState === WebSocket.OPEN) this.sock.send(JSON.stringify(env));
+    if (this.sock && this.sock.readyState === WebSocket.OPEN)
+      this.sock.send(JSON.stringify(env));
   }
 
   private onMessage(text: string): void {
@@ -93,11 +104,18 @@ class Client {
         // Reconnect: re-attach the active session and replay only what we missed
         // (seq > lastSeq), so the conversation continues without duplication.
         if (this.active) {
-          this.send({ v: 1, kind: "attach", sessionId: this.active, lastSeq: this.lastSeq });
+          this.send({
+            v: 1,
+            kind: "attach",
+            sessionId: this.active,
+            lastSeq: this.lastSeq,
+          });
         }
         break;
       case "sessions":
-        this.sessions = (Array.isArray(msg.sessions) ? (msg.sessions as SessionInfo[]) : [])
+        this.sessions = (
+          Array.isArray(msg.sessions) ? (msg.sessions as SessionInfo[]) : []
+        )
           .slice()
           .sort((a, b) => num(b.updated) - num(a.updated));
         // First connect with no active session: jump into the most recent one
@@ -202,7 +220,11 @@ class Client {
     const bar = $("#tabs");
     bar.replaceChildren();
     for (const s of this.sessions) {
-      const tab = el("button", `tab${s.id === this.active ? " active" : ""}`, s.name || s.id.slice(0, 6));
+      const tab = el(
+        "button",
+        `tab${s.id === this.active ? " active" : ""}`,
+        s.name || s.id.slice(0, 6),
+      );
       tab.onclick = () => this.attach(s.id);
       bar.append(tab);
     }

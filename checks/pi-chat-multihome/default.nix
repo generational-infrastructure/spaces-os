@@ -62,12 +62,12 @@ else
             {
               id = "alpha";
               url = "ws://127.0.0.1:${toString portA}";
-              token = token;
+              inherit token;
             }
             {
               id = "beta";
               url = "ws://127.0.0.1:${toString portB}";
-              token = token;
+              inherit token;
             }
           ];
           defaultExecutor = "alpha";

@@ -39,7 +39,10 @@ function str(v: unknown): string {
 }
 
 // Append/extend the trailing streaming assistant message, starting one if none.
-function intoStreaming(state: ChatState, mutate: (text: string) => string): ChatState {
+function intoStreaming(
+  state: ChatState,
+  mutate: (text: string) => string,
+): ChatState {
   const messages = state.messages.slice();
   const last = messages[messages.length - 1];
   if (last && last.role === "assistant" && last.streaming) {
@@ -75,7 +78,10 @@ function withMessageUpdate(state: ChatState, me: unknown): ChatState {
   }
 }
 
-function withConfirmRequest(state: ChatState, ev: Record<string, unknown>): ChatState {
+function withConfirmRequest(
+  state: ChatState,
+  ev: Record<string, unknown>,
+): ChatState {
   const id = str(ev.id);
   if (!id || state.confirms.some((c) => c.id === id)) return state;
   return {
@@ -98,7 +104,9 @@ export function withPiEvent(state: ChatState, ev: unknown): ChatState {
     case "message_update":
       return withMessageUpdate(state, ev.assistantMessageEvent);
     case "extension_ui_request":
-      return str(ev.method) === "confirm" ? withConfirmRequest(state, ev) : state;
+      return str(ev.method) === "confirm"
+        ? withConfirmRequest(state, ev)
+        : state;
     default:
       return state;
   }
@@ -106,16 +114,26 @@ export function withPiEvent(state: ChatState, ev: unknown): ChatState {
 
 // A prompt the user just sent (echoed locally before pi streams its reply).
 export function withUserPrompt(state: ChatState, text: string): ChatState {
-  return { ...state, messages: [...state.messages, { role: "user", text, streaming: false }] };
+  return {
+    ...state,
+    messages: [...state.messages, { role: "user", text, streaming: false }],
+  };
 }
 
 // Local resolution of a confirm (this client answered).
-export function withConfirmAnswer(state: ChatState, id: string, allowed: boolean): ChatState {
+export function withConfirmAnswer(
+  state: ChatState,
+  id: string,
+  allowed: boolean,
+): ChatState {
   return setConfirm(state, id, allowed ? "allowed" : "denied");
 }
 
 // Another mirrored client answered first (daemon `sidechannel_resolved`).
-export function withSidechannelResolved(state: ChatState, id: string): ChatState {
+export function withSidechannelResolved(
+  state: ChatState,
+  id: string,
+): ChatState {
   return setConfirm(state, id, "resolved", true);
 }
 
@@ -128,7 +146,9 @@ function setConfirm(
   return {
     ...state,
     confirms: state.confirms.map((c) =>
-      c.id === id && (!onlyPending || c.state === "pending") ? { ...c, state: next } : c,
+      c.id === id && (!onlyPending || c.state === "pending")
+        ? { ...c, state: next }
+        : c,
     ),
   };
 }

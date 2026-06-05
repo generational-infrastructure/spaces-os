@@ -32,8 +32,17 @@ async def handler(ws, *_):
     async def event(sid, payload):
         nonlocal seq
         seq += 1
-        await ws.send(json.dumps(
-            {"v": 1, "kind": "event", "sessionId": sid, "seq": seq, "payload": payload}))
+        await ws.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "event",
+                    "sessionId": sid,
+                    "seq": seq,
+                    "payload": payload,
+                }
+            )
+        )
 
     async for raw in ws:
         try:
@@ -44,30 +53,85 @@ async def handler(ws, *_):
 
         if kind == "hello":
             if TOKEN and msg.get("token") != TOKEN:
-                await ws.send(json.dumps({"v": 1, "kind": "error", "error": "unauthorized"}))
+                await ws.send(
+                    json.dumps({"v": 1, "kind": "error", "error": "unauthorized"})
+                )
                 await ws.close()
                 return
-            await ws.send(json.dumps({"v": 1, "kind": "welcome", "connectionId": "c1", "caps": {}}))
+            await ws.send(
+                json.dumps(
+                    {"v": 1, "kind": "welcome", "connectionId": "c1", "caps": {}}
+                )
+            )
         elif kind == "create_session":
             created += 1
-            await ws.send(json.dumps(
-                {"v": 1, "kind": "attached", "sessionId": f"sess-{PORT}-{created}", "seq": 0}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "v": 1,
+                        "kind": "attached",
+                        "sessionId": f"sess-{PORT}-{created}",
+                        "seq": 0,
+                    }
+                )
+            )
         elif kind == "attach":
-            await ws.send(json.dumps(
-                {"v": 1, "kind": "attached", "sessionId": msg.get("sessionId"), "seq": 0}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "v": 1,
+                        "kind": "attached",
+                        "sessionId": msg.get("sessionId"),
+                        "seq": 0,
+                    }
+                )
+            )
         elif kind == "command":
             sid = msg.get("sessionId")
             if (msg.get("payload") or {}).get("type") != "prompt":
                 continue
             await event(sid, {"type": "agent_start"})
-            await event(sid, {"type": "message_update",
-                              "assistantMessageEvent": {"type": "text_start", "contentIndex": 0}})
-            await event(sid, {"type": "message_update",
-                              "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": REPLY}})
-            await event(sid, {"type": "message_update",
-                              "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": REPLY}})
-            await event(sid, {"type": "agent_end",
-                              "messages": [{"role": "assistant", "content": [{"type": "text", "text": REPLY}]}]})
+            await event(
+                sid,
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
+                },
+            )
+            await event(
+                sid,
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "text_delta",
+                        "contentIndex": 0,
+                        "delta": REPLY,
+                    },
+                },
+            )
+            await event(
+                sid,
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "text_end",
+                        "contentIndex": 0,
+                        "content": REPLY,
+                    },
+                },
+            )
+            await event(
+                sid,
+                {
+                    "type": "agent_end",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": REPLY}],
+                        }
+                    ],
+                },
+            )
 
 
 async def main():
