@@ -10,7 +10,7 @@
 // The IpcHandler block exposes the verbs the test harnesses + the
 // `pi-chat-toggle` CLI drive: `send`, `sendFile`, `newSession`,
 // `selectSession`, `removeSession`, `sendTo`, `listSessions`,
-// `sessionMessages`, `lastAssistantText`, plus the visibility
+// `sessionMessages`, `lastAssistantText`, `sessionModel`, plus the
 // triad `show`/`hide`/`toggle`. They route into PiChatBackend
 // (sessions index, skill-config socket, signal-bridge socket) or
 // straight to `backend.chat` (the active PiSession).
@@ -43,10 +43,12 @@ PanelWindow {
   // windows, below screen-edge OSDs/lockscreens". Overlay would
   // hover over the bar too aggressively.
   WlrLayershell.layer: WlrLayer.Top
-  // Don't yank focus from whatever the user was doing when they
-  // summon the chat. The compose box explicitly requests focus when
-  // tapped — until then the underlying app keeps the keyboard.
-  WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+  // Grab keyboard focus while the panel is shown so the compose box is
+  // focused the instant it opens — summoning the chat means you want to
+  // type. Drop to None when hidden so we never hold the keyboard away
+  // from the underlying app once the panel is dismissed. The visibility
+  // flip flips `active`, which fires the focus handler in Panel.qml.
+  WlrLayershell.keyboardFocus: shell.visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
   color: Color.mSurface
   visible: false
@@ -116,6 +118,10 @@ PanelWindow {
     function newSession(name: string): string {
       return backend.newSession?.(name) ?? "";
     }
+    // Multi-homing: create a session pinned to a specific executor id.
+    function newSessionOn(name: string, executorId: string): string {
+      return backend.newSession?.(name, executorId) ?? "";
+    }
     function selectSession(id: string) {
       backend.selectSession?.(id);
     }
@@ -146,6 +152,15 @@ PanelWindow {
         if (m && m.from === "peer" && (m.type || "") === "" && m.text) return m.text;
       }
       return "";
+    }
+    // Model-picker probe. activeModel/models are populated only from the
+    // daemon's get_state / get_available_models `response` events, so an empty
+    // result means the command-response layer was rejected by the client.
+    function sessionModel(id: string): string {
+      const map = backend._sessionObjs;
+      const obj = (id && map && map[id]) ? map[id] : backend.chat;
+      if (!obj) return "{}";
+      return JSON.stringify({ active: obj.activeModel || "", count: (obj.models || []).length });
     }
   }
 }

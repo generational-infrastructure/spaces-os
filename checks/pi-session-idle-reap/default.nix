@@ -33,7 +33,9 @@ pkgs.runCommand "pi-session-idle-reap-test"
     work=$TMPDIR/work
     mkdir -p "$work"
     export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml
+    # PiChatBackend instantiates PiExecutor, which imports QtWebSockets — it
+    # lives outside quickshell's bundled QML path, so add it explicitly.
+    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml:${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
     python3 ${./driver.py} \
       ${pkgs.lib.getExe piPkg} \
       ${pkgs.lib.getExe pkgs.quickshell} \

@@ -62,6 +62,32 @@ let
   shellDir = ../../../programs/pi-chat;
   shellName = "pi-chat";
 
+  # Executors the panel attaches to, with wsUrl/wsToken/wsTokenFile folded in as
+  # the single-executor "remote" shorthand. A token is either inline (`token`)
+  # or read from a file (`tokenFile`); the file is staged under
+  # /run/spaces-secrets (root:users 0640) and read by the panel at connect time,
+  # so the secret never lands in the world-readable config or the Nix store.
+  wsExecutors =
+    cfg.executors
+    ++ lib.optional (cfg.wsUrl != "") {
+      id = "remote";
+      url = cfg.wsUrl;
+      token = cfg.wsToken;
+      tokenFile = cfg.wsTokenFile;
+    };
+  tokenSecretPath = id: "/run/spaces-secrets/pi-chat-token-${id}";
+  fileTokenExecutors = lib.filter (e: e.tokenFile != null) wsExecutors;
+  # Config view: a file-backed executor advertises a `tokenPath` (read at
+  # runtime) and carries no inline token; inline-token executors pass through.
+  configExecutors = map (
+    e:
+    {
+      inherit (e) id url;
+      token = if e.tokenFile != null then "" else e.token;
+    }
+    // lib.optionalAttrs (e.tokenFile != null) { tokenPath = tokenSecretPath e.id; }
+  ) wsExecutors;
+
   # Materialize the chat shell into ~/.config/quickshell/pi-chat with
   # fresh mtimes (Qt qmlcache invalidation — see pi-chat.service).
   materializeShell = pkgs.writeShellScript "pi-chat-materialize" ''
@@ -308,6 +334,86 @@ in
       description = "Base URL of an OpenAI-compatible LLM server (without /v1 suffix).";
     };
 
+    wsUrl = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        WebSocket URL of a pi-sessiond executor (e.g. ws://server:8770).
+        When set, the panel attaches sessions over this connection instead
+        of spawning pi locally; empty keeps the local executor.
+      '';
+    };
+
+    wsToken = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Pre-shared `hello` token for the executor in `wsUrl`. Written into
+        the world-readable panel config — use only where that is acceptable
+        (tests / trusted LAN); a tokenFile indirection is a later refinement.
+      '';
+    };
+
+    wsTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Host path to a file holding the `hello` token for the executor in
+        `wsUrl`. Staged into /run/spaces-secrets (root:users 0640) and read by
+        the panel at connect time, so the token never lands in the
+        world-readable config or the Nix store. Mutually exclusive with
+        `wsToken`. Pass a runtime path (e.g. a sops-nix secret), not a store path.
+      '';
+    };
+
+    executors = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            id = lib.mkOption {
+              type = lib.types.str;
+              description = "Stable executor id; shown per session and used as create_session's target.";
+            };
+            url = lib.mkOption {
+              type = lib.types.str;
+              description = "pi-sessiond WebSocket URL (e.g. ws://server:8770).";
+            };
+            token = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "Pre-shared `hello` token for this executor.";
+            };
+            tokenFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.path;
+              default = null;
+              description = ''
+                Host path to a file holding this executor's `hello` token. Staged
+                into /run/spaces-secrets and read by the panel at connect time
+                (kept out of the world-readable config and the Nix store).
+                Mutually exclusive with `token`.
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = ''
+        Remote pi-sessiond executors the panel attaches to simultaneously; each
+        chat session is pinned to one by its `id` (multi-homing, design stage 4).
+        `wsUrl`/`wsToken` are a deprecated shorthand for a single
+        `{ id = "remote"; ... }` entry.
+      '';
+    };
+
+    defaultExecutor = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Executor id new (and legacy, un-pinned) sessions are created on. Empty
+        falls back to the lone configured executor, else the local in-process pi.
+      '';
+    };
+
     defaultModel = lib.mkOption {
       type = lib.types.str;
       default = "gemma4:e4b";
@@ -534,7 +640,15 @@ in
         assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
         message = "services.pi-chat.openrouter.apiKeyFile must be set when openrouter.enable = true.";
       }
-    ];
+      {
+        assertion = !(cfg.wsToken != "" && cfg.wsTokenFile != null);
+        message = "services.pi-chat: set at most one of `wsToken` or `wsTokenFile`.";
+      }
+    ]
+    ++ map (e: {
+      assertion = !(e.token != "" && e.tokenFile != null);
+      message = ''services.pi-chat.executors."${e.id}": set at most one of `token` or `tokenFile`.'';
+    }) wsExecutors;
 
     # Baseline bash-confirm allow-list. Set in the config block (not
     # via the option's `default`) so other modules' contributions
@@ -681,6 +795,10 @@ in
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
       restartTriggers = [ shellDir ];
+      # QtWebSockets lives outside quickshell's bundled QML path; quickshell's
+      # wrapper --prefixes its own paths onto NIXPKGS_QT6_QML_IMPORT_PATH, so
+      # this composes rather than clobbering.
+      environment.NIXPKGS_QT6_QML_IMPORT_PATH = "${pkgs.qt6.qtwebsockets}/lib/qt-6/qml";
       serviceConfig = {
         ExecStartPre = "${materializeShell}";
         ExecStart = "${pkgs.quickshell}/bin/quickshell -c ${shellName}";
@@ -750,29 +868,42 @@ in
     # then copies it into $CREDENTIALS_DIRECTORY for the pi process,
     # which `!cat $CREDENTIALS_DIRECTORY/openrouter-api-key` resolves
     # at request time. Pi reads the credential at request time.
-    systemd.services.spaces-secrets-load = lib.mkIf cfg.openrouter.enable {
-      description = "Stage pi-chat secrets for the user manager";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "local-fs.target" ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        UMask = "0027";
-      };
-      script = ''
-        set -eu
-        install -d -m 0750 -o root -g users /run/spaces-secrets
-        install -m 0640 -o root -g users \
-          ${cfg.openrouter.apiKeyFile} \
-          /run/spaces-secrets/openrouter-api-key
-      '';
-    };
+    systemd.services.spaces-secrets-load =
+      lib.mkIf (cfg.openrouter.enable || fileTokenExecutors != [ ])
+        {
+          description = "Stage pi-chat secrets for the user manager";
+          wantedBy = [ "multi-user.target" ];
+          after = [ "local-fs.target" ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            UMask = "0027";
+          };
+          script = ''
+            set -eu
+            install -d -m 0750 -o root -g users /run/spaces-secrets
+          ''
+          + lib.optionalString cfg.openrouter.enable ''
+            install -m 0640 -o root -g users \
+              ${cfg.openrouter.apiKeyFile} \
+              /run/spaces-secrets/openrouter-api-key
+          ''
+          + lib.concatMapStrings (e: ''
+            install -m 0640 -o root -g users \
+              ${e.tokenFile} \
+              ${tokenSecretPath e.id}
+          '') fileTokenExecutors;
+        };
 
     # Shell config file. The QML side reads this on startup so we
     # don't have to thread a dozen env vars through the user manager.
     # Symlink from a generation-pinned store path.
     environment.etc."spaces/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
       inherit (cfg) llmUrl;
+      inherit (cfg) wsUrl;
+      inherit (cfg) wsToken;
+      executors = configExecutors;
+      inherit (cfg) defaultExecutor;
       inherit (cfg) defaultModel;
       inherit (cfg) defaultProvider;
       piBin = lib.getExe piPkg;

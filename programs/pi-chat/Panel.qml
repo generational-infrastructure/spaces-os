@@ -97,10 +97,18 @@ Item {
         spacing: Style.marginXS
 
         NIconButton {
+          id: newSessionButton
           icon: "plus"
           tooltipText: root.tr("panel.new-session-tooltip")
           baseSize: Style.baseWidgetSize * 0.85
-          onClicked: root.backend?.newSession?.()
+          // One executor (or none): create directly on the default. Multiple
+          // (multi-homing): open the picker so the session can be pinned.
+          onClicked: {
+            if ((root.backend?.executors?.length || 0) > 1)
+              executorPickerPopup.visible ? executorPickerPopup.close() : executorPickerPopup.open();
+            else
+              root.backend?.newSession?.();
+          }
         }
 
         ListView {
@@ -132,7 +140,10 @@ Item {
             NText {
               id: tabLabel
               anchors.centerIn: parent
-              text: (tabDelegate.modelData.name || "chat") + (tabDelegate.unread > 0 ? "  •" : "")
+              text: (tabDelegate.modelData.name || "chat")
+                + ((tabDelegate.modelData.executor && (root.backend?.executors?.length || 0) > 1)
+                   ? " · " + tabDelegate.modelData.executor : "")
+                + (tabDelegate.unread > 0 ? "  •" : "")
               color: tabDelegate.isActive ? Color.mOnPrimary : Color.mOnSurface
               pointSize: Style.fontSizeS
               font.bold: tabDelegate.isActive
@@ -182,12 +193,13 @@ Item {
         popupHeight: 420
         baseSize: 0.85
         tooltip: root.tr("panel.models-tooltip")
-        // NComboBox expects [{key, name}]. We use "<provider>/<id>" as the
-        // stable key and name for now — pi doesn't expose a separate display
-        // name for models, just provider+id.
+        // NComboBox expects [{key, name}]. Key is the stable "<provider>/<id>";
+        // name prefixes the model with its source — the executor id for that
+        // executor's local provider ("[kiwi] …"), else the provider name
+        // ("[openrouter] …").
         model: (root.chat?.models ?? []).map(m => ({
           key: m.provider + "/" + m.id,
-          name: m.id + (m.reasoning ? "  ⚡" : ""),
+          name: "[" + (m.provider === "local" ? (root.chat?.executor?.executorId || "local") : m.provider) + "] " + m.id + (m.reasoning ? "  ⚡" : ""),
           provider: m.provider,
           modelId: m.id,
         }))
@@ -784,10 +796,10 @@ Item {
   }
 
   // Focus the compose box when the panel surface gains keyboard focus.
-  // On niri the layer-shell `active` flag flips true the instant the
-  // compositor routes keyboard input to us; that's the moment Qt can
-  // actually take focus. Doing it earlier races with the click that
-  // opened the panel.
+  // The shell requests Exclusive keyboard focus while visible, so the
+  // layer-shell `active` flag flips true as soon as the panel opens —
+  // no click needed. `active` is the moment Qt can actually take focus;
+  // doing it earlier (e.g. on Component.onCompleted) races the grab.
   Connections {
     target: root.Window.window
     ignoreUnknownSignals: true
@@ -905,6 +917,79 @@ Item {
             onTapped: {
               Settings.data[optionRow.modelData.key] = !optionRow.on;
               Settings.persist();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── New-session executor picker ────────────────────────────────────
+  // Multi-homing: when more than one executor is configured the + button
+  // opens this to pin a new session to a chosen executor (one executor =>
+  // create directly, see newSessionButton). Rows show the executor id, so
+  // no new translatable string is introduced (mirrors the tab's · label).
+  Popup {
+    id: executorPickerPopup
+    objectName: "executorPickerPopup"
+    x: newSessionButton ? newSessionButton.mapToItem(root, 0, 0).x : 0
+    y: newSessionButton ? newSessionButton.mapToItem(root, 0, 0).y + newSessionButton.height + Style.marginXS : 0
+    padding: Style.marginXS
+    implicitWidth: 200
+    closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+
+    background: Rectangle {
+      color: Color.mSurfaceVariant
+      radius: Style.iRadiusM
+      border.color: Color.mOutline
+      border.width: Style.borderS
+    }
+
+    contentItem: ColumnLayout {
+      spacing: 0
+
+      Repeater {
+        model: root.backend?.executors || []
+        delegate: Item {
+          id: execRow
+          required property var modelData
+          Layout.fillWidth: true
+          implicitHeight: Style.baseWidgetSize
+
+          Rectangle {
+            anchors.fill: parent
+            color: execTap.hovered ? Color.mHover : "transparent"
+            radius: Style.radiusS
+            Behavior on color {
+              ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
+            }
+          }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.marginS
+            anchors.rightMargin: Style.marginS
+            spacing: Style.marginS
+
+            NIcon {
+              icon: "plus"
+              pointSize: Style.fontSizeL
+              color: execTap.hovered ? Color.mOnHover : Color.mOnSurfaceVariant
+            }
+            NText {
+              Layout.fillWidth: true
+              text: execRow.modelData.id
+              pointSize: Style.fontSizeS
+              color: execTap.hovered ? Color.mOnHover : Color.mOnSurface
+              elide: Text.ElideRight
+            }
+          }
+
+          HoverHandler { id: execTap; cursorShape: Qt.PointingHandCursor }
+          TapHandler {
+            onTapped: {
+              root.backend?.newSession?.("", execRow.modelData.id);
+              executorPickerPopup.close();
             }
           }
         }

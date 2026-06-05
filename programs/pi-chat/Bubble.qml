@@ -334,7 +334,9 @@ Item {
       }
       NText {
         Layout.alignment: Qt.AlignRight
-        visible: (row.msg.confirmState ?? "pending") !== "pending"
+        // "resolved" (answered by another mirrored client) collapses to just
+        // the title — no buttons, and no allow/deny outcome to mislabel it.
+        visible: row.msg.confirmState === "allowed" || row.msg.confirmState === "denied"
         text: (row.msg.confirmState === "allowed")
           ? row.tr("bubble.confirm-allowed")
           : row.tr("bubble.confirm-denied")

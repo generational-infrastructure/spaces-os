@@ -114,7 +114,7 @@ else
           exit 1
           ;;
 
-        key|screenshot|move|click)
+        key|type|screenshot|move|click)
           export AGENT_VM_QMP="$qmp"
           exec python3 ${./qmp.py} "$cmd" "$@"
           ;;
@@ -132,6 +132,7 @@ else
         ssh [args...]      ssh into the guest (test@localhost:2223)
         key <chord>        send a synthetic key chord via QMP
                            (alt-a, ctrl-alt-t, shift-space, …)
+        type <text>        type a literal string via QMP
         screenshot <path>  save a PNG framebuffer dump via QMP
         move <x> <y>       warp the absolute pointer to pixel (x, y)
         click <x> <y> [b]  click button b (left/right/middle) at (x, y)

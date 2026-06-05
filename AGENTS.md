@@ -55,6 +55,44 @@ When screenshotting new UI, check text-vs-background contrast in
 every state (hover especially): foregrounds **MUST** use the matching
 `mOn…` palette entry (e.g. `Color.mOnHover` on `Color.mHover`).
 
+#### Two VMs (remote executor)
+
+When the change involves the **remote executor** (the panel driving a
+`pi-sessiond` over WebSocket rather than spawning pi locally), use
+`remote-agent-vm`. It boots both halves of the `pi-chat-remote` topology:
+server = the `pi-sessiond` executor (192.0.2.1, no desktop); client = the
+desktop panel (192.0.2.2), its `wsUrl` pinned at the server over a shared
+QEMU socket-multicast L2 link. State lands in `.remote-agent-vm/`.
+
+**Quote the flake ref.** fish/nushell treat `#` as a comment, so
+`nix run .#remote-agent-vm` silently degrades to `nix run .`. Always use
+`nix run '.#remote-agent-vm' -- …`.
+
+To click around by hand, `gui` opens two native QEMU windows:
+
+```
+nix run '.#remote-agent-vm' -- gui     # two GTK windows; Ctrl-C stops both
+# in the CLIENT window: Alt+A opens the panel, then click + type a prompt
+```
+
+For scripted / agent-driven runs, `run` boots both headless (QMP + VNC) and
+every verb takes a `<server|client>` selector:
+
+```
+pueue add -- nix run '.#remote-agent-vm' -- run   # background; headless
+nix run '.#remote-agent-vm' -- wait               # both answer ssh
+nix run '.#remote-agent-vm' -- click client 970 767
+nix run '.#remote-agent-vm' -- type  client 'hello from the remote executor'
+nix run '.#remote-agent-vm' -- click client 1247 767
+nix run '.#remote-agent-vm' -- screenshot client .remote-agent-vm/reply.png
+```
+
+In headless mode the niri key *chord* `alt-a` is unreliable through synthetic
+QMP — open the panel via `ssh client '… quickshell ipc -c pi-chat call
+pi-chat show'`, then drive it with `click`/`type` (a real Alt+A in the `gui`
+window works fine). Without KVM both VMs fall back to TCG, so allow a few
+minutes for the desktop to come up.
+
 ## Translations
 
 The chat panel's user-visible strings live in

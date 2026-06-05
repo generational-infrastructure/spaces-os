@@ -22,3 +22,6 @@ __pycache__/
 
 # agent-vm workdir (qcow2 + qmp.sock)
 .agent-vm/
+
+# remote-agent-vm workdir (server/client qcow2 + qmp.socks + serial logs)
+.remote-agent-vm/

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Stand-in for systemd-run inside the build sandbox (no systemd here). pi-sessiond
+# spawns pi via `systemd-run --pipe --quiet --collect [flags] --setenv=K=V … --
+# piBin …args`. Strip every flag, preserve --setenv assignments, and exec the
+# tail (the fake pi). Real confinement is covered by the VM tests; this E2E only
+# needs the wire protocol. Mirrors checks/pi-sessiond-sidechannel/systemd-run-stub.
+env_args=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --setenv=*)
+      env_args="$env_args ${1#--setenv=}"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+# shellcheck disable=SC2086
+exec env $env_args "$@"
