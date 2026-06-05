@@ -11,7 +11,7 @@
 #
 # A token-authenticated WebSocket transport (§12) in front of a registry of
 # in-process pi sessions. The daemon embeds pi via its SDK
-# (@mariozechner/pi-coding-agent), which ships inside the `pi` package at
+# (@earendil-works/pi-coding-agent), which ships inside the `pi` package at
 # lib/node_modules — so main.ts's import resolves from the pinned pi build via a
 # node_modules symlink, with no offline npm fetch. bash is sandboxed per command
 # through systemd-run (sandbox.ts); read/edit/write run in-process under the
@@ -21,7 +21,7 @@ let
     mkdir -p "$out"
     cp ${./main.ts} "$out/main.ts"
     cp ${./sandbox.ts} "$out/sandbox.ts"
-    # Resolve @mariozechner/pi-coding-agent (and its deps) from the pinned pi.
+    # Resolve @earendil-works/pi-coding-agent (and its deps) from the pinned pi.
     ln -s ${pi}/lib/node_modules "$out/node_modules"
   '';
 in

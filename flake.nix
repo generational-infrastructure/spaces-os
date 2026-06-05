@@ -8,7 +8,10 @@
     blueprint.inputs.systems.follows = "systems";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
-    llm-agents.url = "github:numtide/llm-agents.nix";
+    # Pinned to the 0.78.x (@earendil-works) line the deployed executors run.
+    # (HEAD of llm-agents.nix needs pnpm_11, absent in our nixpkgs; this rev is
+    # the one kiwi deploys.) Bump in lockstep with a nixpkgs that has its pnpm.
+    llm-agents.url = "github:numtide/llm-agents.nix/2296793afdc076c2fd495ac21b914c26a9f2bf0e";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     llm-agents.inputs.blueprint.follows = "blueprint";

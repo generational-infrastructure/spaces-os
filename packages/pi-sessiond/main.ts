@@ -2,7 +2,7 @@
 /**
  * pi-sessiond — remote-pi executor daemon (docs/remote-pi-design.md).
  *
- * Embeds pi via its SDK (@mariozechner/pi-coding-agent): one in-process
+ * Embeds pi via its SDK (@earendil-works/pi-coding-agent): one in-process
  * `AgentSession` per chat session. A token-authenticated WebSocket transport
  * (§12) fans each session's typed event stream out to attached clients in
  * seq-stamped envelopes, and routes inbound `command` payloads into the session
@@ -43,7 +43,7 @@ import {
   type ExtensionUIContext,
   ModelRegistry,
   SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { type BashSandboxConfig, buildBashSandboxArgv } from "./sandbox";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
