@@ -12,6 +12,10 @@ result-*
 # repo-local secrets — see .env.example
 .env
 
+# node
+node_modules/
+dist/
+
 # python
 __pycache__/
 
