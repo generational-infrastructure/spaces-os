@@ -188,6 +188,13 @@ Item {
   property var sessionsList: []        // [{id, name, workspacePath, trusted, model, createdAt, lastActiveAt, unread}]
   property string activeSessionId: ""
 
+  // ms-since-epoch cutoff that filters _importRemoteSessions. Sessions
+  // whose `updated` is ≤ this value are pre-existing daemon residue and
+  // stay parked on the daemon (still reachable on explicit attach, but
+  // not auto-added to sessionsList). Loaded/initialised by
+  // _loadFromAdapter; advanced by _importRemoteSessions on every import.
+  property double lastImportTime: 0
+
   // Active session state aggregated from the Repeater. Empty fallback
   // when no sessions exist so Panel.qml's bindings never read from
   // null without checks.
@@ -209,6 +216,14 @@ Item {
       property int version: 1
       property var sessions: []
       property string activeSessionId: ""
+      // Cutoff (ms since epoch) above which remoteSessions entries are
+      // eligible for auto-import. Initialised to Date.now() the first
+      // time this file is loaded without the field, so the executor's
+      // historical cold-session residue (every chat ever created on it)
+      // doesn't flood the tab strip on upgrade — and advanced to the
+      // highest `updated` we've imported so siblings created after that
+      // point come in, but the residue stays parked.
+      property double lastImportTime: 0
     }
     onLoaded: root._loadFromAdapter()
   }
@@ -228,12 +243,20 @@ Item {
       _ensureSessionDirs(sessionsList[0].id, sessionsList[0].workspacePath);
       _persist();
     }
+    const stored = root._sessions.lastImportTime || 0;
+    lastImportTime = stored > 0 ? stored : Date.now();
+    if (stored <= 0) _persist();
+    // An executor's `sessions` reply may have raced past this load with
+    // lastImportTime still at 0 (no-op then); replay the import now that
+    // the cutoff is durable.
+    _importRemoteSessions();
   }
 
   function _persist() {
     root._sessions.version = 1;
     root._sessions.sessions = sessionsList;
     root._sessions.activeSessionId = activeSessionId;
+    root._sessions.lastImportTime = lastImportTime;
     sessionsFile.writeAdapter();
   }
 
@@ -320,14 +343,23 @@ Item {
   // `kind:"sessions"` push) into sessionsList. New ids — sessions
   // created on this executor by *another* client (the PWA, another
   // panel) — land as panel entries pinned to the right executor with
-  // daemonSessionId set, so the reconciler will `attach` (not create) on
-  // their first spawn and `get_messages` will replay the conversation.
+  // daemonSessionId set, so the reconciler will `attach` (not create)
+  // on their first spawn and `get_messages` will replay history.
+  //
+  // Filtered by `lastImportTime`: anything whose `updated` is at or
+  // below the cutoff is pre-existing daemon residue (cold sessions
+  // accumulated by older runs, every chat ever created) and would
+  // otherwise carpet-bomb the tab strip on first attach. Live and
+  // newly-touched sessions still come through; the cutoff advances to
+  // the highest imported `updated` so each import only moves forward.
   function _importRemoteSessions() {
+    if (lastImportTime <= 0) return; // sessions.json not loaded yet
     const known = new Set();
     for (const s of sessionsList) {
       if (s.daemonSessionId) known.add(s.daemonSessionId);
     }
     const adds = [];
+    let newCutoff = lastImportTime;
     for (let i = 0; i < executorPool.count; i += 1) {
       const exec = executorPool.objectAt(i);
       if (!exec) continue;
@@ -336,6 +368,8 @@ Item {
       for (let j = 0; j < list.length; j += 1) {
         const r = list[j];
         if (!r || !r.id || known.has(r.id)) continue;
+        const updated = r.updated || 0;
+        if (updated <= lastImportTime) continue;
         known.add(r.id);
         const entry = _freshSessionEntry(
           r.id,
@@ -345,10 +379,12 @@ Item {
         entry.daemonSessionId = r.id;
         adds.push(entry);
         _ensureSessionDirs(entry.id, entry.workspacePath);
+        if (updated > newCutoff) newCutoff = updated;
       }
     }
     if (adds.length > 0) {
       sessionsList = sessionsList.concat(adds);
+      lastImportTime = newCutoff;
       _persist();
     }
   }
