@@ -193,12 +193,13 @@ Item {
         popupHeight: 420
         baseSize: 0.85
         tooltip: root.tr("panel.models-tooltip")
-        // NComboBox expects [{key, name}]. We use "<provider>/<id>" as the
-        // stable key and name for now — pi doesn't expose a separate display
-        // name for models, just provider+id.
+        // NComboBox expects [{key, name}]. Key is the stable "<provider>/<id>";
+        // name prefixes the model with its source — the executor id for that
+        // executor's local provider ("[kiwi] …"), else the provider name
+        // ("[openrouter] …").
         model: (root.chat?.models ?? []).map(m => ({
           key: m.provider + "/" + m.id,
-          name: m.id + (m.reasoning ? "  ⚡" : ""),
+          name: "[" + (m.provider === "local" ? (root.chat?.executor?.executorId || "local") : m.provider) + "] " + m.id + (m.reasoning ? "  ⚡" : ""),
           provider: m.provider,
           modelId: m.id,
         }))

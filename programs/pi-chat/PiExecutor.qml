@@ -29,6 +29,9 @@ QtObject {
   // of from the inline `token` (see _helloToken).
   property string tokenPath: ""
   property bool active: false
+  // The daemon's own executor id (welcome.caps.executor), surfaced so the UI
+  // can label this executor's local models, e.g. "[kiwi] <model>".
+  property string executorId: ""
 
   readonly property bool connected: _sock.status === WebSocket.Open && _welcomed
 
@@ -96,6 +99,7 @@ QtObject {
     switch (msg.kind) {
     case "welcome": {
       _welcomed = true;
+      executorId = (msg.caps && msg.caps.executor) || "";
       const waiters = _connectWaiters;
       _connectWaiters = [];
       for (const cb of waiters) cb();
