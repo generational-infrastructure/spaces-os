@@ -74,18 +74,27 @@ ComboBox {
     required property var modelData
     required property int index
     width: root.width
+    // Full label for this row, with the same key fallback the closed
+    // display uses. Shared by the contentItem and the truncation tooltip.
+    readonly property string fullName: delegateItem.modelData && delegateItem.modelData.name
+      ? delegateItem.modelData.name
+      : (delegateItem.modelData && delegateItem.modelData.key
+        ? delegateItem.modelData.key
+        : String(delegateItem.modelData))
     contentItem: NText {
-      text: delegateItem.modelData && delegateItem.modelData.name
-        ? delegateItem.modelData.name
-        : (delegateItem.modelData && delegateItem.modelData.key
-          ? delegateItem.modelData.key
-          : String(delegateItem.modelData))
+      id: delegateLabel
+      text: delegateItem.fullName
       pointSize: Style.fontSizeS
       color: root.highlightedIndex === delegateItem.index ? Color.mOnPrimary : Color.mOnSurface
     }
     background: Rectangle {
       color: root.highlightedIndex === delegateItem.index ? Color.mPrimary : "transparent"
     }
+    // A long model name elides to a trailing "…"; surface the full
+    // string on hover so the dropdown never permanently hides it.
+    ToolTip.visible: delegateLabel.truncated && delegateItem.hovered
+    ToolTip.text: delegateItem.fullName
+    ToolTip.delay: 300
   }
 
   contentItem: NText {

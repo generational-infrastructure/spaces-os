@@ -22,6 +22,7 @@
     "options-thinking-show": "Show thinking in chat",
     "options-tps-hide": "Hide inference speed",
     "options-tps-show": "Show inference speed",
+    "options-memory": "Long-term memory",
     "memory-on-tooltip": "Long-term memory: ON (click to disable for this chat)",
     "memory-off-tooltip": "Long-term memory: OFF (click to enable for this chat)",
     "memory-wipe-tooltip": "Wipe all long-term memory",

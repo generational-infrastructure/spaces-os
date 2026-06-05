@@ -165,7 +165,6 @@ Item {
       }
       ColumnLayout {
         spacing: 0
-        Layout.fillWidth: true
         NText {
           text: root.peerName
           pointSize: Style.fontSizeL
@@ -184,9 +183,9 @@ Item {
       // Model selector. PiChatBackend exposes the llama-swap-discovered list.
       NComboBox {
         id: modelCombo
-        // fillWidth so the combo absorbs whatever space is left after
-        // the icon / status block / icon-button row. Hard-coding a
-        // 420px minimum used to push siblings off the 480px panel.
+        // fillWidth so the combo claims the whole header width after the
+        // icon and name/status block — every other action moved into the
+        // "more" menu, so the dropdown gets nearly the full panel width.
         Layout.fillWidth: true
         Layout.alignment: Qt.AlignVCenter
         Layout.minimumWidth: 0
@@ -209,55 +208,9 @@ Item {
           if (item) root.chat.setModel(item.provider, item.id);
         }
       }
-      NIconButton {
-        icon: "search"
-        tooltipText: root.tr("panel.search-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        onClicked: { searchBar.visible = !searchBar.visible; if (searchBar.visible) searchField.forceActiveFocus(); }
-      }
-      // Per-session long-term-memory toggle. The active session owns
-      // the bool; the backend persists, writes the marker file the
-      // pi extension reads, and reflects back through chat.memoryEnabled.
-      NIconButton {
-        icon: (root.chat?.memoryEnabled ?? true) ? "brain" : "database-off"
-        tooltipText: (root.chat?.memoryEnabled ?? true)
-          ? root.tr("panel.memory-on-tooltip")
-          : root.tr("panel.memory-off-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        onClicked: {
-          const id = root.backend?.activeSessionId;
-          if (!id) return;
-          root.backend.setSessionMemoryEnabled(id, !(root.chat?.memoryEnabled ?? true));
-        }
-      }
-      // Wipe every stored memory item across all sessions. Destructive
-      // and irreversible, so the click only opens the confirm row
-      // below the header — the actual rm runs from the "Wipe" button
-      // there.
-      NIconButton {
-        icon: "eraser"
-        tooltipText: root.tr("panel.memory-wipe-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        onClicked: wipeConfirmBar.visible = true
-      }
-      NIconButton {
-        icon: "rotate"
-        tooltipText: root.tr("panel.reset-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        // chat.restart() clears the local bubble list and issues
-        // { type: "new_session" } to pi, which swaps in a fresh
-        // session in-place — same RPC process, empty history. The
-        // local clear keeps the panel from flashing stale bubbles
-        // while pi sets up the new session.
-        onClicked: {
-          if (!root.chat) return;
-          root.chat.restart();
-        }
-      }
-      // Options menu — gathers UI display toggles that don't deserve
-      // their own header slot. Pinned to the right end of the header
-      // (just before the relay dot) so the dedicated per-session
-      // actions stay grouped on the left.
+      // Overflow "more" menu: search, memory toggle, wipe and reset all
+      // live in optionsPopup now, keeping the header to just the model
+      // selector plus this button (and the relay status dot).
       NIconButton {
         id: optionsButton
         icon: "dots-vertical"
@@ -826,20 +779,77 @@ Item {
     onActivated: { searchBar.visible = true; searchField.forceActiveFocus(); }
   }
 
-  // ── Options popup ──────────────────────────────────────────────────
-  // Floats above the header from under the dots-vertical button. Each
-  // row is a clickable strip that flips a Settings flag. Popup keeps
-  // the close-on-outside-click behaviour without us wiring it.
+  // ── Options popup ("more" menu) ────────────────────────────────────
+  // The header's overflow menu: per-session actions (search, long-term
+  // memory toggle, wipe, restart) on top, then the persisted display
+  // toggles. Popup keeps close-on-outside-click for free.
+
+  // One clickable menu strip: leading icon, label, optional trailing
+  // check. `active` tints the icon (e.g. an enabled toggle); `showCheck`
+  // renders the ✓ when active. Emits activated() on tap — callers wire
+  // the behaviour, so this stays a dumb presentational row.
+  component OptionRow: Item {
+    id: optRow
+    property string iconName: ""
+    property string label: ""
+    property bool active: false
+    property bool showCheck: false
+    signal activated()
+
+    Layout.fillWidth: true
+    implicitHeight: Style.baseWidgetSize
+
+    Rectangle {
+      anchors.fill: parent
+      color: optRowHover.hovered ? Color.mHover : "transparent"
+      radius: Style.radiusS
+      Behavior on color {
+        ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
+      }
+    }
+
+    RowLayout {
+      anchors.fill: parent
+      anchors.leftMargin: Style.marginS
+      anchors.rightMargin: Style.marginS
+      spacing: Style.marginS
+
+      NIcon {
+        icon: optRow.iconName
+        pointSize: Style.fontSizeL
+        color: optRowHover.hovered
+          ? Color.mOnHover
+          : (optRow.active ? Color.mPrimary : Color.mOnSurfaceVariant)
+      }
+      NText {
+        Layout.fillWidth: true
+        text: optRow.label
+        pointSize: Style.fontSizeS
+        color: optRowHover.hovered ? Color.mOnHover : Color.mOnSurface
+        elide: Text.ElideRight
+      }
+      NText {
+        text: (optRow.showCheck && optRow.active) ? "✓" : ""
+        pointSize: Style.fontSizeS
+        color: optRowHover.hovered ? Color.mOnHover : Color.mPrimary
+      }
+    }
+
+    HoverHandler { id: optRowHover; cursorShape: Qt.PointingHandCursor }
+    TapHandler { onTapped: optRow.activated() }
+  }
+
   Popup {
     id: optionsPopup
     objectName: "optionsPopup"
-    // Anchor under the dots button. parent is `root`; map the button's
-    // position into root's coordinate space so the popup tracks even
-    // if the header layout reshuffles.
-    x: optionsButton ? optionsButton.mapToItem(root, 0, 0).x + optionsButton.width - implicitWidth : 0
-    y: optionsButton ? optionsButton.mapToItem(root, 0, 0).y + optionsButton.height + Style.marginXS : 0
+    // Parent to the button so x/y live in its own coordinate space and
+    // track it directly — mapping into root's space misplaced the popup.
+    // Right edges align; the menu opens just below the button.
+    parent: optionsButton
+    x: optionsButton.width - implicitWidth
+    y: optionsButton.height + Style.marginXS
     padding: Style.marginXS
-    implicitWidth: 220
+    implicitWidth: 320
     closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
 
     background: Rectangle {
@@ -852,6 +862,57 @@ Item {
     contentItem: ColumnLayout {
       spacing: 0
 
+      // Search: toggle the inline search bar and focus its field.
+      OptionRow {
+        iconName: "search"
+        label: root.tr("panel.search-tooltip")
+        onActivated: {
+          optionsPopup.close();
+          searchBar.visible = !searchBar.visible;
+          if (searchBar.visible) searchField.forceActiveFocus();
+        }
+      }
+      // Long-term-memory toggle. Backed by chat.memoryEnabled (the backend
+      // persists + writes the marker file pi reads), so it stays open to
+      // show the ✓ flip rather than closing like the action rows.
+      OptionRow {
+        readonly property bool memOn: root.chat?.memoryEnabled ?? true
+        iconName: memOn ? "brain" : "database-off"
+        label: root.tr("panel.options-memory")
+        active: memOn
+        showCheck: true
+        onActivated: {
+          const id = root.backend?.activeSessionId;
+          if (!id) return;
+          root.backend.setSessionMemoryEnabled(id, !memOn);
+        }
+      }
+      // Wipe all memory: destructive, so just reveal the confirm strip.
+      OptionRow {
+        iconName: "eraser"
+        label: root.tr("panel.memory-wipe-tooltip")
+        onActivated: {
+          optionsPopup.close();
+          wipeConfirmBar.visible = true;
+        }
+      }
+      // Restart: clear local bubbles and ask pi for a fresh session.
+      OptionRow {
+        iconName: "rotate"
+        label: root.tr("panel.reset-tooltip")
+        onActivated: {
+          optionsPopup.close();
+          if (root.chat) root.chat.restart();
+        }
+      }
+
+      NDivider {
+        Layout.fillWidth: true
+        Layout.topMargin: Style.marginXS
+        Layout.bottomMargin: Style.marginXS
+      }
+
+      // Persisted display toggles (UI-only Settings flags).
       Repeater {
         model: [
           {
@@ -869,55 +930,17 @@ Item {
             labelOff: "panel.options-tps-show",
           },
         ]
-        delegate: Item {
-          id: optionRow
+        delegate: OptionRow {
+          id: toggleRow
           required property var modelData
-          readonly property bool on: Settings.data[optionRow.modelData.key] === true
-          Layout.fillWidth: true
-          implicitHeight: Style.baseWidgetSize
-
-          Rectangle {
-            anchors.fill: parent
-            color: optionTap.hovered ? Color.mHover : "transparent"
-            radius: Style.radiusS
-            Behavior on color {
-              ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
-            }
-          }
-
-          RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: Style.marginS
-            anchors.rightMargin: Style.marginS
-            spacing: Style.marginS
-
-            NIcon {
-              icon: optionRow.on ? optionRow.modelData.iconOn : optionRow.modelData.iconOff
-              pointSize: Style.fontSizeL
-              color: optionTap.hovered
-                ? Color.mOnHover
-                : (optionRow.on ? Color.mPrimary : Color.mOnSurfaceVariant)
-            }
-            NText {
-              Layout.fillWidth: true
-              text: root.tr(optionRow.on ? optionRow.modelData.labelOn : optionRow.modelData.labelOff)
-              pointSize: Style.fontSizeS
-              color: optionTap.hovered ? Color.mOnHover : Color.mOnSurface
-              elide: Text.ElideRight
-            }
-            NText {
-              text: optionRow.on ? "✓" : ""
-              pointSize: Style.fontSizeS
-              color: optionTap.hovered ? Color.mOnHover : Color.mPrimary
-            }
-          }
-
-          HoverHandler { id: optionTap; cursorShape: Qt.PointingHandCursor }
-          TapHandler {
-            onTapped: {
-              Settings.data[optionRow.modelData.key] = !optionRow.on;
-              Settings.persist();
-            }
+          readonly property bool on: Settings.data[toggleRow.modelData.key] === true
+          iconName: on ? toggleRow.modelData.iconOn : toggleRow.modelData.iconOff
+          label: root.tr(on ? toggleRow.modelData.labelOn : toggleRow.modelData.labelOff)
+          active: on
+          showCheck: true
+          onActivated: {
+            Settings.data[toggleRow.modelData.key] = !on;
+            Settings.persist();
           }
         }
       }

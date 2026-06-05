@@ -28,7 +28,8 @@
     "options-thinking-hide": "Hide thinking in chat",
     "options-thinking-show": "Show thinking in chat",
     "options-tps-hide": "Hide inference speed",
-    "options-tps-show": "Show inference speed"
+    "options-tps-show": "Show inference speed",
+    "options-memory": "Pamięć długoterminowa"
   },
   "bubble": {
     "reply-tooltip": "Odpowiedz",
