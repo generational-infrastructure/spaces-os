@@ -23,7 +23,7 @@ cd "$REPO_ROOT"
 # Default paths — overridable via env vars for ad-hoc runs.
 WORKDIR=${WORKDIR:-"/tmp/spaces-installer-vm"}
 DISK=${DISK:-"$WORKDIR/disk.qcow2"}
-DISK_SIZE=${DISK_SIZE:-20G}
+DISK_SIZE=${DISK_SIZE:-30G}
 MEMORY=${MEMORY:-8192} # MiB; GNOME live + Calamares + niri toplevel realising during install needs headroom
 SMP=${SMP:-4}
 
