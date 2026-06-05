@@ -1,1 +1,2 @@
 singleton Logger 1.0 Logger.qml
+singleton ModelFrecency 1.0 ModelFrecency.qml

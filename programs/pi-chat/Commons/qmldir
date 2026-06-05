@@ -3,5 +3,6 @@ module Commons
 singleton Color 1.0 Color.qml
 singleton I18n 1.0 I18n.qml
 singleton Logger 1.0 Logger.qml
+singleton ModelFrecency 1.0 ModelFrecency.qml
 singleton Settings 1.0 Settings.qml
 singleton Style 1.0 Style.qml

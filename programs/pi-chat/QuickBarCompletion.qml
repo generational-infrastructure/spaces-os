@@ -91,7 +91,8 @@ Item {
 
   function _valueCandidates(prefix) {
     const out = [];
-    for (const m of root._models()) {
+    const sorted = ModelFrecency.sortModels(root._models(), m => (m.provider || "") + "/" + m.id);
+    for (const m of sorted) {
       if (m && m.id && String(m.id).indexOf(prefix) === 0)
         out.push({ value: m.id, label: m.id });
     }

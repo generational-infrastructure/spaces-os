@@ -276,6 +276,7 @@ QtObject {
 
   function setModel(provider, modelId) {
     modelPref = provider + "/" + modelId;
+    ModelFrecency.record(modelPref);
     needsPersist();
     if (_shouldRun) {
       _send({ type: "set_model", provider: provider, modelId: modelId });
@@ -291,6 +292,7 @@ QtObject {
   // process for the request to land in.
   function setModelAndWait(provider, modelId) {
     modelPref = provider + "/" + modelId;
+    ModelFrecency.record(modelPref);
     needsPersist();
     spawn();
     return _request({ type: "set_model", provider: provider, modelId: modelId });
