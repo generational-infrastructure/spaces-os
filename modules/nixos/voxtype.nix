@@ -1,10 +1,19 @@
-# Voice-to-text via voxtype (push-to-talk / toggle mode)
+# Voice-to-text via voxtype (push-to-talk / toggle mode).
 #
-# Installs voxtype with Vulkan acceleration (AMD/Intel GPU, no CUDA),
-# writes a system-wide default config, and creates a systemd user
-# service that starts with the graphical session.
+# The daemon runs through the per-app sandbox model
+# (`services.spaces.apps.voxtype-daemon`): isolated $HOME, hardened
+# systemd baseline, `audio.record` for the PipeWire mic socket,
+# `wayland` for the compositor connection, and crucially
+# `waylandSandbox = false` so the daemon can bind the
+# virtual-keyboard protocol that drives type-mode output (otherwise
+# wayland-app-context's security-context-v1 wrap would filter it).
 #
-# Keybinding: Mod+Space  (defined in niri.nix)
+# The user-facing CLI (`voxtype record toggle`) stays on the host
+# PATH and is invoked from the niri keybind; it locates the daemon
+# via systemd / pgrep and sends SIGUSR1/2. Signals cross the sandbox
+# boundary because we don't isolate the PID namespace.
+#
+# Keybinding: Mod+S  (defined in niri.nix)
 { inputs, ... }:
 {
   config,
@@ -74,7 +83,39 @@ in
     # System-wide default config; users can override via ~/.config/voxtype/config.toml.
     environment.etc."xdg/voxtype/config.toml".source = configToml;
 
-    # systemd user service — starts voxtype daemon with the graphical session.
+    # Per-app sandbox declaration. The launcher generated from this
+    # entry (`app-run-voxtype-daemon`) is what the systemd user unit
+    # below execs — same hardened baseline as every other app, plus
+    # the voxtype-specific bits.
+    services.spaces.apps.voxtype-daemon = {
+      package = voxtypePkg;
+      args = [
+        "-c"
+        "${configToml}"
+        "daemon"
+      ];
+      # voxtype writes its pid / voxtype.lock / cancel / trigger files to
+      # $XDG_RUNTIME_DIR/voxtype (hardcoded in the daemon). It must be a
+      # real, writable, host-shared dir: the Mod+S `voxtype record toggle`
+      # CLI runs outside the sandbox and signals the daemon through it.
+      runtimeDir = "voxtype";
+      permissions.granted = [
+        "audio.record"
+        "wayland"
+      ];
+      # The daemon types into the focused window via the
+      # virtual-keyboard Wayland protocol; the security-context wrap
+      # would filter that out. Skip it. The Wayland socket is still
+      # bound; only the wayland-app-context invocation is dropped.
+      waylandSandbox = false;
+      # Bigger than the 2G default — Whisper inference holds the
+      # model in RAM and can spike during transcription.
+      resources.memoryHigh = "4G";
+    };
+
+    # The voxtype daemon's systemd user unit, rerouted through the
+    # apps launcher. ExecStart is the generated `app-run-voxtype-daemon`
+    # script; everything inside it runs sandboxed.
     systemd.user.services.voxtype = {
       description = "VoxType push-to-talk voice-to-text daemon";
       documentation = [ "https://voxtype.io" ];
@@ -84,10 +125,12 @@ in
         "pipewire.service"
         "pipewire-pulse.service"
       ];
-      path = [ pkgs.which ];
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${voxtypePkg}/bin/voxtype -c ${configToml} daemon";
+        # The launcher binary lands on PATH via the apps module's
+        # environment.systemPackages, so this resolves to its
+        # /run/current-system/sw/bin/... path.
+        ExecStart = "/run/current-system/sw/bin/app-run-voxtype-daemon";
         Restart = "on-failure";
         RestartSec = 5;
       };

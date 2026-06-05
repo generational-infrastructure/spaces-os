@@ -38,11 +38,18 @@
   # behind NIRI_ALLOW_SOFTWARE_RENDERING=1 so test VMs can render
   # without GPU passthrough.  No-op on real hardware (real GPU EGL
   # devices aren't flagged as software).
-  programs.niri.package = pkgs.niri.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [
-      ../../../patches/niri-allow-software-rendering.patch
-    ];
-  });
+  # Stack the per-permission gating patch (normally applied by
+  # modules/nixos/niri.nix) with software-rendering, so VM tests run the
+  # same gating-patched niri as production. lib.mkForce beats niri.nix's
+  # mkDefault.
+  programs.niri.package = lib.mkForce (
+    pkgs.niri.overrideAttrs (old: {
+      patches = (old.patches or [ ]) ++ [
+        ../../../patches/niri-per-permission-gating.patch
+        ../../../patches/niri-allow-software-rendering.patch
+      ];
+    })
+  );
   systemd.user.services.niri.environment.NIRI_ALLOW_SOFTWARE_RENDERING = "1";
 
   # ── VM-friendly modifier key ────────────────────────────────────
