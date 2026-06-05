@@ -58,8 +58,9 @@ fi
 # UEFI firmware — Calamares writes EFI bootloader entries that won't
 # survive a legacy BIOS boot, so use OVMF.
 
-OVMF_CODE=$(nix eval --raw 'nixpkgs#OVMF.fd.outPath' 2>/dev/null)/FV/OVMF_CODE.fd
-OVMF_VARS_RO=$(nix eval --raw 'nixpkgs#OVMF.fd.outPath' 2>/dev/null)/FV/OVMF_VARS.fd
+OVMF_FW=$(nix build --print-out-paths --no-link 'nixpkgs#OVMF.fd')
+OVMF_CODE="$OVMF_FW/FV/OVMF_CODE.fd"
+OVMF_VARS_RO="$OVMF_FW/FV/OVMF_VARS.fd"
 OVMF_VARS="$WORKDIR/OVMF_VARS.fd"
 if [[ ! -f $OVMF_VARS ]]; then
   cp "$OVMF_VARS_RO" "$OVMF_VARS"
