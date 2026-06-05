@@ -115,5 +115,23 @@
       iso = lib.genAttrs isoSystems (system: {
         installer = base.nixosConfigurations.${installerHostFor system}.config.system.build.isoImage;
       });
+
+      # Clan service modules. Consumers (e.g. pinpox/nixos) import the
+      # spaces-os flake as a clan input and reference services by name:
+      #
+      #   instances.pi = {
+      #     module.input = "spaces";
+      #     module.name  = "pi";
+      #     roles.executor.machines.kiwi   = { };
+      #     roles.executor.machines.traube = { };
+      #     roles.client.machines.kiwi     = { };
+      #   };
+      #
+      # The service module captures spaces-os's `self` here so its
+      # `nixosModules.pi-sessiond` / `nixosModules.pi-chat` references
+      # resolve to spaces-os's pinned modules (and, transitively, its
+      # pinned llm-agents pi), independent of which consumer flake
+      # evaluates the inventory.
+      clan.modules.pi = import ./clan-service-modules/pi { flake-self = inputs.self; };
     };
 }
