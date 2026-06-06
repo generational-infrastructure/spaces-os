@@ -44,9 +44,7 @@ def uri():
 
 async def hello(ws, name):
     await ws.send(
-        json.dumps(
-            {"v": 1, "kind": "hello", "token": TOKEN, "client": {"name": name}}
-        )
+        json.dumps({"v": 1, "kind": "hello", "token": TOKEN, "client": {"name": name}})
     )
     while True:
         msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -79,9 +77,7 @@ async def scenario_create_session_push():
         await hello(b, "b")
 
         # B has never asked for the list — anything it sees from now is push.
-        await a.send(
-            json.dumps({"v": 1, "kind": "create_session", "name": "alpha"})
-        )
+        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "alpha"}))
 
         # A's `attached` reply will arrive on A; we don't care about it here.
         # B must receive an unsolicited `sessions` envelope listing the new id.
@@ -105,9 +101,7 @@ async def scenario_cold_attach_push():
     state flip from `cold` back to `live-idle` via push."""
     async with websockets.connect(uri()) as a:
         await hello(a, "a")
-        await a.send(
-            json.dumps({"v": 1, "kind": "create_session", "name": "beta"})
-        )
+        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "beta"}))
         # Wait for `attached` to learn the sid, drop anything else.
         sid = None
         while sid is None:
@@ -141,22 +135,64 @@ async def scenario_cold_attach_push():
 
         # Now c creates another session — d (a fresh, never-polled client)
         # must see the push that contains BOTH sessions.
-        await c.send(
-            json.dumps({"v": 1, "kind": "create_session", "name": "gamma"})
-        )
+        await c.send(json.dumps({"v": 1, "kind": "create_session", "name": "gamma"}))
 
         listed = await await_push_sessions(
             d,
-            lambda s: any(e.get("name") == "beta" for e in s)
-            and any(e.get("name") == "gamma" for e in s),
+            lambda s: (
+                any(e.get("name") == "beta" for e in s)
+                and any(e.get("name") == "gamma" for e in s)
+            ),
         )
         if not listed:
             fail("d never saw a push containing both beta and gamma")
 
 
+async def scenario_delete_session_push():
+    """A creates a session; B sees the create push containing it. A then
+    deletes it; B sees a second push WITHOUT it. delete_session also acks
+    the requester with `kind: "deleted"` for diagnostics."""
+    async with websockets.connect(uri()) as a, websockets.connect(uri()) as b:
+        await hello(a, "a")
+        await hello(b, "b")
+
+        await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "doomed"}))
+        sid = None
+        while sid is None:
+            msg = json.loads(await asyncio.wait_for(a.recv(), timeout=5))
+            if msg.get("kind") == "attached":
+                sid = msg["sessionId"]
+
+        appeared = await await_push_sessions(
+            b, lambda s: any(entry.get("id") == sid for entry in s)
+        )
+        if not appeared:
+            fail("b never saw the create push for doomed")
+
+        await a.send(json.dumps({"v": 1, "kind": "delete_session", "sessionId": sid}))
+        deleted_reply = False
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not deleted_reply:
+            try:
+                msg = json.loads(await asyncio.wait_for(a.recv(), timeout=2))
+            except asyncio.TimeoutError:
+                break
+            if msg.get("kind") == "deleted" and msg.get("sessionId") == sid:
+                deleted_reply = True
+        if not deleted_reply:
+            fail("a never received `deleted` ack")
+
+        gone = await await_push_sessions(
+            b, lambda s: all(entry.get("id") != sid for entry in s)
+        )
+        if gone is None:
+            fail("b never saw a push without the deleted id")
+
+
 async def run_all():
     await scenario_create_session_push()
     await scenario_cold_attach_push()
+    await scenario_delete_session_push()
 
 
 def wait_port(port, timeout=30):
@@ -191,13 +227,13 @@ def main():
     )
     log_path = os.path.join(state, "daemon.log")
     log = open(log_path, "wb")
-    proc = subprocess.Popen(
-        [daemon_bin], env=env, stdout=log, stderr=subprocess.STDOUT
-    )
+    proc = subprocess.Popen([daemon_bin], env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
         wait_port(PORT)
         asyncio.run(run_all())
-        print("OK: sessions push fans out on create + cold→live transitions")
+        print(
+            "OK: sessions push fans out on create + cold→live attach + delete"
+        )
     except SystemExit:
         log.flush()
         with open(log_path) as fh:

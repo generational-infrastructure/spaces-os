@@ -222,6 +222,19 @@ QtObject {
       _sock.sendTextMessage(JSON.stringify({ v: 1, kind: "detach", sessionId: sid }));
   }
 
+  // End a session for good on this executor. The daemon disposes the
+  // live AgentSession, removes the on-disk session.jsonl + meta sidecar
+  // + workspace, then broadcasts the updated `sessions` list so siblings
+  // drop their tab. We don't wait for the `deleted` ack here — the
+  // broadcast pass through _onMessage's `sessions` case handles the
+  // local refresh symmetrically.
+  function deleteSession(sid) {
+    if (_sock.status === WebSocket.Open)
+      _sock.sendTextMessage(JSON.stringify({
+        v: 1, kind: "delete_session", sessionId: sid,
+      }));
+  }
+
   function command(sid, payload) {
     if (_sock.status === WebSocket.Open)
       _sock.sendTextMessage(JSON.stringify({ v: 1, kind: "command", sessionId: sid, payload: payload }));

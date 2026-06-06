@@ -354,17 +354,43 @@ Item {
   // the highest imported `updated` so each import only moves forward.
   function _importRemoteSessions() {
     if (lastImportTime <= 0) return; // sessions.json not loaded yet
+    // Snapshot per-executor remoteSessions (only for *connected* execs)
+    // so we treat disconnect-induced empties as "we don't know", not
+    // as "they're gone".
+    const liveByExec = ({});
+    for (let i = 0; i < executorPool.count; i += 1) {
+      const exec = executorPool.objectAt(i);
+      if (!exec || !exec.connected) continue;
+      const set = new Set();
+      const list = exec.remoteSessions || [];
+      for (const r of list) if (r && r.id) set.add(r.id);
+      liveByExec[exec.inventoryId] = { exec: exec, ids: set };
+    }
+
     const known = new Set();
     for (const s of sessionsList) {
       if (s.daemonSessionId) known.add(s.daemonSessionId);
     }
+
+    // Symmetric of auto-import: entries whose daemon id has disappeared
+    // from a *connected* executor's view were deleted upstream (by a
+    // sibling client's delete_session). Drop them locally so the tab
+    // strip mirrors the daemon's truth — the reconciler stop/destroys
+    // the orphaned PiSession in the same pass.
+    const removeIds = [];
+    for (const s of sessionsList) {
+      if (!s.daemonSessionId || !s.executor) continue;
+      const view = liveByExec[s.executor];
+      if (!view) continue; // executor offline → withhold judgement
+      if (!view.ids.has(s.daemonSessionId)) removeIds.push(s.id);
+    }
+
+    // Additions: new ids past the time cutoff.
     const adds = [];
     let newCutoff = lastImportTime;
-    for (let i = 0; i < executorPool.count; i += 1) {
-      const exec = executorPool.objectAt(i);
-      if (!exec) continue;
-      const inv = exec.inventoryId;
-      const list = exec.remoteSessions || [];
+    for (const invId in liveByExec) {
+      const view = liveByExec[invId];
+      const list = view.exec.remoteSessions || [];
       for (let j = 0; j < list.length; j += 1) {
         const r = list[j];
         if (!r || !r.id || known.has(r.id)) continue;
@@ -373,8 +399,8 @@ Item {
         known.add(r.id);
         const entry = _freshSessionEntry(
           r.id,
-          r.name || ("[" + inv + "] " + r.id.slice(0, 8)),
-          inv
+          r.name || ("[" + invId + "] " + r.id.slice(0, 8)),
+          invId
         );
         entry.daemonSessionId = r.id;
         adds.push(entry);
@@ -382,11 +408,17 @@ Item {
         if (updated > newCutoff) newCutoff = updated;
       }
     }
-    if (adds.length > 0) {
-      sessionsList = sessionsList.concat(adds);
-      lastImportTime = newCutoff;
-      _persist();
+
+    if (removeIds.length === 0 && adds.length === 0) return;
+    const removeSet = new Set(removeIds);
+    let next = sessionsList.filter(s => !removeSet.has(s.id));
+    if (adds.length > 0) next = next.concat(adds);
+    sessionsList = next;
+    if (removeSet.has(activeSessionId)) {
+      activeSessionId = next.length > 0 ? next[0].id : "";
     }
+    if (adds.length > 0) lastImportTime = newCutoff;
+    _persist();
   }
 
   // ── public IPC surface (used by Main.qml's IpcHandler) ──
@@ -549,8 +581,19 @@ Item {
 
   function removeSession(id) {
     if (!id) return;
+    const entry = sessionsList.find(s => s.id === id);
     const obj = _sessionObjs[id];
     if (obj) obj.stop();
+    // If this entry maps to a daemon session, tell the executor to
+    // delete it too — otherwise the daemon would keep the session.jsonl
+    // on disk and the next `sessions` push would auto-import it right
+    // back. The daemon's own broadcast will resolve sibling clients
+    // (and our own re-importer skips it because it's gone from the
+    // executor's view).
+    if (entry && entry.daemonSessionId && entry.executor) {
+      const exec = _executorById[entry.executor];
+      if (exec) exec.deleteSession(entry.daemonSessionId);
+    }
     sessionsList = sessionsList.filter(s => s.id !== id);
     if (activeSessionId === id) {
       activeSessionId = sessionsList.length > 0 ? sessionsList[0].id : "";

@@ -22,8 +22,9 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -919,6 +920,56 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
     }
     case "list_sessions": {
       send(ws, { v: 1, kind: "sessions", sessions: listSessions() });
+      return;
+    }
+    case "delete_session": {
+      // End the session for good — dispose any live AgentSession, remove
+      // the on-disk session.jsonl + meta sidecar + per-session workspace,
+      // then broadcast the updated list so every attached client (the
+      // requester included) drops its tab. Idempotent: deleting a missing
+      // id is a no-op + an error reply for diagnostics.
+      const sessionId = asString(parsed.sessionId) ?? "";
+      if (!isSessionId(sessionId)) {
+        send(ws, { v: 1, kind: "error", error: "no such session" });
+        return;
+      }
+      const live = sessions.get(sessionId);
+      if (live) {
+        sessions.delete(sessionId);
+        if (live.busy) {
+          try {
+            await live.agent.abort();
+          } catch {
+            // best-effort; we're tearing the session down regardless
+          }
+        }
+        live.unsubscribe();
+        try {
+          live.agent.dispose();
+        } catch {
+          // best-effort; we're tearing the session down regardless
+        }
+      }
+      // Each rm guards individually so a partial state still cleans up
+      // whatever else is on disk. `force` swallows ENOENT — fine because
+      // we're already in "make this go away" mode.
+      try {
+        rmSync(sessionDirOf(sessionId), { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      try {
+        rmSync(metaPathOf(sessionId), { force: true });
+      } catch {
+        // ignore
+      }
+      try {
+        rmSync(workdirOf(sessionId), { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      send(ws, { v: 1, kind: "deleted", sessionId });
+      broadcastSessionsList();
       return;
     }
     case "attach": {

@@ -118,11 +118,20 @@ class Client {
         )
           .slice()
           .sort((a, b) => num(b.updated) - num(a.updated));
-        // First connect with no active session: jump into the most recent one
-        // (so a phone mirrors the desktop's session), else open a fresh one.
-        if (!this.active && !this.pendingCreate) {
-          if (this.sessions.length > 0) this.attach(this.sessions[0].id);
-          else this.create();
+        // If our previously-active session disappeared (deleted upstream by
+        // another client, or by us via deleteSession), fall back the same
+        // way the initial connect does: most recent surviving session, or
+        // a freshly created one if the list is empty.
+        const activeStillThere =
+          !!this.active && this.sessions.some((s) => s.id === this.active);
+        if (!activeStillThere) {
+          this.active = "";
+          this.state = emptyState();
+          if (!this.pendingCreate) {
+            if (this.sessions.length > 0) this.attach(this.sessions[0].id);
+            else this.create();
+          }
+          this.render();
         }
         this.renderTabs();
         break;
@@ -220,17 +229,34 @@ class Client {
     const bar = $("#tabs");
     bar.replaceChildren();
     for (const s of this.sessions) {
-      const tab = el(
-        "button",
-        `tab${s.id === this.active ? " active" : ""}`,
-        s.name || s.id.slice(0, 6),
-      );
+      const label = s.name || s.id.slice(0, 6);
+      const tab = el("button", `tab${s.id === this.active ? " active" : ""}`);
+      tab.append(el("span", "tab-label", label));
+      // Close button — `delete_session` is destructive (drops history,
+      // workspace, the lot), so confirm before sending. `stopPropagation`
+      // keeps the click from also firing the parent tab's attach handler.
+      const close = el("span", "tab-close", "×");
+      close.title = "Delete chat";
+      close.onclick = (ev) => {
+        ev.stopPropagation();
+        this.deleteSession(s.id, label);
+      };
+      tab.append(close);
       tab.onclick = () => this.attach(s.id);
       bar.append(tab);
     }
     const add = el("button", "tab new", "+");
     add.onclick = () => this.create();
     bar.append(add);
+  }
+
+  private deleteSession(id: string, label: string): void {
+    if (
+      !confirm(`Delete chat "${label}" and its history? This can't be undone.`)
+    ) {
+      return;
+    }
+    this.send({ v: 1, kind: "delete_session", sessionId: id });
   }
 
   private render(): void {
