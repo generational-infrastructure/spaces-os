@@ -1,8 +1,18 @@
 # Voice-to-text via voxtype (push-to-talk / toggle mode)
 #
-# Installs voxtype with Vulkan acceleration (AMD/Intel GPU, no CUDA),
-# writes a system-wide default config, and creates a systemd user
-# service that starts with the graphical session.
+# Installs voxtype, writes a system-wide default config, and creates a
+# systemd user service that starts with the graphical session.
+#
+# Two engines are supported:
+#   - whisper  (default): whisper.cpp, batch transcription. Uses the
+#     `vulkan` package variant (AMD/Intel GPU, no CUDA) and a Nix-fetched
+#     ggml model so the closure is fully offline.
+#   - parakeet: NVIDIA FastConformer via ONNX. With `streaming = true`
+#     voxtype emits live partial transcripts during recording and types
+#     the final transcript on release. Requires a parakeet-feature build
+#     (one of the `parakeet*` package variants) and a streaming-capable
+#     model directory, which voxtype downloads on first use into
+#     ~/.local/share/voxtype/models/.
 #
 # Keybinding: Mod+Space  (defined in niri.nix)
 { inputs, ... }:
@@ -13,7 +23,10 @@
   ...
 }:
 let
-  voxtypePkg = inputs.voxtype.packages.${pkgs.stdenv.hostPlatform.system}.vulkan;
+  cfg = config.spaces.voxtype;
+
+  voxtypePackages = inputs.voxtype.packages.${pkgs.stdenv.hostPlatform.system};
+  voxtypePkg = voxtypePackages.${cfg.variant};
 
   models = {
     tiny = builtins.fetchurl {
@@ -30,31 +43,86 @@ let
     };
   };
 
-  cfg = config.spaces.voxtype;
-
   defaultSettings = builtins.fromTOML (builtins.readFile "${inputs.voxtype}/config/default.toml");
 
+  # Engine-specific settings, deep-merged onto the upstream defaults.
+  engineSettings =
+    if cfg.engine == "parakeet" then
+      {
+        engine = "parakeet";
+        parakeet = {
+          model = cfg.parakeetModel;
+          inherit (cfg) streaming;
+        };
+      }
+    else
+      {
+        engine = "whisper";
+        whisper = {
+          language = cfg.whisperLanguage;
+          model = toString models.${cfg.whisperModel};
+        };
+      };
+
   configToml = (pkgs.formats.toml { }).generate "voxtype-config.toml" (
-    lib.recursiveUpdate defaultSettings {
-      hotkey.enabled = false;
-      whisper = {
-        language = cfg.whisperLanguage;
-        model = toString models.${cfg.whisperModel};
-      };
-      output = {
-        mode = "type";
-        fallback_to_clipboard = true;
-        notification.on_transcription = false;
-      };
-    }
+    lib.recursiveUpdate defaultSettings (
+      lib.recursiveUpdate engineSettings {
+        hotkey.enabled = false;
+        output = {
+          mode = "type";
+          fallback_to_clipboard = true;
+          notification.on_transcription = false;
+        };
+      }
+    )
   );
 in
 {
   options.spaces.voxtype = {
+    variant = lib.mkOption {
+      type = lib.types.enum (builtins.attrNames voxtypePackages);
+      default = "vulkan";
+      description = ''
+        voxtype package variant to install. Use a `parakeet*` variant
+        (e.g. "parakeet-cuda") when engine = "parakeet"; the default
+        "vulkan" build only supports the whisper engine.
+      '';
+    };
+
+    engine = lib.mkOption {
+      type = lib.types.enum [
+        "whisper"
+        "parakeet"
+      ];
+      default = "whisper";
+      description = "Transcription engine.";
+    };
+
+    streaming = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable Parakeet cache-aware streaming: live partial transcripts
+        while recording, final transcript typed on release. Only takes
+        effect when engine = "parakeet".
+      '';
+    };
+
+    parakeetModel = lib.mkOption {
+      type = lib.types.str;
+      default = "parakeet-unified-en-0.6b";
+      description = ''
+        Parakeet model name (resolved from ~/.local/share/voxtype/models/,
+        downloaded on first use) or an absolute path to a model directory.
+        Streaming requires a streaming-capable model (TDT v3 family with
+        tokenizer.model), of which this is the default.
+      '';
+    };
+
     whisperModel = lib.mkOption {
       type = lib.types.enum (builtins.attrNames models);
       default = "small";
-      description = "Whisper model size for voice-to-text.";
+      description = "Whisper model size for voice-to-text (engine = whisper).";
     };
     whisperLanguage = lib.mkOption {
       type = lib.types.str;
@@ -66,6 +134,17 @@ in
   imports = [ inputs.voxtype.nixosModules.default ];
 
   config = {
+    assertions = [
+      {
+        assertion = cfg.engine == "parakeet" -> lib.hasPrefix "parakeet" cfg.variant;
+        message = ''
+          spaces.voxtype.engine = "parakeet" requires a parakeet-capable
+          package variant. Set spaces.voxtype.variant to one of:
+          ${lib.concatStringsSep ", " (builtins.filter (lib.hasPrefix "parakeet") (builtins.attrNames voxtypePackages))}.
+        '';
+      }
+    ];
+
     programs.voxtype = {
       enable = true;
       package = voxtypePkg;
