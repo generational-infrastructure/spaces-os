@@ -131,7 +131,13 @@ in
     };
   };
 
-  imports = [ inputs.voxtype.nixosModules.default ];
+  imports = [
+    inputs.voxtype.nixosModules.default
+    # On-screen recording indicator (small red dot); replaces the
+    # voice-recording notifications. Reads `voxtype status --follow`,
+    # which works because state_file = "auto" is set above.
+    ./voxtype-indicator.nix
+  ];
 
   config = {
     assertions = [
