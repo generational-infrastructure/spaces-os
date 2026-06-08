@@ -229,6 +229,22 @@ Item {
   }
   readonly property alias _sessions: sessionsAdapter
 
+  // Ephemeral per-session activity feed for external consumers — the
+  // noctalia bar's session indicator reads this. Kept out of
+  // sessions.json because "working" is live runtime state, not part of
+  // the persisted index.
+  FileView {
+    id: activityFile
+    path: root.stateDir + "/activity.json"
+    printErrors: false
+    JsonAdapter {
+      id: activityAdapter
+      property int version: 1
+      property string activeSessionId: ""
+      property var sessions: []
+    }
+  }
+
   function _loadFromAdapter() {
     const raw = root._sessions.sessions || [];
     if (Array.isArray(raw) && raw.length > 0) {
@@ -258,6 +274,30 @@ Item {
     root._sessions.activeSessionId = activeSessionId;
     root._sessions.lastImportTime = lastImportTime;
     sessionsFile.writeAdapter();
+    root._scheduleActivityWrite();
+  }
+
+  // Republish activity.json: one entry per chat with its live state
+  // ("working" = a prompt turn is in flight, otherwise "waiting" for
+  // user input). Coalesced via Qt.callLater so a burst of busy / list
+  // changes collapses into a single write.
+  function _scheduleActivityWrite() {
+    Qt.callLater(root._writeActivity);
+  }
+
+  function _writeActivity() {
+    const out = sessionsList.map(s => {
+      const obj = _sessionObjs[s.id];
+      return {
+        id: s.id,
+        name: s.name,
+        state: (obj && obj.busy) ? "working" : "waiting",
+      };
+    });
+    activityAdapter.version = 1;
+    activityAdapter.activeSessionId = activeSessionId;
+    activityAdapter.sessions = out;
+    activityFile.writeAdapter();
   }
 
   function _newId() {
@@ -667,7 +707,10 @@ Item {
   // pi on first display and reap it on idle without holding a
   // reference to the window itself.
   readonly property bool _panelOpen: root.panelVisible
-  onActiveSessionIdChanged: _maybeSpawn()
+  onActiveSessionIdChanged: {
+    _maybeSpawn();
+    _scheduleActivityWrite();
+  }
   on_PanelOpenChanged: {
     if (_panelOpen) {
       _maybeSpawn();
@@ -894,7 +937,11 @@ Item {
     PiSession {
       onNeedsPersist: backend._persist()
       onIncomingNotification: t => backend._notify(sessionId, t)
-      onBusyChanged: { if (!busy) backend._onBackgroundTurnFinished(sessionId); }
+      onBusyChanged: {
+        if (!busy)
+          backend._onBackgroundTurnFinished(sessionId);
+        backend._scheduleActivityWrite();
+      }
       // A live session enumerates the authoritative list (e.g. OpenRouter
       // models /v1/models won't surface); fold it into the bar's cache.
       onModelsChanged: backend._mergeModels(models)
@@ -962,6 +1009,7 @@ Item {
         obj?.destroy?.();
       }
     }
+    _scheduleActivityWrite();
   }
 
   function _notify(sessionId, text) {

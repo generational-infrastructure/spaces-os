@@ -1,0 +1,18 @@
+{
+  "id": "spaces-sessions",
+  "name": "Spaces Agent Sessions",
+  "version": "1.0.0",
+  "author": "Spaces",
+  "license": "MIT",
+  "description": "One icon per pi-chat agent session in the bar, coloured by whether the agent is working or waiting for input. Click an icon to focus that chat.",
+  "tags": ["Bar", "System"],
+  "entryPoints": {
+    "main": "Main.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "metadata": {
+    "defaultSettings": {
+      "focusCommand": "quickshell ipc -c pi-chat call pi-chat"
+    }
+  }
+}

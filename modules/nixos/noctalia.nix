@@ -1,23 +1,50 @@
-# Noctalia-shell bar as a graphical-session systemd user service.
+# Noctalia-shell bar as a graphical-session systemd user service, plus
+# a bundled `spaces-sessions` plugin pinned in the center bar that
+# shows one icon per pi-chat agent session.
 #
-# An ExecStartPre deep-merges our managed JSON into the user's
-# ~/.config/noctalia/*.json before the bar starts: the files stay
-# writable (runtime edits and the in-app settings UI survive) while
-# the keys we pin re-apply on every (re)start. Without an existing
-# settings.json noctalia takes its fresh-install path and the bar
-# fails to draw until a manual reload — seeding sidesteps that.
+# An ExecStartPre seeds the user's ~/.config/noctalia: it deep-merges
+# our managed JSON (top-level settings.json, plugins.json, and the
+# plugin's own settings.json) and symlinks the plugin's QML into
+# plugins/spaces-sessions/. Files stay writable so runtime edits and
+# the in-app settings UI survive; keys we pin re-apply on every
+# (re)start. Without an existing settings.json noctalia takes its
+# fresh-install path and the bar fails to draw until a manual reload —
+# seeding sidesteps that.
 #
 # Also keeps a purge that cleans up leftover state from the prior
 # patched-build / spaces-plugin era.
 { pkgs, ... }:
 let
-  # Managed noctalia config, deep-merged into the user's on-disk JSON on
-  # every service (re)start (see mergeConfig). Pins the bar to the top
-  # edge; merged, not symlinked, so the user can still change everything
-  # else from the UI.
+  # Managed top-level settings.json. Pins bar position and the center
+  # bar's widget list (Workspace pills + the bundled session indicator).
+  # Merged, not symlinked, so the user can still change everything else
+  # from the UI.
   managedSettings = (pkgs.formats.json { }).generate "noctalia-settings.json" {
     bar.position = "top";
+    bar.widgets.center = [
+      { id = "Workspace"; }
+      { id = "plugin:spaces-sessions"; }
+    ];
   };
+
+  # Managed plugins.json — only forces our bundled plugin enabled. User
+  # plugins and other `states.*` entries survive the deep merge.
+  managedPlugins = (pkgs.formats.json { }).generate "noctalia-plugins.json" {
+    states."spaces-sessions".enabled = true;
+  };
+
+  # Managed plugin settings — pins the absolute quickshell binary and
+  # the pi-chat IPC target the indicator shells out to on click.
+  managedSpacesSessionsSettings =
+    (pkgs.formats.json { }).generate "noctalia-spaces-sessions-settings.json"
+      {
+        focusCommand = "${pkgs.quickshell}/bin/quickshell ipc -c pi-chat call pi-chat";
+      };
+
+  # The bundled plugin's source tree (manifest + QML). Copied into the
+  # Nix store by path interpolation; we materialise it per-file under
+  # ~/.config/noctalia/plugins/spaces-sessions/ at service start.
+  spacesSessionsPluginSrc = ../../programs/noctalia-spaces-sessions;
 
   # Deep-merges each managed JSON file into ~/.config/noctalia/<rel>
   # (jq `a * b`, managed side wins): objects merge recursively, arrays /
@@ -51,7 +78,27 @@ let
         mv "$tmp" "$target"
       }
 
-      mergeNoctaliaJson ${managedSettings} "$cfgDir/settings.json"
+      # Materialise the bundled plugin: per-file symlinks under a real
+      # plugins/<id>/ directory (NOT a single dir symlink — the
+      # stale-plugin purge below sweeps top-level symlinks in plugins/,
+      # and noctalia needs to write its own settings.json into that dir
+      # at runtime). Per-file symlinks let manifest/QML track the store
+      # while leaving settings.json a real, writable file.
+      materializePluginFiles() {
+        local src="$1" rel="$2" dst f name
+        dst="$cfgDir/$rel"
+        mkdir -p "$dst"
+        for f in "$src"/*; do
+          name="$(basename "$f")"
+          ln -sfn "$f" "$dst/$name"
+        done
+      }
+
+      materializePluginFiles ${spacesSessionsPluginSrc} "plugins/spaces-sessions"
+
+      mergeNoctaliaJson ${managedSettings}                 "$cfgDir/settings.json"
+      mergeNoctaliaJson ${managedPlugins}                  "$cfgDir/plugins.json"
+      mergeNoctaliaJson ${managedSpacesSessionsSettings}   "$cfgDir/plugins/spaces-sessions/settings.json"
     '';
   };
 
