@@ -28,6 +28,18 @@ let
   voxtypePackages = inputs.voxtype.packages.${pkgs.stdenv.hostPlatform.system};
   voxtypePkg = voxtypePackages.${cfg.variant};
 
+  # The onnx-cuda voxtype wrapper omits libcudart/libcublas from its
+  # LD_LIBRARY_PATH, so the CUDA execution provider fails to initialise
+  # and the daemon silently falls back to CPU. Inject them for cuda
+  # variants (the wrapper preserves an inherited LD_LIBRARY_PATH). The
+  # other CUDA libs the EP needs (cudnn/cufft/curand/nvrtc) are already
+  # in the wrapper's path.
+  isCudaVariant = lib.hasInfix "cuda" cfg.variant;
+  cudaLibraryPath = lib.makeLibraryPath [
+    pkgs.cudaPackages.cuda_cudart
+    pkgs.cudaPackages.libcublas
+  ];
+
   models = {
     tiny = builtins.fetchurl {
       url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin";
@@ -53,6 +65,15 @@ let
         parakeet = {
           model = cfg.parakeetModel;
           inherit (cfg) streaming;
+          # voxtype's own streaming-context defaults (1.5/0.5/0.5) violate
+          # parakeet-rs 0.3.5's constraint that each value map to a
+          # mel-frame count (round(secs * 100)) divisible by 8, so the
+          # daemon refuses to start. Use the crate's blessed profile
+          # (560/56/56 frames). Left context is lookback (no added
+          # latency); right context (0.56s) is the lookahead delay.
+          streaming_chunk_secs = 0.56;
+          streaming_left_context_secs = 5.6;
+          streaming_right_context_secs = 0.56;
         };
       }
     else
@@ -68,6 +89,10 @@ let
     lib.recursiveUpdate defaultSettings (
       lib.recursiveUpdate engineSettings {
         hotkey.enabled = false;
+        # We ship no OSD frontend (voxtype-osd-*) and use our own
+        # indicator; disable voxtype's built-in OSD so the daemon doesn't
+        # crash-loop trying to spawn a missing binary.
+        osd.enabled = false;
         output = {
           mode = "type";
           fallback_to_clipboard = true;
@@ -170,6 +195,9 @@ in
         "pipewire-pulse.service"
       ];
       path = [ pkgs.which ];
+      environment = lib.optionalAttrs isCudaVariant {
+        LD_LIBRARY_PATH = cudaLibraryPath;
+      };
       serviceConfig = {
         Type = "simple";
         ExecStart = "${voxtypePkg}/bin/voxtype -c ${configToml} daemon";
