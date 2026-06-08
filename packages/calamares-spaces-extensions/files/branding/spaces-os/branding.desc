@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: CC0-1.0
 #
 # Spaces OS branding for Calamares. Forked from the upstream
-# calamares-nixos-extensions `nixos` branding: only the product-name
-# strings and componentName are changed. Window layout, colors,
-# artwork and slideshow are reused from the copied `nixos` dir
-# (installer-iso/postPatch does `cp -r branding/nixos branding/spaces-os`),
-# so the welcome page reads "Spaces OS" while the logo/slideshow are still
-# the upstream NixOS artwork — swap those for real Spaces OS assets later.
+# calamares-nixos-extensions `nixos` branding: product-name strings,
+# componentName and the logo images are changed. Window layout, colors
+# and the slideshow are reused from the copied `nixos` dir
+# (installer-iso/postPatch does `cp -r branding/nixos branding/spaces-os`).
+# The logos are the real Spaces OS marks (spaces-logo.svg, and
+# spaces-logo-white.svg for the blue sidebar), copied in by default.nix.
+# The slideshow `gfx-*` art is still upstream NixOS — swap that later.
 ---
 componentName:  spaces-os
 
@@ -21,7 +22,13 @@ windowSize: 800px,520px
 windowPlacement: center
 
 ### PANELS CONFIGURATION
-sidebar: widget
+# Custom QML sidebar (branding/spaces-os/calamares-sidebar.qml): the default
+# `widget` progress tree is a QTreeView whose C++ delegate center-aligns labels,
+# can only host an 80x80 square logo, and ignores QSS -- it cannot reproduce the
+# mockup's SPACES wordmark header + left-aligned steps + rounded active pill.
+# `qml` swaps in our own sidebar (Calamares is built WITH_QML). Navigation stays
+# the default widget bar.
+sidebar: qml
 navigation: widget
 
 ### STRINGS, IMAGES AND COLORS
@@ -45,15 +52,36 @@ strings:
     donateUrl:
 
 images:
-    productIcon:         "nix-snowflake.svg"
-    productLogo:         "white.png"
-    productWelcome:      "nix-snowflake.svg"
+    productIcon:         "spaces-logo.svg"
+    # Sidebar header image, consumed by the QML sidebar
+    # (calamares-sidebar.qml: Branding.imagePath(Branding.ProductLogo)). It is
+    # the rasterised SPACES wordmark (bird + wordmark, "OS" trimmed) from
+    # spaces-logo-wordmark-spaces.svg, placed top-left to match the mockup. The
+    # default widget sidebar's 80x80 IgnoreAspectRatio slot could not hold a
+    # ~5:1 wordmark without crushing it; the QML sidebar lays it out at its true
+    # aspect, so productLogo now carries the wordmark instead of a square mark.
+    # productLogo is unused outside the sidebar, so repurposing it is safe.
+    productLogo:         "sidebar-wordmark.png"
+    # Welcome-page hero, shown centred below the heading + body once the
+    # requirements check passes (ResultsListWidget::requirementsComplete ->
+    # #welcomeLogo, a FixedAspectRatioLabel honouring welcomeExpandingLogo).
+    # The pre-rendered hero already bakes in the iridescent knot plus the
+    # faint dashed grid and coral square accents from the mockup, so this
+    # single image carries most of the main-area design intent.
+    productWelcome:      "spaces-hero.png"
 
+# Monochrome light sidebar to match the mockup: near-white background, dark
+# step labels, and a slightly darker block behind the active step. The step
+# list is painted by a custom C++ delegate (ProgressTreeDelegate) that reads
+# *only* these four colors -- it is not reachable from stylesheet.qss -- so
+# the sidebar palette has to live here. The active "pill" is a flat filled
+# rect (the delegate has no rounded-rect path); its exact pill geometry and
+# the left-aligned labels of the mockup would need a custom sidebar QML.
 style:
-   SidebarBackground:        "#5277C3"
-   SidebarText:              "#FFFFFF"
-   SidebarTextCurrent:       "#292F34"
-   SidebarBackgroundCurrent: "#7EBAE4"
+   SidebarBackground:        "#F4F4F5"
+   SidebarText:              "#3F3F46"
+   SidebarTextCurrent:       "#18181B"
+   SidebarBackgroundCurrent: "#E4E4E7"
 
 ### SLIDESHOW
 slideshow:               "show.qml"

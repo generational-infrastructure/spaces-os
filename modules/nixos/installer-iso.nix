@@ -65,6 +65,12 @@ in
     })
   ];
 
+  # Make Geist available to the live installer environment so Calamares can
+  # render the welcome-page UI in it -- the Spaces branding stylesheet.qss
+  # selects `font-family: "Geist"`, which only resolves if fontconfig can
+  # find the font in the running system.
+  fonts.packages = [ pkgs.geist-font ];
+
   # Spaces-flake path + per-input override map consumed by the patched
   # `main.py` at install time. Lives here (not substituted into the
   # extensions package) so the package stays independent of the spaces
@@ -95,9 +101,22 @@ in
   # nixosModules.spaces instead.
   system.nixos.distroName = "Spaces OS";
 
-  # Re-packaged nixos-grub2-theme, so the boot-menu header logo can be
-  # swapped later; for now it's the upstream theme unchanged.
+  # nixos-grub2-theme with the boot-menu header logo replaced by the
+  # Spaces OS wordmark (rasterised from SVG in the package).
   isoImage.grubTheme = pkgs.callPackage ../../packages/spaces-grub-theme { };
+
+  # Plymouth boot splash: the live ISO falls back to boot.plymouth.logo
+  # when the firmware exposes no BGRT logo (the common VM case). Point it
+  # at the white Spaces mark, rasterised from the branding SVG so it reads
+  # on plymouth's dark background. The NixOS default logo is the 48x48
+  # nix-snowflake; render the ~1.15:1 mark to -w 48 (=> 48x42, within the
+  # 48x48 box) to match that footprint -- rendering at -w 256 made it 256x223,
+  # ~5x too large, and it dominated the splash.
+  boot.plymouth.logo =
+    pkgs.runCommand "spaces-plymouth-logo.png" { nativeBuildInputs = [ pkgs.librsvg ]; }
+      "rsvg-convert -w 48 ${
+        inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.spaces-logos
+      }/spaces-logo-white.svg -o $out";
 
   # Pre-stage everything `nix-build` + `nixos-install` will touch:
   #

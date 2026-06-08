@@ -26,6 +26,7 @@
 {
   pkgs,
   base ? pkgs.calamares-nixos-extensions,
+  spaces-logos ? pkgs.callPackage ../spaces-logos { },
   ...
 }:
 let
@@ -33,6 +34,10 @@ let
 in
 base.overrideAttrs (old: {
   pname = "calamares-spaces-extensions";
+  nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+    pkgs.librsvg
+    pkgs.graphicsmagick
+  ];
   postPatch = (old.postPatch or "") + ''
     cp -f ${lib.cleanSource ./files/settings.conf} config/settings.conf
     cp -f ${lib.cleanSource ./files/welcome.conf} config/modules/welcome.conf
@@ -42,6 +47,42 @@ base.overrideAttrs (old: {
     # (reusing its artwork/slideshow) and override branding.desc to rename
     # the product to "Spaces OS". settings.conf selects it via `branding:`.
     cp -r branding/nixos branding/spaces-os
-    cp -f ${lib.cleanSource ./files/branding/spaces-os/branding.desc} branding/spaces-os/branding.desc
+    cp -f ${lib.cleanSource ./files/branding/spaces-os/branding.desc}   branding/spaces-os/branding.desc
+    # Spaces OS welcome-page styling: a branding stylesheet.qss (Geist font,
+    # white content area, light sidebar, muted/coral welcome buttons).
+    # Calamares auto-loads stylesheet.qss from the branding dir.
+    cp -f ${lib.cleanSource ./files/branding/spaces-os/stylesheet.qss} branding/spaces-os/stylesheet.qss
+
+    # Spaces OS welcome-page copy. The welcome heading and body are two
+    # translatable strings in Calamares' welcome `Config` (no branding field
+    # exists for them); a branding translation catalog replaces them for the
+    # English locale. See the .ts header for the load-order reasoning. Compile
+    # it with lrelease to branding/spaces-os/lang/calamares-spaces-os_en.qm,
+    # the exact path BrandingLoader (Retranslator.cpp) expects:
+    # <brandingDir>/lang/calamares-<componentName>_<locale>.qm.
+    mkdir -p branding/spaces-os/lang
+    cp -f ${lib.cleanSource ./files/branding/spaces-os/lang/calamares-spaces-os_en.ts} \
+      branding/spaces-os/lang/calamares-spaces-os_en.ts
+    ${pkgs.qt6.qttools}/bin/lrelease \
+      branding/spaces-os/lang/calamares-spaces-os_en.ts \
+      -qm branding/spaces-os/lang/calamares-spaces-os_en.qm
+    # Real Spaces OS marks come from the shared `spaces-logos` fetchgit FOD.
+    # The black mark is the window icon (productIcon).
+    cp -f ${spaces-logos}/spaces-logo.svg branding/spaces-os/spaces-logo.svg
+    # Welcome-page hero illustration (productWelcome): the pre-rendered
+    # iridescent knot with the mockup's dashed grid + coral accents baked in.
+    cp -f ${spaces-logos}/spaces-hero.png branding/spaces-os/spaces-hero.png
+
+    # Custom QML sidebar (branding.desc `sidebar: qml`) and its wordmark header.
+    cp -f ${lib.cleanSource ./files/branding/spaces-os/calamares-sidebar.qml} \
+      branding/spaces-os/calamares-sidebar.qml
+
+    # Sidebar header image (productLogo, consumed by calamares-sidebar.qml): the
+    # SPACES wordmark (bird + wordmark, "OS" trimmed). The QML sidebar lays it
+    # out at its true ~5:1 aspect, so -- unlike the old widget sidebar's square
+    # slot -- no square-canvas padding is needed; just rasterise the SVG. 420px
+    # wide keeps it crisp above the ~140px on-screen width at HiDPI scaling.
+    rsvg-convert -w 420 ${spaces-logos}/spaces-logo-wordmark-spaces.svg \
+      -o branding/spaces-os/sidebar-wordmark.png
   '';
 })

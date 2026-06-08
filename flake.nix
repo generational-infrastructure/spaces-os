@@ -45,6 +45,7 @@
         "installer-config-gen"
         "installer-gui-end-to-end"
         "installer-loadmodule"
+        "installer-welcome-screenshot"
         "installer-target-session"
       ];
 
