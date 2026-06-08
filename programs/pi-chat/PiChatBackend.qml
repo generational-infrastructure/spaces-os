@@ -134,6 +134,21 @@ Item {
     const list = (root._cfg.executors || []).slice();
     if (list.length === 0 && root.wsUrl !== "")
       list.push({ id: "remote", url: root.wsUrl, token: root.wsToken });
+    // Test seam: a headless check injects the executor topology as JSON via
+    // $SPACES_PI_CHAT_EXECUTORS because it can't write the root-owned
+    // /etc/spaces/pi-chat.json. Synchronous (no FileView) so it never perturbs
+    // config-load ordering; unset in production, where the list is already set.
+    if (list.length === 0) {
+      const raw = String(Quickshell.env("SPACES_PI_CHAT_EXECUTORS") || "");
+      if (raw !== "") {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return parsed;
+        } catch (e) {
+          Logger.w("PiChat", "bad SPACES_PI_CHAT_EXECUTORS", e);
+        }
+      }
+    }
     return list;
   }
   // Default executor for new/legacy sessions: the lone configured one (so an

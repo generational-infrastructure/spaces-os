@@ -119,6 +119,12 @@ QtObject {
   property string initialDaemonSessionId: ""
   property string _daemonSessionId: initialDaemonSessionId  // id the executor assigned on create / replays / imports
   property bool   _wsAttached: false
+  // A create_session is in flight: sent (or queued behind whenConnected) but
+  // not yet acked. Spawn is idempotent across this window — a second spawn()
+  // (e.g. launchBackground's spawn() followed by send()→spawn()) must NOT mint
+  // a second daemon session, which the panel entry can't hold and which the
+  // `sessions` broadcast then re-imports as a dead duplicate.
+  property bool   _wsCreating: false
   property var    _wsPending: []         // commands buffered until attached
   // Request/response correlation. Each entry is { resolve, reject }; pi
   // echoes the `id` we attach to outgoing commands on the matching
@@ -320,7 +326,11 @@ QtObject {
   // WS mode: create the session on (or re-attach it to) the executor,
   // buffering commands until the daemon assigns an id and we subscribe.
   function _wsSpawn() {
-    if (_shouldRun && _wsAttached) return;
+    // Idempotent: already attached, or a create is still in flight (no id
+    // yet) — repeat spawns coalesce onto that create (see _wsCreating). Safe
+    // because _wsCreate retries across reconnects, so collapsing the
+    // redundant spawns doesn't drop a create that races a connection flap.
+    if (_shouldRun && (_wsAttached || _wsCreating)) return;
     _shouldRun = true;
     streaming = true;
     if (_daemonSessionId) {
@@ -330,12 +340,26 @@ QtObject {
       _wsFlush();
       return;
     }
+    _wsCreating = true;
+    _wsCreate();
+  }
+
+  // Issue one create_session once the executor is welcomed. On failure (the
+  // executor dropped mid-create, rejecting the pending create) retry on the
+  // next welcome rather than leaving the session cold with its prompt
+  // buffered — a single spawn() must eventually attach even across a
+  // reconnect, since repeat spawns coalesce in _wsSpawn instead of re-arming
+  // the create.
+  function _wsCreate() {
     executor.whenConnected(() => {
-      if (!_shouldRun) return;
+      if (!_shouldRun) { _wsCreating = false; return; }
+      // A reconnect-reattach (or a racing spawn) may have attached us already.
+      if (_wsAttached || _daemonSessionId) { _wsCreating = false; return; }
       const opts = { name: sessionName };
       if (modelPref) opts.model = modelPref;
       if (workspacePath) opts.workspace = workspacePath;
       executor.createSession(opts).then(id => {
+        _wsCreating = false;
         if (!_shouldRun) { executor.detach(id); return; }
         _daemonSessionId = id;
         // Persist on the panel entry so a panel restart re-attaches to the
@@ -349,7 +373,8 @@ QtObject {
         _wsFlush();
       }).catch(e => {
         Logger.w("PiSession", sessionId, "create_session failed", e);
-        streaming = false;
+        if (_shouldRun) _wsCreate(); // executor dropped mid-create: retry on reconnect
+        else _wsCreating = false;
       });
     });
   }
@@ -391,6 +416,9 @@ QtObject {
         executor.unsubscribe(_daemonSessionId);
       }
       _wsAttached = false;
+      // Any in-flight create's .then sees _shouldRun false and detaches the
+      // minted id; clear the flag so a later respawn isn't wedged.
+      _wsCreating = false;
       streaming = false;
       typing = false;
       return;
