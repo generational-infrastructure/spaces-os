@@ -87,8 +87,17 @@ in
   # (`spaces-os.iso`) and the ISO9660 volume label shown when the medium
   # is mounted. mkForce overrides the upstream calamares-gnome profile,
   # which sets both. volumeID caps at 32 chars.
-  isoImage.isoBaseName = lib.mkForce "spaces-os";
+  image.baseName = lib.mkForce "spaces-os";
   isoImage.volumeID = lib.mkForce "SPACES_OS";
+
+  # Renames the boot-menu entries and the live ISO's os-release from
+  # "NixOS" to "Spaces OS". Installed systems are branded by
+  # nixosModules.spaces instead.
+  system.nixos.distroName = "Spaces OS";
+
+  # Re-packaged nixos-grub2-theme, so the boot-menu header logo can be
+  # swapped later; for now it's the upstream theme unchanged.
+  isoImage.grubTheme = pkgs.callPackage ../../packages/spaces-grub-theme { };
 
   # Pre-stage everything `nix-build` + `nixos-install` will touch:
   #

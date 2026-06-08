@@ -245,7 +245,7 @@ def generateProxyStrings():
 
 
 def pretty_name():
-    return _("Installing NixOS.")
+    return _("Installing Spaces OS.")
 
 
 status = pretty_name()
@@ -557,7 +557,7 @@ def setup_luks_keyfile(gs, root_mount_point):
 def run():
     """Generate the installed system's flake + configuration and run nixos-install."""
     global status
-    status = _("Configuring NixOS")
+    status = _("Configuring Spaces OS")
     libcalamares.job.setprogress(0.1)
 
     ngc_cfg = configparser.ConfigParser()
@@ -670,7 +670,7 @@ def run():
             _(e.output.decode("utf8")),
         )
 
-    status = _("Installing NixOS")
+    status = _("Installing Spaces OS")
     libcalamares.job.setprogress(0.3)
 
     try:

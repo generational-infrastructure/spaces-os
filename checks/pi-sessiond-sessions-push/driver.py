@@ -231,9 +231,7 @@ def main():
     try:
         wait_port(PORT)
         asyncio.run(run_all())
-        print(
-            "OK: sessions push fans out on create + cold→live attach + delete"
-        )
+        print("OK: sessions push fans out on create + cold→live attach + delete")
     except SystemExit:
         log.flush()
         with open(log_path) as fh:
