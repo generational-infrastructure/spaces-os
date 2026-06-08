@@ -1,8 +1,60 @@
-# Vanilla noctalia-shell bar as a graphical-session user service,
-# plus a purge that cleans up leftover state from the prior
+# Noctalia-shell bar as a graphical-session systemd user service.
+#
+# An ExecStartPre deep-merges our managed JSON into the user's
+# ~/.config/noctalia/*.json before the bar starts: the files stay
+# writable (runtime edits and the in-app settings UI survive) while
+# the keys we pin re-apply on every (re)start. Without an existing
+# settings.json noctalia takes its fresh-install path and the bar
+# fails to draw until a manual reload — seeding sidesteps that.
+#
+# Also keeps a purge that cleans up leftover state from the prior
 # patched-build / spaces-plugin era.
 { pkgs, ... }:
 let
+  # Managed noctalia config, deep-merged into the user's on-disk JSON on
+  # every service (re)start (see mergeConfig). Pins the bar to the top
+  # edge; merged, not symlinked, so the user can still change everything
+  # else from the UI.
+  managedSettings = (pkgs.formats.json { }).generate "noctalia-settings.json" {
+    bar.position = "top";
+  };
+
+  # Deep-merges each managed JSON file into ~/.config/noctalia/<rel>
+  # (jq `a * b`, managed side wins): objects merge recursively, arrays /
+  # scalars are replaced, unmanaged keys (and the user's runtime edits to
+  # them) survive. Runs as the noctalia-shell ExecStartPre, so it executes
+  # per-user with $HOME set, before the bar starts.
+  mergeConfig = pkgs.writeShellApplication {
+    name = "noctalia-config-merge";
+    runtimeInputs = [
+      pkgs.jq
+      pkgs.coreutils
+    ];
+    text = ''
+      cfgDir="''${XDG_CONFIG_HOME:-$HOME/.config}/noctalia"
+
+      mergeNoctaliaJson() {
+        local managed="$1" target="$2" existing merged tmp dir
+        dir="$(dirname "$target")"
+        mkdir -p "$dir"
+        if [ -f "$target" ] && existing="$(jq -e . "$target" 2>/dev/null)"; then
+          :
+        else
+          existing='{}'
+        fi
+        if ! merged="$(printf '%s' "$existing" | jq --slurpfile m "$managed" '. * $m[0]')"; then
+          echo "noctalia: could not merge $target, leaving it untouched" >&2
+          return 0
+        fi
+        tmp="$(mktemp "$dir/.noctalia-merge.XXXXXX")"
+        printf '%s\n' "$merged" > "$tmp"
+        mv "$tmp" "$target"
+      }
+
+      mergeNoctaliaJson ${managedSettings} "$cfgDir/settings.json"
+    '';
+  };
+
   # Removes leftover spaces-owned plugin state on every nixos-rebuild
   # / boot activation: the patched-build `plugins-autoload/` dir, any
   # symlink under `plugins/` (spaces materialised plugins as symlinks,
@@ -81,8 +133,14 @@ in
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
-      restartTriggers = [ pkgs.noctalia-shell ];
+      restartTriggers = [
+        pkgs.noctalia-shell
+        mergeConfig
+      ];
       serviceConfig = {
+        # Seed/merge managed JSON into ~/.config/noctalia before the bar
+        # starts (per-user, $HOME set).
+        ExecStartPre = "${mergeConfig}/bin/noctalia-config-merge";
         ExecStart = "${pkgs.noctalia-shell}/bin/noctalia-shell";
         Restart = "on-failure";
         Slice = "session.slice";

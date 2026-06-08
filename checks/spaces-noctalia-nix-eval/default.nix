@@ -1,18 +1,21 @@
 # Cheap nix-eval contract for the noctalia bar shipped by the spaces
 # bundle.
 #
-# Two things actually need testing here:
+# Three things actually need testing here:
 #   - the stale-plugin purge runs at activation time AND removes
 #     every leftover shape a long-running host can carry (symlinks
 #     under plugins/, the patched-era plugins-autoload/ dir, and
 #     ghost entries in plugins.json), without touching user-installed
 #     marketplace plugins or other state;
+#   - the config merge (the bar's ExecStartPre) is a deep merge: it
+#     pins our managed keys while preserving sibling and unmanaged keys
+#     (and seeds a fresh host so the bar draws on first start);
 #   - the bundle boundary is intact: nixosModules.spaces ships the
 #     bar, nixosModules.pi-chat does not.
 #
-# Everything else (ExecStart shape, partOf/wantedBy, package list,
-# upower toggle) is one-line module config — a `nix build` of the
-# system catches breakage there, no point re-asserting it here.
+# Everything else (partOf/wantedBy, package list, upower toggle) is
+# one-line module config — a `nix build` of the system catches breakage
+# there, no point re-asserting it here.
 { pkgs, inputs, ... }:
 let
   baseModules = [
@@ -48,12 +51,16 @@ let
   ];
 
   userActivation = spacesSystem.config.system.userActivationScripts.script or "";
+  # The bar's ExecStartPre — the per-user config seed/merge. Inheriting it
+  # into the runCommand env below also builds it (shellcheck) as a dep.
+  mergeScript = spacesSystem.config.systemd.user.services.noctalia-shell.serviceConfig.ExecStartPre;
 
 in
 pkgs.runCommand "spaces-noctalia-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
     inherit userActivation;
+    inherit mergeScript;
     panelOnlyHasNoctalia =
       if (panelOnlySystem.config.systemd.user.services.noctalia-shell or null) == null then
         "no"
@@ -140,6 +147,28 @@ pkgs.runCommand "spaces-noctalia-nix-eval-test"
     # purge errors when ~/.config/noctalia does not exist yet.
     HOME=$(mktemp -d) "$purgeScript" \
       || fail "purge errored on a host with no ~/.config/noctalia"
+
+    # ── 5. Config seed/merge (the bar's ExecStartPre): managed keys win,
+    # but it is a deep merge — sibling keys and the user's own unmanaged
+    # keys survive. The same step seeds a fresh host before the bar draws.
+    mstage=$(mktemp -d)
+    mkdir -p "$mstage/.config/noctalia"
+    cat >"$mstage/.config/noctalia/settings.json" <<'EOF'
+    { "bar": { "position": "bottom", "floating": true }, "general": { "avatar": "x" } }
+    EOF
+    HOME="$mstage" "$mergeScript"
+    jq -e '.bar.position == "top"' "$mstage/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge did not pin bar.position=top"
+    jq -e '.bar.floating == true' "$mstage/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge clobbered sibling bar.floating — not a deep merge"
+    jq -e '.general.avatar == "x"' "$mstage/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge dropped unmanaged key general.avatar"
+
+    # Fresh host: no existing settings.json — the merge must seed it.
+    mfresh=$(mktemp -d)
+    HOME="$mfresh" "$mergeScript"
+    jq -e '.bar.position == "top"' "$mfresh/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge did not seed settings.json on a fresh host"
 
     touch "$out"
   ''
