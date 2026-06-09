@@ -1,0 +1,113 @@
+/* SPDX-FileCopyrightText: no
+ * SPDX-License-Identifier: CC0-1.0
+ *
+ * Spaces OS Calamares stylesheet, applied to the whole CalamaresWindow
+ * (CalamaresWindow.cpp: setStyleSheet(Branding::stylesheet())). Calamares
+ * auto-loads `stylesheet.qss` from the branding component directory; it is
+ * copied in next to branding.desc by ../../default.nix.
+ *
+ * Selectors are Qt widget objectNames found in the Calamares 3.4.2 sources:
+ *   #mainApp            main window            (CalamaresWindow.cpp)
+ *   #sidebarApp,#logoApp left sidebar + logo    (CalamaresWindow.cpp)
+ *   #mainText           welcome heading label  (welcome/WelcomePage.ui)
+ *   #resultsExplanation welcome body label     (welcome/checker/ResultsListWidget.cpp)
+ *   #welcomeLogo        welcome hero image     (welcome/checker/ResultsListWidget.cpp)
+ *   #*Button            welcome link buttons   (welcome/WelcomePage.ui)
+ *
+ * Themeable-surface caveats (intentionally NOT attempted here):
+ *  - The sidebar step list is a QTreeView with a custom C++ delegate
+ *    (ProgressTreeDelegate) that paints text/highlight from the branding.desc
+ *    `style:` colors and ignores QSS. Its centered labels and flat (non-pill)
+ *    active block are therefore fixed; the mockup's left-aligned labels and
+ *    rounded pill would need a custom `calamares-sidebar.qml`.
+ *  - The welcome copy ("Every Space begins with a foundation" + body) is a
+ *    fixed Calamares template ("<h1>Welcome to the %1 installer</h1>" and
+ *    "This program will ask you some questions and set up %1 ...") whose only
+ *    branding lever is the product name. The wording is styled to match the
+ *    mockup here; matching the literal sentences would need a C++ patch.
+ */
+
+/* Geist across the whole UI. The font is made available to the installer
+ * environment via fonts.packages in modules/nixos/installer-iso.nix; here we
+ * only select it. The universal selector reaches every child widget of the
+ * window (labels, buttons, combos, the sidebar tree). */
+* {
+    font-family: "Geist";
+}
+
+/* Clean white content area. */
+#mainApp {
+    background-color: #ffffff;
+}
+
+/* Welcome heading. The label text is rich text wrapped in <h1>, so this sets
+ * the base font that <h1> scales up from: a larger base pushes the <h1> toward
+ * the mockup's prominent title, and weight/color land on the heading. The wide
+ * symmetric padding narrows the word-wrapped, centered label's contents rect so
+ * the title holds the mockup's tight two-line column instead of spanning the
+ * whole content area (Calamares exposes no max-width for #mainText; padding is
+ * the only QSS lever that shrinks a QLabel's wrap width). */
+#mainText {
+    color: #18181b;
+    font-size: 16pt;
+    font-weight: 800;
+    padding-left: 180px;
+    padding-right: 180px;
+}
+
+/* Welcome body line (shown when the requirements check passes): lighter and
+ * smaller, matching the mockup's muted sub-heading. Heavier side padding than
+ * the heading constrains the smaller body type into the mockup's ~3-line
+ * centered column rather than one full-width line. */
+#resultsExplanation {
+    color: #71717a;
+    font-size: 11pt;
+    padding-left: 320px;
+    padding-right: 320px;
+}
+
+/* Welcome hero (#welcomeLogo, the productWelcome knot). It is a
+ * FixedAspectRatioLabel that scales the pixmap to fill its contents rect
+ * (KeepAspectRatio), but the Expanding label is pushed down and starved of
+ * height by an addStretch() above it in ResultsListWidget's layout, so it
+ * renders small and low. A QSS min-height forces a taller contents rect -- the
+ * label then claims back the empty space above and scales the knot up toward
+ * the mockup's large, central hero. min-width keeps it from collapsing narrow
+ * if the layout ever gives it little horizontal room; the 1.95:1 aspect means
+ * the rendered width follows from the height. */
+#welcomeLogo {
+    min-width: 600px;
+    min-height: 370px;
+}
+
+/* Light, flat sidebar. The container background is set here; the step-list
+ * colors come from branding.desc `style:` (see header). Make the tree itself
+ * transparent so the container color shows through the empty area below the
+ * last step, and drop its frame. */
+#sidebarApp {
+    background-color: #f4f4f5;
+}
+#sidebarApp QTreeView {
+    background-color: transparent;
+    border: none;
+}
+#logoApp {
+    background-color: transparent;
+}
+
+/* Welcome-page link buttons: muted by default, coral accent on hover --
+ * the only spot the mockup's coral lands on an actually themeable widget. */
+#supportButton,
+#donateButton,
+#knownIssuesButton,
+#releaseNotesButton {
+    color: #71717a;
+    border: none;
+    background: transparent;
+}
+#supportButton:hover,
+#donateButton:hover,
+#knownIssuesButton:hover,
+#releaseNotesButton:hover {
+    color: #ff6b5e;
+}
