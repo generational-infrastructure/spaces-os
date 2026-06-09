@@ -41,6 +41,13 @@ let
     url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q6_K.gguf";
     sha256 = "sha256-Pb9j4ivoM9DmhPJrNtRUSPXyBvDnpsrGtKqeDPTJzOg=";
   };
+
+  gemma4-12b-gguf =
+    quant: sha256:
+    builtins.fetchurl {
+      url = "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-${quant}.gguf";
+      inherit sha256;
+    };
 in
 {
   options.services.llama-swap = {
@@ -88,6 +95,36 @@ in
             "gemma4:e4b" = {
               cmd = "${llama-server} -m ${gemma4-e4b-gguf} --port \${PORT}" + modelArgs "gemma4:e4b";
               aliases = [ "gemma4" ];
+            };
+            "gemma4:12b-ud-q3_k_xl" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "UD-Q3_K_XL" "sha256-YK6JHl1ZBB7hX9nMWZro0s/oVJ900eGQoU4wdrZuqvE="} --port \${PORT}"
+                + modelArgs "gemma4:12b-ud-q3_k_xl";
+            };
+            "gemma4:12b-q4_k_m" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "Q4_K_M" "sha256-Q/7JjFECscRGtN3QqUOfHbOi4fLguM0UPOHqYZqUA9Y="} --port \${PORT}"
+                + modelArgs "gemma4:12b-q4_k_m";
+            };
+            "gemma4:12b-ud-q4_k_xl" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "UD-Q4_K_XL" "sha256-7jOrW+jgesocJp/GRertXzKY4InVLbKUFYOdjymVcCA="} --port \${PORT}"
+                + modelArgs "gemma4:12b-ud-q4_k_xl";
+            };
+            "gemma4:12b-q5_k_m" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "Q5_K_M" "sha256-G8Yz7JiBeFi+wQ9z+gJkgclmJEmq5LgKBd+yjveEwng="} --port \${PORT}"
+                + modelArgs "gemma4:12b-q5_k_m";
+            };
+            "gemma4:12b-q6_k" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "Q6_K" "sha256-4WAt3CJMFZWE60x9amyNaC/Gr7LvuPdsEL/WO6cUNqI="} --port \${PORT}"
+                + modelArgs "gemma4:12b-q6_k";
+            };
+            "gemma4:12b-q8_0" = {
+              cmd =
+                "${llama-server} -m ${gemma4-12b-gguf "Q8_0" "sha256-dNLU8LWwjKhYnRpfUOaJwJhEafPO29x9Z0WMbp41SWo="} --port \${PORT}"
+                + modelArgs "gemma4:12b-q8_0";
             };
           };
         };
