@@ -580,6 +580,14 @@ Item {
     return first.length > 40 ? first.slice(0, 40) : first;
   }
 
+  // True when `id` names a configured executor. The validation point for
+  // /host: launches: an unknown id must be refused, never silently routed
+  // to the default (mirrors how /model: refuses an unknown model).
+  function _isKnownExecutor(id) {
+    for (const e of executors) if (e && e.id === id) return true;
+    return false;
+  }
+
   // Launch an agent in the background: create a normal session, spawn
   // its pi worker *directly* (bypassing the panel-open gate in
   // _maybeSpawn, which would otherwise refuse to spawn while the panel
@@ -588,9 +596,17 @@ Item {
   // first-class index entry, continuable later via the chat panel.
   function launchBackground(prompt, opts) {
     if (!prompt || !String(prompt).trim()) return "";
+    // /host:<id> pins the session to a configured executor. Refuse an
+    // unknown id outright rather than letting it fall through to the
+    // default — a session pinned to a non-existent executor would never
+    // route. Empty ⇒ undefined ⇒ defaultExecutor (today's behaviour).
+    const executor = (opts && opts.executor) || "";
+    if (executor !== "" && !_isKnownExecutor(executor)) {
+      Logger.w("PiChat", "launch refused: unknown executor", executor);
+      return "";
+    }
     const summary = promptSummary(prompt);
-    // executorId left undefined ⇒ defaultExecutor; quick-launch carries opts.model.
-    const id = newSession(summary, undefined, opts);
+    const id = newSession(summary, executor !== "" ? executor : undefined, opts);
     const obj = _sessionObjs[id];
     if (!obj) return id;
     const map = Object.assign({}, _pendingBg);
