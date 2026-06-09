@@ -45,16 +45,23 @@ Item {
   // (no matching model / unknown directive). Rendered in place of the list.
   property bool loading: false
   property string note: ""
+  // Which directive key the open value list belongs to, so advance()
+  // narrows against the right candidate source (model vs host).
+  property string _valueKey: ""
 
   // The single registered directive today. Kept in code (not i18n): the
   // "/model:" token is grammar, not a translatable label.
-  readonly property var directiveKeys: [{ key: "model", label: "/model:" }]
+  readonly property var directiveKeys: [
+    { key: "model", label: "/model:" },
+    { key: "host", label: "/host:" },
+  ]
 
   // The Enter dispatcher's last decision, for QuickBar (hide on launch)
   // and for the headless check to assert against without a live worker.
   property string lastStatus: ""
   property string lastLaunchPrompt: ""
   property string lastLaunchModel: ""
+  property string lastLaunchExecutor: ""
 
   signal applied()
 
@@ -97,6 +104,28 @@ Item {
         out.push({ value: m.id, label: m.id });
     }
     return out;
+  }
+
+  // Executor-id candidates for /host:. Gated on >1 executor, mirroring
+  // Panel.qml's +-picker: with 0 or 1 configured there's nothing to pin,
+  // so the list stays empty (the bar shows the no-matching-host note).
+  function _hostCandidates(prefix) {
+    const execs = (root.backend && root.backend.executors) || [];
+    if (execs.length <= 1) return [];
+    const out = [];
+    for (const e of execs) {
+      if (e && e.id && String(e.id).indexOf(prefix) === 0)
+        out.push({ value: e.id, label: e.id });
+    }
+    return out;
+  }
+
+  // Candidate source for a value list, keyed by directive. Lets advance()
+  // narrow the right set without re-deriving the key from the token.
+  function _valueCandidatesFor(key, prefix) {
+    if (key === "host") return root._hostCandidates(prefix);
+    if (key === "model") return root._valueCandidates(prefix);
+    return [];
   }
 
   // Longest common prefix of the candidate `value`s — what an ambiguous
@@ -160,6 +189,15 @@ Item {
   function _openValue(key, prefix) {
     root.mode = root.modeValue;
     root.partial = prefix;
+    root._valueKey = key;
+    if (key === "host") {
+      root.candidates = root._hostCandidates(prefix);
+      root.loading = false;
+      root.note = root.candidates.length ? "" : I18n.tr("quickbar.no-matching-host");
+      root.active = true;
+      root.selectedIndex = root.candidates.length ? 0 : -1;
+      return;
+    }
     if (key !== "model") {
       root.candidates = [];
       root.loading = false;
@@ -251,7 +289,7 @@ Item {
     if (root.mode === root.modeValue) {
       if (root.candidates.length === 0) return; // unknown key / loading
       if (prefix === "") return; // "/model:" — reveal the list, don't pick
-      const matches = root._valueCandidates(prefix);
+      const matches = root._valueCandidatesFor(root._valueKey, prefix);
       if (matches.length === 1) {
         root._acceptValue(matches[0].value);
       } else if (matches.length > 1) {
@@ -308,6 +346,20 @@ Item {
     return "";
   }
 
+  // Resolve a typed /host: value to a configured executor id: an exact
+  // match, else a unique prefix (so "/host:ki" pins "kiwi" without Tab).
+  // "" ⇒ no/ambiguous match ⇒ the launch is refused.
+  function _resolveHost(p) {
+    // Empty value is not a host id — refuse it (every id prefix-matches "",
+    // so without this guard a lone executor would wrongly resolve). Mirrors
+    // _resolveModel, which returns "" for an unmatched/empty value.
+    if (String(p) === "") return "";
+    const execs = (root.backend && root.backend.executors) || [];
+    for (const e of execs) if (e && e.id === p) return e.id;
+    const m = execs.filter(e => e && e.id && String(e.id).indexOf(p) === 0);
+    return m.length === 1 ? m[0].id : "";
+  }
+
   // Enter. When the list is open this accepts; otherwise it launches the
   // parsed prompt (directives stripped), but only if the input is real:
   // an empty stripped prompt, an invalid model value, or an unknown
@@ -335,6 +387,15 @@ Item {
         return root.lastStatus;
       }
     }
+    let host = "";
+    if (r.directives.hasOwnProperty("host")) {
+      host = root._resolveHost(r.directives.host);
+      if (host === "") {
+        root._failOpen(I18n.tr("quickbar.no-matching-host"));
+        root.lastStatus = "invalid";
+        return root.lastStatus;
+      }
+    }
     const prompt = String(r.prompt || "").trim();
     if (prompt === "") {
       root.lastStatus = "noop";
@@ -342,8 +403,10 @@ Item {
     }
     const opts = {};
     if (model !== "") opts.model = model;
+    if (host !== "") opts.executor = host;
     root.lastLaunchPrompt = prompt;
     root.lastLaunchModel = model;
+    root.lastLaunchExecutor = host;
     if (root.backend) root.backend.launchBackground(prompt, opts);
     root.lastStatus = "launch";
     return root.lastStatus;

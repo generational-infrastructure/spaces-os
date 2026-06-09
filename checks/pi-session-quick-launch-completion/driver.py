@@ -184,8 +184,8 @@ def main() -> None:
                 f"{call('candidateTexts')!r}"
             )
 
-        # ── §4.2 row: bare "/" → directive-key menu, no mutation ──
-        check("slash menu", cand("/"), ["/model:"])
+        # ── §4.2 row: bare "/" → directive-key menu (both keys), no mutation ──
+        check("slash menu", cand("/"), ["/model:", "/host:"])
         check("slash selected", call("selectedCandidate"), "/model:")
         call("pressTab")
         check("slash tab no mutation", call("inputText"), "/")
@@ -296,6 +296,103 @@ def main() -> None:
         check("prose enter", call("pressEnter"), "launch")
         check("prose prompt", call("lastLaunchPrompt"), "just summarize the repo")
         check("prose no model", call("lastLaunchModel"), "")
+
+        # ── /host: — executor directive (mirrors /model:) ──
+        # Before any executor is configured, /host: offers nothing.
+        check("host empty no execs", cand("/host:"), [])
+        check("host empty note", call("note"), "no matching host")
+
+        # One executor: still gated (mirrors Panel's >1 +-picker rule).
+        call("setExecutorsOne")
+        check("host one exec gated", cand("/host:"), [])
+
+        # Two executors: ids are offered, prefix-narrowed, Tab-completed.
+        call("setExecutorsTwo")
+        check("host candidates", cand("/host:"), ["kiwi", "traube"])
+        set_at("/host:k")
+        call("pressTab")
+        check("host unique tab", call("inputText"), "/host:kiwi")
+        set_at("/host:t")
+        call("pressTab")
+        check("host other tab", call("inputText"), "/host:traube")
+        # No match → dead-end note, no candidates.
+        check("host no match", cand("/host:zzz"), [])
+        check("host no match note", call("note"), "no matching host")
+
+        # Unknown id + Enter → refused, bar stays open, no launch.
+        before = call("sessionCount")
+        set_at("/host:zzz do thing")
+        check("host invalid enter", call("pressEnter"), "invalid")
+        check("host invalid no launch", call("sessionCount"), before)
+        check("host invalid stays open", call("active"), "true")
+
+        # Valid id (full) + Enter → launch pinned to that executor.
+        before = int(call("sessionCount"))
+        set_at("/host:kiwi summarize")
+        check("host launch enter", call("pressEnter"), "launch")
+        check("host launch prompt", call("lastLaunchPrompt"), "summarize")
+        check("host launch executor", call("lastLaunchExecutor"), "kiwi")
+        if not wait_until(lambda: int(call("sessionCount")) == before + 1, timeout_s=5):
+            failures.append("host launch created no session")
+        else:
+            check("host newest executor", call("newestExecutor"), "kiwi")
+
+        # Prefix-unique id (no Tab) + Enter → resolves and launches.
+        before = int(call("sessionCount"))
+        set_at("/host:tra cleanup")
+        check("host prefix enter", call("pressEnter"), "launch")
+        check("host prefix executor", call("lastLaunchExecutor"), "traube")
+        if not wait_until(lambda: int(call("sessionCount")) == before + 1, timeout_s=5):
+            failures.append("host prefix launch created no session")
+        else:
+            check("host prefix newest executor", call("newestExecutor"), "traube")
+
+        # An empty host value must be refused, never resolved to the sole
+        # executor — "".indexOf is 0 for every id, so a single-executor
+        # deployment is the at-risk case. "/host:  x" (two spaces) parses
+        # to an empty host directive with prompt "x".
+        call("setExecutorsOne")
+        before = call("sessionCount")
+        set_at("/host:  do thing")
+        check("host empty value enter", call("pressEnter"), "invalid")
+        check("host empty value no launch", call("sessionCount"), before)
+        call("setExecutorsTwo")
+        before = call("sessionCount")
+        set_at("/host:  do thing")
+        check("host empty value enter 2x", call("pressEnter"), "invalid")
+        check("host empty value no launch 2x", call("sessionCount"), before)
+
+        # Single executor: gating hides the candidate menu, but /host: is
+        # NOT disabled — a full valid id still resolves and launches pinned
+        # to it, and an unknown id is still refused.
+        call("setExecutorsOne")
+        check("host one gated", cand("/host:"), [])
+        before = int(call("sessionCount"))
+        set_at("/host:kiwi single-home task")
+        check("host one enter", call("pressEnter"), "launch")
+        check("host one executor", call("lastLaunchExecutor"), "kiwi")
+        if not wait_until(lambda: int(call("sessionCount")) == before + 1, timeout_s=5):
+            failures.append("host one-executor launch created no session")
+        else:
+            check("host one newest executor", call("newestExecutor"), "kiwi")
+        before = call("sessionCount")
+        set_at("/host:ghost x")
+        check("host one unknown", call("pressEnter"), "invalid")
+        check("host one unknown no launch", call("sessionCount"), before)
+        call("setExecutorsTwo")
+
+        # Combined /model: + /host: → both applied (last-wins per key).
+        before = int(call("sessionCount"))
+        set_at("/model:gemma4:e4b /host:kiwi do both")
+        check("combined enter", call("pressEnter"), "launch")
+        check("combined prompt", call("lastLaunchPrompt"), "do both")
+        check("combined model", call("lastLaunchModel"), "local/gemma4:e4b")
+        check("combined executor", call("lastLaunchExecutor"), "kiwi")
+        if not wait_until(lambda: int(call("sessionCount")) == before + 1, timeout_s=5):
+            failures.append("combined launch created no session")
+        else:
+            check("combined newest model", call("newestModel"), "local/gemma4:e4b")
+            check("combined newest executor", call("newestExecutor"), "kiwi")
 
         if failures:
             die("completion contract mismatches:\n  " + "\n  ".join(failures))

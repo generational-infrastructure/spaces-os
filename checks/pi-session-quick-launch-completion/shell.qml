@@ -46,6 +46,24 @@ FloatingWindow {
       ];
     }
 
+    // Seed N executors the way the managed JSON would, so /host: completion
+    // and routing can be exercised headlessly. url:"" keeps them inactive.
+    function setExecutorsTwo() {
+      backend._cfg.executors = [
+        { id: "kiwi", url: "" },
+        { id: "traube", url: "" },
+      ];
+    }
+    function setExecutorsOne() {
+      backend._cfg.executors = [{ id: "kiwi", url: "" }];
+    }
+
+    function newestExecutor(): string {
+      const a = backend.sessionsList;
+      return a.length ? String(a[a.length - 1].executor || "") : "";
+    }
+    function lastLaunchExecutor(): string { return completion.lastLaunchExecutor; }
+
     function setInput(text: string, cursor: int) { completion.setInput(text, cursor); }
     function pressTab() { completion.advance(); }
     function pressShiftTab() { completion.move(-1); }
