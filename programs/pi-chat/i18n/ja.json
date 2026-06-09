@@ -48,6 +48,7 @@
     "placeholder": "エージェントを起動…  ( / でオプション )",
     "launch-hint": "↵ 起動",
     "no-matches": "一致するモデルがありません",
+    "no-matching-host": "一致するホストがありません",
     "unknown-directive": "不明なディレクティブ",
     "loading-models": "モデルを読み込み中…"
   }

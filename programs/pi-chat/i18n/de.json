@@ -48,6 +48,7 @@
     "placeholder": "Agent starten…  ( / für Optionen )",
     "launch-hint": "↵ starten",
     "no-matches": "kein passendes Modell",
+    "no-matching-host": "kein passender Host",
     "unknown-directive": "unbekannte Direktive",
     "loading-models": "Modelle werden geladen…"
   }

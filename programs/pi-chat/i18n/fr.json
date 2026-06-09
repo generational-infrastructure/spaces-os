@@ -48,6 +48,7 @@
     "placeholder": "Lancer un agent…  ( / pour les options )",
     "launch-hint": "↵ lancer",
     "no-matches": "aucun modèle correspondant",
+    "no-matching-host": "aucun hôte correspondant",
     "unknown-directive": "directive inconnue",
     "loading-models": "chargement des modèles…"
   }

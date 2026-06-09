@@ -48,6 +48,7 @@
     "placeholder": "Start een agent…  ( / voor opties )",
     "launch-hint": "↵ starten",
     "no-matches": "geen passend model",
+    "no-matching-host": "geen passende host",
     "unknown-directive": "onbekende instructie",
     "loading-models": "modellen laden…"
   }

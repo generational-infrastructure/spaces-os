@@ -48,6 +48,7 @@
     "placeholder": "Uruchom agenta…  ( / aby zobaczyć opcje )",
     "launch-hint": "↵ uruchom",
     "no-matches": "brak pasującego modelu",
+    "no-matching-host": "brak pasującego hosta",
     "unknown-directive": "nieznana dyrektywa",
     "loading-models": "ładowanie modeli…"
   }

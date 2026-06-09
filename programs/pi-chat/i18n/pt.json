@@ -48,6 +48,7 @@
     "placeholder": "Iniciar um agente…  ( / para opções )",
     "launch-hint": "↵ iniciar",
     "no-matches": "nenhum modelo correspondente",
+    "no-matching-host": "nenhum host correspondente",
     "unknown-directive": "diretiva desconhecida",
     "loading-models": "carregando modelos…"
   }
