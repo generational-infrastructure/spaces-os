@@ -52,8 +52,8 @@ Rectangle {
             fillMode: Image.PreserveAspectFit
             // Crisp raster: ask for more pixels than displayed, then pin the
             // on-screen width and let height follow the wordmark's aspect.
-            sourceSize.width: 420
-            Layout.preferredWidth: 140
+            sourceSize.width: 345
+            Layout.preferredWidth: 115
             Layout.preferredHeight: Layout.preferredWidth * ( implicitHeight / implicitWidth )
         }
 
