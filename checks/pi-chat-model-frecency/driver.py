@@ -12,6 +12,11 @@ clock. Asserts the four properties the panel's model ordering relies on:
   3. Never-used models keep their backend order, below every used
      model (stable tail).
   4. The store survives a FileView reload (it persisted to disk).
+  5. Default provider priority: with no frecency history, never-used
+     local models sort above never-used remote ones (local on top),
+     preserving backend order within each provider group.
+  6. Frecency beats that default: an explicitly-picked remote model
+     still outranks a never-used local one.
 
 Plus a no-mutation guard: sortModels must return a new array and leave
 its input untouched.
@@ -91,6 +96,14 @@ def main():
     # FileView.writeAdapter does not create parents, so pre-create the dir.
     state_dir = os.path.join(work_dir, ".local", "state", "spaces", "pi")
     os.makedirs(state_dir, exist_ok=True)
+    # Seed an empty-but-valid store so the singleton's first FileView load
+    # resolves via onLoaded (which bumps loadGeneration) rather than the
+    # onLoadFailed path (which is silent). That gives the driver a signal
+    # to wait on before recording — otherwise the async startup load can
+    # land *after* the first record() calls and clobber them. The store is
+    # still empty, so every frecency assertion below is unaffected.
+    with open(os.path.join(state_dir, "model-frecency.json"), "w") as f:
+        f.write('{"version":1,"models":{}}')
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
@@ -150,6 +163,18 @@ def main():
         if not wait_until(ipc_ready, timeout_s=20):
             die("quickshell never bound the test:frecency IPC target")
 
+        # The ModelFrecency singleton is lazily constructed on first access,
+        # and its Component.onCompleted fires an *async* FileView.reload().
+        # A loadGen() call constructs it; we then wait for loadGeneration to
+        # bump (the seeded store hits onLoaded) so the startup read has fully
+        # settled before any record() — otherwise that late read clobbers the
+        # first records and ordering silently reverts to input order.
+        if not wait_until(
+            lambda: int(ipc_call(qs_bin, shell_qml, env, "loadGen")) >= 1,
+            timeout_s=10,
+        ):
+            die("ModelFrecency startup FileView load never completed")
+
         # (1) Recency dominates. Both used once, but b a full day later.
         record("local/a1", T0)
         record("local/b1", T0 + DAY)
@@ -172,6 +197,24 @@ def main():
         o = order(["local/x3", "local/a3", "local/y3"], T0)
         if o != ["local/a3", "local/x3", "local/y3"]:
             die(f"never-used tail: expected [a3, x3, y3], got {o!r}")
+
+        # (5) Default provider priority: with an EMPTY frecency history,
+        # every never-used local model sorts above every never-used
+        # remote one, so a fresh user sees their on-box executor first —
+        # regardless of the order pi emitted them in. Within each provider
+        # group the backend (input) order is preserved (stable partition).
+        o = order(["openrouter/o5a", "local/l5a", "openrouter/o5b", "local/l5b"], T0)
+        if o != ["local/l5a", "local/l5b", "openrouter/o5a", "openrouter/o5b"]:
+            die(f"default local-first: expected locals first, got {o!r}")
+
+        # (6) Frecency beats provider priority: an explicitly-picked remote
+        # model must outrank a never-used local one. The local-first rule
+        # is only a tie-break for the never-used tail, never an override of
+        # a real user choice.
+        record("openrouter/o6", T0)
+        o = order(["local/l6", "openrouter/o6"], T0)
+        if o != ["openrouter/o6", "local/l6"]:
+            die(f"frecency precedence: expected used remote first, got {o!r}")
 
         # (no mutation) sortModels must return a new array; its input
         # stays in input order.

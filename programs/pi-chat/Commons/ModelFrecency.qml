@@ -72,12 +72,23 @@ QtObject {
     root.persist();
   }
 
+  // Provider-priority rank for the never-used tail. The key is
+  // "<provider>/<id>", so a local model is one whose key begins with
+  // "local/". Local ranks ahead of everything else; see sortModels.
+  function _providerRank(key) {
+    return key.indexOf("local/") === 0 ? 0 : 1;
+  }
+
   // Return a NEW array of `models` ordered by frecency as of `now`,
   // without mutating the input. `keyOf(entry)` -> the "provider/id" key.
   // Used models (effectiveScore > 0) come first, by score desc, then
   // lastUsed desc, then key asc (fully deterministic). Never-used models
-  // follow in their original input order (stable tail). Decorate-sort-
-  // undecorate keeps that tail order exactly as given.
+  // follow with on-box local models ahead of remote ones (so a fresh user
+  // with no frecency history sees their local executor on top regardless
+  // of the order pi emitted providers in), and within each provider group
+  // their original input order is preserved (stable). This default only
+  // ever reorders the never-used tail — a model the user has actually
+  // picked sorts above in `used`, so an explicit choice always wins.
   function sortModels(models, keyOf, now) {
     if (now === undefined) now = Date.now();
     const arr = Array.isArray(models) ? models : [];
@@ -101,7 +112,12 @@ QtObject {
       if (b.lastUsed !== a.lastUsed) return b.lastUsed - a.lastUsed;
       return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
     });
-    unused.sort((a, b) => a.index - b.index);
+    unused.sort((a, b) => {
+      const ra = root._providerRank(a.key);
+      const rb = root._providerRank(b.key);
+      if (ra !== rb) return ra - rb;
+      return a.index - b.index;
+    });
     return used.concat(unused).map(d => d.entry);
   }
 
