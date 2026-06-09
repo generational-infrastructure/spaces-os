@@ -1,15 +1,15 @@
 # Behavioural contract for the voice-record-toggle spaces wrapper
 # (modules/nixos/spaces-commands.nix).
 #
-# Recording state is now surfaced by the on-screen voxtype indicator (a
-# red dot — see voxtype-indicator.nix), so the wrapper no longer posts a
-# "voice recording started/stopped" transition toast. Its whole job is to
-# flip the daemon: `voxtype record toggle`. On success it must stay quiet;
-# a failure still posts the mkCommand "failed to …" toast (covered by the
-# generic wrapper behaviour, not re-asserted here).
+# `voxtype record toggle` flips recording on/off but says nothing about
+# which way it went. The wrapper must report the actual transition:
+# read the daemon state first (`voxtype status`), then toggle, then post
+# "voice recording started" or "voice recording stopped" — mirroring
+# voxtype's own rule (state == "recording" => the toggle stops it).
 #
-# We exercise the real shipped wrapper (pulled from the evaluated system)
-# with stubbed `voxtype`/`notify-send`. ~3-5s.
+# We exercise the real shipped wrapper (pulled from the evaluated
+# system) with stubbed `voxtype`/`notify-send`, so the start/stop
+# wording can't drift from what voxtype actually does. ~3-5s.
 { pkgs, inputs, ... }:
 let
   system = inputs.nixpkgs.lib.nixosSystem {
@@ -32,11 +32,14 @@ let
   };
   wrapper = system.config.services.spaces.commands.voice-record-toggle;
 
-  # `voxtype record toggle` must be invoked; record the argv so the test
-  # can assert the wrapper actually toggles. `voxtype status` is no longer
-  # called by the wrapper, but stub it harmlessly in case.
+  # `voxtype status` reports the current state; `voxtype record toggle`
+  # just has to succeed. State is taken from $VOX_STATE so the test can
+  # drive both transitions.
   stubVoxtype = pkgs.writeShellScriptBin "voxtype" ''
-    printf '%s\n' "$*" >> "$VOX_WITNESS"
+    case "$1" in
+      status) printf '%s\n' "''${VOX_STATE:-idle}" ;;
+      *) : ;;
+    esac
   '';
   stubNotify = pkgs.writeShellScriptBin "notify-send" ''
     printf '%s\n' "$*" >> "$NOTIFY_WITNESS"
@@ -44,24 +47,29 @@ let
 in
 pkgs.runCommand "spaces-voice-record-toggle-test" { } ''
   set -euo pipefail
-  export VOX_WITNESS="$PWD/voxtype.log"
   export NOTIFY_WITNESS="$PWD/notify.log"
-  : > "$VOX_WITNESS"
-  : > "$NOTIFY_WITNESS"
   export PATH=${stubVoxtype}/bin:${stubNotify}/bin:$PATH
 
-  ${wrapper}/bin/${wrapper.name}
+  # Idle daemon: a toggle starts recording.
+  : > "$NOTIFY_WITNESS"
+  VOX_STATE=idle ${wrapper}/bin/${wrapper.name}
+  grep -q 'voice recording started' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: toggle from idle must report 'started'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  grep -q -- '--expire-time=2000' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: recording toast must expire after 2s (--expire-time=2000)" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  if grep -q 'stopped' "$NOTIFY_WITNESS"; then
+    echo "FAIL: toggle from idle reported 'stopped'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
+  fi
 
-  # The wrapper must flip the daemon.
-  grep -qx 'record toggle' "$VOX_WITNESS" \
-    || { echo "FAIL: wrapper must invoke 'voxtype record toggle'" >&2; cat "$VOX_WITNESS" >&2; exit 1; }
-
-  # ...and stay silent: no recording-transition toast (the indicator owns
-  # that feedback now).
-  if grep -qi 'voice recording' "$NOTIFY_WITNESS"; then
-    echo "FAIL: wrapper must not post a voice-recording notification" >&2
-    cat "$NOTIFY_WITNESS" >&2
-    exit 1
+  # Active recording: a toggle stops it (voxtype's rule: state == recording).
+  : > "$NOTIFY_WITNESS"
+  VOX_STATE=recording ${wrapper}/bin/${wrapper.name}
+  grep -q 'voice recording stopped' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: toggle while recording must report 'stopped'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  grep -q -- '--expire-time=2000' "$NOTIFY_WITNESS" \
+    || { echo "FAIL: recording toast must expire after 2s (--expire-time=2000)" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  if grep -q 'started' "$NOTIFY_WITNESS"; then
+    echo "FAIL: toggle while recording reported 'started'" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
   fi
 
   touch "$out"

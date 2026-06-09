@@ -37,11 +37,18 @@ let
     voice-record-toggle = mkCommand {
       name = "spaces-voice-record-toggle";
       label = "toggle voice recording";
-      # Recording state is shown by the on-screen voxtype indicator (a red
-      # dot, top-right — see voxtype-indicator.nix), so no transition
-      # toast here; just flip the daemon. A failure still posts the
-      # mkCommand "failed to …" toast.
-      text = "voxtype record toggle";
+      # voxtype's own toggle stops recording only when the state is
+      # "recording"; read the state first so we can name the transition.
+      text = ''
+        state=$(voxtype status) || state=idle
+        voxtype record toggle
+        # Short-lived (2s) transition toast.
+        if [ "$state" = recording ]; then
+          spaces_notify "voice recording stopped" 2000
+        else
+          spaces_notify "voice recording started" 2000
+        fi
+      '';
     };
     bar-reload = mkCommand {
       name = "spaces-bar-reload";
