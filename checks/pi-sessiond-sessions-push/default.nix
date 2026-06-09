@@ -7,23 +7,20 @@
 # having sent `list_sessions`. No LLM, no VM, ~2-3s.
 { pkgs, inputs, ... }:
 
-if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
-  pkgs.runCommand "pi-sessiond-sessions-push-x86_64-only" { } "mkdir -p $out"
-else
-
-  let
-    daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
-    py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
-  in
-  pkgs.runCommand "pi-sessiond-sessions-push-test"
-    {
-      nativeBuildInputs = [
-        py
-        pkgs.coreutils
-      ];
-    }
-    ''
-      export HOME="$TMPDIR"
-      ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon}
-      touch "$out"
-    ''
+let
+  daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
+  py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
+in
+pkgs.runCommand "pi-sessiond-sessions-push-test"
+  {
+    meta.platforms = [ "x86_64-linux" ];
+    nativeBuildInputs = [
+      py
+      pkgs.coreutils
+    ];
+  }
+  ''
+    export HOME="$TMPDIR"
+    ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon}
+    touch "$out"
+  ''
