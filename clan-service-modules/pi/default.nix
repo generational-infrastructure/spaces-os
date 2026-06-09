@@ -179,6 +179,29 @@
               '';
             };
           };
+
+          llamaSwap = {
+            webUi = {
+              enable = lib.mkEnableOption ''
+                exposing the bundled llama-swap web UI on this executor at
+                a stable clan hostname via a Caddy reverse proxy
+              '';
+              host = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "llama-swap.foo.pin";
+                description = ''
+                  Hostname the llama-swap web UI is reachable at when
+                  `llamaSwap.webUi.enable = true`. `null` (the default)
+                  auto-derives `llama-swap.<machineName>.<meta.domain>`.
+                  The hostname is exported via
+                  `manifest.exports.endpoints.hosts`, so the `pki` and
+                  `dm-dns` clan services auto-issue its certificate and
+                  distribute its CNAME.
+                '';
+              };
+            };
+          };
         };
       };
 
@@ -195,13 +218,20 @@
       let
         effectiveWebUiHost =
           if settings.webUi.host != null then settings.webUi.host else "agent-${machine.name}.${meta.domain}";
+        effectiveLlamaSwapHost =
+          if settings.llamaSwap.webUi.host != null then
+            settings.llamaSwap.webUi.host
+          else
+            "llama-swap.${machine.name}.${meta.domain}";
       in
       {
-        # Endpoint export — picked up by pinpox's `pki` and `dm-dns` clan
-        # services: the cert for `effectiveWebUiHost` is auto-issued by
-        # the local Caddy and a CNAME for it is distributed cluster-wide.
+        # Endpoint exports — picked up by pinpox's `pki` and `dm-dns` clan
+        # services: certs for each host are auto-issued by the local Caddy
+        # and CNAMEs are distributed cluster-wide.
         exports = mkExports {
-          endpoints.hosts = if settings.webUi.enable then [ effectiveWebUiHost ] else [ ];
+          endpoints.hosts =
+            (if settings.webUi.enable then [ effectiveWebUiHost ] else [ ])
+            ++ (if settings.llamaSwap.webUi.enable then [ effectiveLlamaSwapHost ] else [ ]);
         };
 
         nixosModule =
@@ -286,23 +316,32 @@
               serveWebUi = settings.webUi.enable;
             };
 
-            # Caddy reverse-proxy in front of the daemon's HTTP/WS port for
-            # the PWA's stable hostname (TLS terminated by Caddy with the
-            # pki-issued cert; Caddy 2 passes WS upgrades through verbatim,
-            # so the same vhost serves the static assets *and* the live WS
-            # the PWA opens against same-origin).
-            services.caddy = lib.mkIf settings.webUi.enable {
+            # Caddy reverse-proxies fronting the executor's two optional
+            # clan-hostname endpoints. TLS is terminated by Caddy with the
+            # pki-issued cert per host; Caddy 2 passes WS upgrades through
+            # verbatim, so the PWA vhost serves the static assets *and*
+            # the live WS the PWA opens against same-origin.
+            services.caddy = lib.mkIf (settings.webUi.enable || settings.llamaSwap.webUi.enable) {
               enable = true;
-              virtualHosts."${effectiveWebUiHost}".extraConfig =
-                "reverse_proxy 127.0.0.1:${toString settings.port}";
+              virtualHosts = lib.mkMerge [
+                (lib.mkIf settings.webUi.enable {
+                  "${effectiveWebUiHost}".extraConfig = "reverse_proxy 127.0.0.1:${toString settings.port}";
+                })
+                (lib.mkIf settings.llamaSwap.webUi.enable {
+                  "${effectiveLlamaSwapHost}".extraConfig =
+                    "reverse_proxy 127.0.0.1:${toString config.services.llama-swap.port}";
+                })
+              ];
             };
 
             # Open the HTTP(S) ports Caddy listens on. 443 is the actual
-            # PWA entrypoint; 80 is Caddy's automatic HTTP→HTTPS redirect.
-            networking.firewall.allowedTCPPorts = lib.mkIf settings.webUi.enable [
-              80
-              443
-            ];
+            # entrypoint; 80 is Caddy's automatic HTTP→HTTPS redirect.
+            networking.firewall.allowedTCPPorts =
+              lib.mkIf (settings.webUi.enable || settings.llamaSwap.webUi.enable)
+                [
+                  80
+                  443
+                ];
           };
       };
   };
