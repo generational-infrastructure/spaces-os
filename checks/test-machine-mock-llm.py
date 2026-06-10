@@ -33,6 +33,13 @@ MEMORY_FACT_SUBJECT = "hobby"
 MEMORY_FACT_BODY = "mountain biking"
 MEMORY_TRIGGER = MEMORY_FACT_BODY
 
+# Loopback-executor sandbox probe (test-machine-ws-probe.py): on this
+# trigger, emit a bash tool_call that tries to read the user's HOME.
+# bash-confirm gates it; the probe approves; ProtectHome=tmpfs in the
+# per-command unit must hide the marker, so the fallback echo fires.
+HOME_PROBE_TRIGGER = "run the home probe"
+HOME_PROBE_CMD = "cat /home/test/secret-marker || echo HOME-DENIED"
+
 
 def system_text(messages):
     parts = []
@@ -136,7 +143,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        reply = pick_reply(req.get("messages", []))
+        messages = req.get("messages", [])
+        lower_user = user_text(messages).lower()
+        has_tool_result = any(m.get("role") == "tool" for m in messages)
+        probe = HOME_PROBE_TRIGGER in lower_user
+        reply = "Done." if (probe and has_tool_result) else pick_reply(messages)
         model = req.get("model", MODELS[0])
         stream = bool(req.get("stream"))
 
@@ -190,6 +201,55 @@ class Handler(BaseHTTPRequestHandler):
                 ],
             }
         )
+
+        if probe and not has_tool_result:
+            emit(
+                {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_home_probe",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "bash",
+                                            "arguments": json.dumps(
+                                                {"command": HOME_PROBE_CMD}
+                                            ),
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            emit(
+                {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ],
+                }
+            )
+            done = b"data: [DONE]\n\n"
+            self.wfile.write(f"{len(done):x}\r\n".encode())
+            self.wfile.write(done)
+            self.wfile.write(b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            return
         for piece in reply.split():
             emit(
                 {

@@ -324,6 +324,9 @@ in
     # gets it for free; voxtype's config is unconditional, so it is
     # enabled by the mere import.
     inputs.self.nixosModules.voxtype
+    # The per-user loopback executor the panel attaches to by default
+    # (services.pi-chat.localExecutor enables + port-syncs it).
+    inputs.self.nixosModules.pi-sessiond-local
   ];
 
   options.services.pi-chat = {
@@ -413,6 +416,20 @@ in
         Executor id new (and legacy, un-pinned) sessions are created on. Empty
         falls back to the lone configured executor, else the local in-process pi.
       '';
+    };
+
+    localExecutor = {
+      enable = lib.mkEnableOption "advertising the per-user loopback pi-sessiond (pi-sessiond-local) to the panel";
+      id = lib.mkOption {
+        type = lib.types.str;
+        default = "host";
+        description = "Executor id the loopback daemon is advertised under.";
+      };
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8768;
+        description = "Loopback port pi-sessiond-local listens on (the panel connects to ws://127.0.0.1:<port>).";
+      };
     };
 
     defaultModel = lib.mkOption {
@@ -670,6 +687,19 @@ in
       "^google-cli(\\s|$)"
     ];
 
+    # The loopback executor becomes the default target for new sessions.
+    # mkDefault keeps it overridable; an explicit "" restores local spawn.
+    services.pi-chat.defaultExecutor = lib.mkIf cfg.localExecutor.enable (
+      lib.mkDefault cfg.localExecutor.id
+    );
+
+    # The loopback daemon the entry points at. Imported below; enabled and
+    # port-synced from the panel-side knob so one flag drives both halves.
+    services.pi-sessiond-local = lib.mkIf cfg.localExecutor.enable {
+      enable = lib.mkDefault true;
+      port = lib.mkDefault cfg.localExecutor.port;
+    };
+
     # llama-swap supplies the default LLM endpoint; enable by default
     # so a fresh install boots into a usable state.
     services.llama-swap.enable = lib.mkDefault true;
@@ -900,31 +930,43 @@ in
     # Shell config file. The QML side reads this on startup so we
     # don't have to thread a dozen env vars through the user manager.
     # Symlink from a generation-pinned store path.
-    environment.etc."spaces/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" {
-      inherit (cfg) llmUrl;
-      inherit (cfg) wsUrl;
-      inherit (cfg) wsToken;
-      executors = configExecutors;
-      inherit (cfg) defaultExecutor;
-      inherit (cfg) defaultModel;
-      inherit (cfg) defaultProvider;
-      piBin = lib.getExe piPkg;
-      inherit (cfg.sandbox) idleTimeoutMinutes;
-      inherit (cfg.sandbox) memoryHigh;
-      openrouterEnabled = cfg.openrouter.enable;
-      # memoryDbDir is $HOME-relative (the user-writable vector store);
-      # memoryHfHome is the absolute /nix/store path that ships the
-      # pre-baked embedding-model cache. The per-chat memory toggle
-      # in the panel header writes/removes a marker file under each
-      # session's state dir, so both paths stay live regardless.
-      memoryDbDir = memoryDbRel;
-      memoryHfHome = toString memoryHfHome;
-      # Extra sandbox binds contributed via services.pi-chat.sandboxBinds.
-      # The panel expands %h / %t and emits one systemd-run BindPaths
-      # (or BindReadOnlyPaths) property per entry, after the
-      # pi-chat-owned baseline binds.
-      inherit (cfg) sandboxBinds;
-    };
+    environment.etc."spaces/pi-chat.json".source = jsonFormat.generate "pi-chat-shell.json" (
+      {
+        inherit (cfg) llmUrl;
+        inherit (cfg) wsUrl;
+        inherit (cfg) wsToken;
+        executors = configExecutors;
+        inherit (cfg) defaultExecutor;
+        inherit (cfg) defaultModel;
+        inherit (cfg) defaultProvider;
+        piBin = lib.getExe piPkg;
+        inherit (cfg.sandbox) idleTimeoutMinutes;
+        inherit (cfg.sandbox) memoryHigh;
+        openrouterEnabled = cfg.openrouter.enable;
+        # memoryDbDir is $HOME-relative (the user-writable vector store);
+        # memoryHfHome is the absolute /nix/store path that ships the
+        # pre-baked embedding-model cache. The per-chat memory toggle
+        # in the panel header writes/removes a marker file under each
+        # session's state dir, so both paths stay live regardless.
+        memoryDbDir = memoryDbRel;
+        memoryHfHome = toString memoryHfHome;
+        # Extra sandbox binds contributed via services.pi-chat.sandboxBinds.
+        # The panel expands %h / %t and emits one systemd-run BindPaths
+        # (or BindReadOnlyPaths) property per entry, after the
+        # pi-chat-owned baseline binds.
+        inherit (cfg) sandboxBinds;
+      }
+      // lib.optionalAttrs cfg.localExecutor.enable {
+        # Per-user loopback pi-sessiond (pi-sessiond-local). The panel folds
+        # this into its executors list with the per-login token path
+        # $XDG_RUNTIME_DIR/pi-sessiond-local/token — the secret itself never
+        # lands in this world-readable file.
+        localExecutor = {
+          inherit (cfg.localExecutor) id;
+          url = "ws://127.0.0.1:${toString cfg.localExecutor.port}";
+        };
+      }
+    );
 
     # XDG autostart entry, for compositors that don't follow the
     # systemd-managed graphical-session path (e.g. user runs niri via

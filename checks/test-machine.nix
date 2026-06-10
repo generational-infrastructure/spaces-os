@@ -53,6 +53,8 @@ let
   testPiChat = ./test-pi-chat.py;
   testPiMemory = ./test-pi-memory.py;
   mockLlm = ./test-machine-mock-llm.py;
+  wsProbe = ./test-machine-ws-probe.py;
+  pyWs = pkgs.python3.withPackages (ps: [ ps.websockets ]);
 
   baseTest = pkgs.testers.runNixOSTest {
     name = "test-machine${lib.optionalString useOpenrouter "-openrouter"}";
@@ -78,6 +80,7 @@ let
 
         environment.systemPackages = [
           pkgs.python3
+          pyWs
           pkgs.curl
           pkgs.mako
         ];
@@ -409,6 +412,58 @@ let
                 raise Exception(
                     "memory e2e failed (exit={}):\n{}".format(code, mem_out)
                 )
+
+        # ── Loopback executor (pi-sessiond-local): security invariants ──
+        # Folded in from the former local-executor-machine check: these
+        # depend on the same full boot path (greetd → user manager →
+        # daemon) this test already pays for. The sandbox probe drives
+        # the mock LLM, so it stays local-mode only.
+        with subtest("loopback daemon runs in the user manager, not as root"):
+            machine.wait_until_succeeds(
+                "systemctl --user --machine=test@.host is-active pi-sessiond-local.service",
+                timeout=120,
+            )
+            pid = machine.succeed(
+                "systemctl --user --machine=test@.host show -p MainPID --value "
+                "pi-sessiond-local.service"
+            ).strip()
+            assert pid != "0", "daemon has no main pid"
+            daemon_uid = machine.succeed(f"stat -c %u /proc/{pid}").strip()
+            assert daemon_uid == "${uid}", f"daemon uid {daemon_uid}, expected ${uid}"
+
+        machine.succeed("echo home-marker-secret > /home/test/secret-marker")
+        machine.succeed("chown test /home/test/secret-marker")
+
+        with subtest("daemon mount namespace hides the user's home"):
+            machine.succeed("test -f /home/test/secret-marker")
+            machine.fail(f"nsenter -t {pid} -m test -f /home/test/secret-marker")
+
+        with subtest("daemon listens on 8768 (bun cold start can take a while)"):
+            machine.wait_until_succeeds("ss -tln | grep -q ':8768 '", timeout=180)
+
+        with subtest("WS auth: runtime token accepted, wrong token rejected"):
+            machine.succeed(
+                "su - test -c 'XDG_RUNTIME_DIR=/run/user/${uid} "
+                "${pyWs}/bin/python3 ${wsProbe} 8768 "
+                "/run/user/${uid}/pi-sessiond-local/token auth'"
+            )
+
+        ${lib.optionalString (!useOpenrouter) ''
+          with subtest("bash tool runs sandboxed: HOME hidden inside the unit"):
+              out = machine.succeed(
+                  "su - test -c 'XDG_RUNTIME_DIR=/run/user/${uid} "
+                  "${pyWs}/bin/python3 ${wsProbe} 8768 "
+                  "/run/user/${uid}/pi-sessiond-local/token sandbox'"
+              )
+              assert "HOME-DENIED" in out
+              assert "home-marker-secret" not in out
+        ''}
+
+        with subtest("panel config defaults to the loopback executor"):
+            machine.succeed(
+                "${pkgs.jq}/bin/jq -e '.localExecutor.id == \"host\" "
+                "and .defaultExecutor == \"host\"' /etc/spaces/pi-chat.json"
+            )
 
         with subtest("spaces-notify-forward unit comes up"):
             # Full e2e (notify-send → forwarder → quickshell IPC → chat)

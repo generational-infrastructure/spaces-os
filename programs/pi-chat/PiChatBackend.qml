@@ -41,7 +41,10 @@ Item {
   // DefaultEnvironment to be wired up correctly.
   FileView {
     id: configFile
-    path: "/etc/spaces/pi-chat.json"
+    // Test seam: headless checks point the backend at a fixture config via
+    // $SPACES_PI_CHAT_CONFIG, because the build sandbox can't write the
+    // root-owned /etc path. Unset in production.
+    path: String(Quickshell.env("SPACES_PI_CHAT_CONFIG") || "") || "/etc/spaces/pi-chat.json"
     printErrors: false
     JsonAdapter {
       id: configAdapter
@@ -76,6 +79,10 @@ Item {
       // shorthand, folded into this list below.
       property var executors: []
       property string defaultExecutor: ""
+      // Per-user loopback pi-sessiond (services.pi-chat.localExecutor):
+      // { id, url }. Folded into `executors` below with the per-login
+      // runtime token path; null when the module hasn't enabled it.
+      property var localExecutor: null
     }
   }
 
@@ -134,6 +141,12 @@ Item {
     const list = (root._cfg.executors || []).slice();
     if (list.length === 0 && root.wsUrl !== "")
       list.push({ id: "remote", url: root.wsUrl, token: root.wsToken });
+    // Loopback pi-sessiond-local: the module advertises { id, url }; the
+    // hello token is per-login, minted into the user runtime dir, so only
+    // its path goes on the entry — PiExecutor reads it at connect time.
+    const le = root._cfg.localExecutor;
+    if (le && le.id && le.url)
+      list.push({ id: String(le.id), url: String(le.url), token: "", tokenPath: root.runtimeDir + "/pi-sessiond-local/token" });
     // Test seam: a headless check injects the executor topology as JSON via
     // $SPACES_PI_CHAT_EXECUTORS because it can't write the root-owned
     // /etc/spaces/pi-chat.json. Synchronous (no FileView) so it never perturbs

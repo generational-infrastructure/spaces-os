@@ -21,6 +21,7 @@
   ];
 
   services.pi-chat.enable = lib.mkDefault true;
+  services.pi-chat.localExecutor.enable = lib.mkDefault true;
 
   services.greetd = {
     enable = lib.mkDefault true;
