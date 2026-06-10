@@ -8,7 +8,7 @@ Exercises the REAL production path:
      to the daemon socket and pushes prompt bubbles into PiSession.
   3. Run the actual `skill-config request-input` CLI binary against
      a staged test-skill with a known schema — exactly as pi would
-     inside a sandboxed scope.
+     from inside its pi-sessiond sandbox.
   4. Assert a `type:"prompt"` bubble with `promptState:"pending"`
      appears in the session's messages (via qs ipc).
   5. Submit a value through the QML IPC handler (simulating the user
@@ -16,7 +16,7 @@ Exercises the REAL production path:
   6. Assert the CLI process exits 0 (value was saved).
   7. Assert the bubble state transitions to `"submitted"`.
 
-No pi process, no LLM, no compositor. ~5s.
+No pi process, no pi-sessiond, no LLM, no compositor. ~5s.
 """
 
 import json
@@ -67,20 +67,6 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     return shell_root
 
 
-def stage_systemd_run_stub(work_dir: str) -> str:
-    """Install systemd-run stub into work_dir/bin."""
-    bin_dir = os.path.join(work_dir, "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    dst = os.path.join(bin_dir, "systemd-run")
-    with open(dst, "w") as f:
-        f.write("#!/usr/bin/env bash\n")
-        f.write('while [[ "$1" != "--" ]] && [[ $# -gt 0 ]]; do shift; done\n')
-        f.write("shift\n")
-        f.write('exec "$@"\n')
-    os.chmod(dst, 0o755)
-    return bin_dir
-
-
 def stage_test_skill(state_dir: str) -> None:
     """Create a minimal test-skill in skills-defs with a known schema."""
     skill_dir = os.path.join(state_dir, "skills-defs", "test-skill")
@@ -124,16 +110,12 @@ def main():
 
     # Directories.
     state_dir = os.path.join(work_dir, "state")
-    agent_dir = os.path.join(state_dir, "pi-agent")
-    sessions_dir = os.path.join(state_dir, "sessions", "test")
     skill_config_store = os.path.join(state_dir, "skill-config")
     workspace = os.path.join(work_dir, "workspace")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
     sock_path = os.path.join(xdg_runtime, "spaces-skill-config.sock")
     for d in [
         state_dir,
-        agent_dir,
-        sessions_dir,
         skill_config_store,
         workspace,
         xdg_runtime,
@@ -141,27 +123,20 @@ def main():
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
 
-    # Minimal pi settings.
-    with open(os.path.join(agent_dir, "settings.json"), "w") as f:
-        json.dump({"extensions": [], "skills": []}, f)
-
     # Stage a test skill in skills-defs — same layout the NixOS
     # module creates via tmpfiles symlinks.
     stage_test_skill(state_dir)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
-    bin_dir = stage_systemd_run_stub(work_dir)
 
     env = {
         "HOME": work_dir,
-        "PATH": bin_dir + ":" + os.environ.get("PATH", "/bin:/usr/bin"),
+        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
         "XDG_RUNTIME_DIR": xdg_runtime,
         "QT_QPA_PLATFORM": "offscreen",
         "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
         "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "TEST_STATE_DIR": state_dir,
-        "TEST_AGENT_DIR": agent_dir,
         "TEST_WORKSPACE": workspace,
         "TEST_SKILL_SOCK": sock_path,
     }

@@ -75,21 +75,21 @@ const MIN_SIMILARITY = 0.4;
 const AUTO_RECALL_LIMIT = 3;
 
 /**
- * Per-session opt-out switch. The chat panel writes the marker file
- * via `touch`/`rm` whenever the user flips the toggle button in the
- * header — so the kill switch takes effect on the very next prompt
- * without restarting the pi RPC process. Missing env (running outside
- * the spaces sandbox, e.g. an upstream pi session, or tests that don't
- * stage the state dir) is treated as "memory enabled" — the marker
- * convention is opt-out, not opt-in, and we'd rather over-capture than
- * silently swallow facts because of a misconfigured env.
+ * Per-session opt-out switch. The marker file `memory-off` lives in the
+ * session directory; the chat panel flips it through pi-sessiond's
+ * `set_memory` command whenever the user toggles the header button — so
+ * the kill switch takes effect on the very next prompt without restarting
+ * anything. The path is resolved through the SDK's session manager because
+ * one pi-sessiond process hosts many sessions, so a process-wide env var
+ * can't carry per-session state. No ctx (or no session dir) is treated as
+ * "memory enabled" — the convention is opt-out, and we'd rather
+ * over-capture than silently swallow facts.
  */
-function isMemoryDisabled(): boolean {
-  const stateDir = process.env.SPACES_PI_CHAT_STATE_DIR;
-  const sessionId = process.env.SPACES_SESSION_ID;
-  if (!stateDir || !sessionId) return false;
+function isMemoryDisabled(ctx?: ExtensionContext): boolean {
+  const dir = ctx?.sessionManager.getSessionDir();
+  if (!dir) return false;
   try {
-    return existsSync(join(stateDir, "sessions", sessionId, "memory-off"));
+    return existsSync(join(dir, "memory-off"));
   } catch {
     return false;
   }
@@ -392,9 +392,9 @@ async function extractFacts(
 
 export default function (pi: ExtensionAPI) {
   // Compaction summaries are the narrative layer — store whole.
-  pi.on("session_compact", async (event) => {
+  pi.on("session_compact", async (event, ctx) => {
     const summary = event.compactionEntry.summary?.trim();
-    if (isMemoryDisabled()) return;
+    if (isMemoryDisabled(ctx)) return;
     if (!summary) return;
     try {
       await sediment(pi, ["store", summary, "--scope", "global"]);
@@ -407,7 +407,7 @@ export default function (pi: ExtensionAPI) {
   // Per-turn capture: scrub → extract → store atomic facts.
   pi.on("agent_end", async (event, ctx) => {
     if (event.messages.length < 2) return;
-    if (isMemoryDisabled()) return;
+    if (isMemoryDisabled(ctx)) return;
 
     const scrubbed = scrubTurn(
       serializeConversation(convertToLlm(event.messages)),
@@ -438,9 +438,9 @@ export default function (pi: ExtensionAPI) {
   // Recall: inject relevant memories before each prompt, keyed on the
   // *payload* (which in spaces is just the user text — scrubPrompt is
   // a no-op beyond the empty check).
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     const key = scrubPrompt(event.prompt ?? "");
-    if (isMemoryDisabled()) return;
+    if (isMemoryDisabled(ctx)) return;
     if (!key?.trim()) return;
 
     try {
@@ -494,8 +494,10 @@ export default function (pi: ExtensionAPI) {
       _toolCallId,
       params: { query: string; limit?: number },
       signal,
+      _onUpdate,
+      ctx,
     ) {
-      if (isMemoryDisabled()) {
+      if (isMemoryDisabled(ctx)) {
         return {
           content: [
             {

@@ -1,45 +1,54 @@
-// Minimal test shell that hosts a single PiSession and exposes the
-// bits of its surface the chat panel actually relies on through
-// `qs ipc call test:pi-session …`.
+// Headless host for the attach-image WS contract check.
 //
-// Why no PiChatBackend / noctalia at all: the bug we're chasing is in
-// PiSession.qml's `_readImage` → `_appendMessage` path. Loading the
-// full backend (which requires noctalia singletons, a configured
-// /etc/spaces/pi-chat.json, and a live systemd user manager for
-// per-session sandboxing) just to drive `sendFile()` would multiply
-// the failure surface a hundredfold. Mounting PiSession directly with
-// stubbed env keeps the test honed on the actual contract.
+// Mounts the real PiChatBackend with one executor injected via
+// $SPACES_PI_CHAT_EXECUTORS (the panel's test seam — /etc/spaces/pi-chat.json
+// is root-owned and unwritable in the build sandbox), pointed at a REAL
+// pi-sessiond. PiSession has no local pi-spawn path anymore; sendFile's
+// prompt rides the executor's WebSocket, so the harness exercises the exact
+// production wiring: backend -> PiExecutor -> daemon -> embedded pi SDK.
+//
+// The whole pi-chat plugin tree is staged alongside this file by the driver,
+// so PiExecutor / PiSession / qs.Commons resolve exactly as in production.
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 
 Item {
   id: root
 
-  PiSession {
-    id: session
-    sessionId: "test"
-    piBin: Quickshell.env("TEST_PI_BIN")
-    stateDir: Quickshell.env("TEST_STATE_DIR")
-    piAgentDir: Quickshell.env("TEST_AGENT_DIR")
-    workspacePath: Quickshell.env("TEST_WORKSPACE")
-    llmUrl: Quickshell.env("TEST_LLM_URL")
+  PiChatBackend {
+    id: backend
+    panelVisible: false
   }
 
   IpcHandler {
     target: "test:pi-session"
 
-    function sendFile(path: string) {
-      session.sendFile(path, false);
+    function executorConnected(id: string): bool {
+      const e = backend._executorById[id];
+      return e ? !!e.connected : false;
     }
-    function send(text: string) {
-      session.send(text);
+
+    // Create a panel session pinned to the given executor; returns its id.
+    function newSessionOn(name: string, executor: string): string {
+      return backend.newSession(name, executor);
     }
-    function messages(): string {
-      return JSON.stringify(session.messages || []);
+
+    // The paperclip / drag-and-drop entry point under test.
+    function sendFile(id: string, path: string) {
+      const o = backend._sessionObjs[id];
+      if (o) o.sendFile(path, false);
     }
-    function streaming(): bool { return session.streaming; }
-    function typing(): bool { return session.typing; }
-    function lastError(): string { return session.lastError || ""; }
+
+    function messages(id: string): string {
+      const o = backend._sessionObjs[id];
+      return JSON.stringify((o && o.messages) || []);
+    }
+
+    function lastError(id: string): string {
+      const o = backend._sessionObjs[id];
+      return (o && o.lastError) || "";
+    }
   }
 }

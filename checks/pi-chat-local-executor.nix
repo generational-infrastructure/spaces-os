@@ -8,9 +8,9 @@
 # WS) end to end — the in-process-pi executor path a desktop uses once it
 # stops spawning pi from the panel directly.
 #
-# This keeps the dual transport: the panel only takes the WS path because
-# wsUrl is set here; shipping desktops still default to the local Process path
-# (it carries skill-config / side-channels the daemon path doesn't yet).
+# This exercises the system-service executor (services.pi-sessiond) over the
+# wsUrl shorthand; the per-user pi-sessiond-local (the shipping default) is
+# disabled so the session demonstrably routes through the system daemon.
 #
 # Heavy end-of-unit verification; the cheap WS coverage is checks/pi-session-ws.
 { pkgs, inputs, ... }:
@@ -66,6 +66,11 @@ pkgs.testers.runNixOSTest {
         extensions.bash-confirm = false;
         wsUrl = "ws://127.0.0.1:${toString wsPort}";
         wsToken = token;
+        # Pin the session to the system executor under test; without this the
+        # per-user pi-sessiond-local would be the default (and its LLM is not
+        # mocked here).
+        localExecutor.enable = false;
+        defaultExecutor = "remote";
       };
 
       # Deterministic offline LLM (no real llama-swap / GPU).

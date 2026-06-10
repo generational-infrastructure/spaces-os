@@ -5,11 +5,21 @@
 // pi in-process, so the per-session subprocess sandbox is gone. We reintroduce
 // confinement at the tool boundary: pi's built-in `bash` is replaced by a tool
 // whose BashOperations wraps every command in a `systemd-run` transient unit
-// carrying the same bouquet the desktop panel's PiSession._buildCommand applied
+// carrying the confinement bouquet the desktop's legacy local spawn pioneered
 // (ProtectHome=tmpfs + narrowed BindPaths + the kernel/namespace protection
 // set). `--pipe --wait` wires the unit's stdio back so output streams and the
 // exec resolves on completion. Kept pure (no process/fs access) so it is
 // unit-testable.
+
+// One declarative bind into the sandbox, mirroring the NixOS module option
+// services.pi-sessiond-local.bashBinds (paths arrive pre-expanded — systemd
+// resolves %h/%t in the Environment= the module hands the daemon).
+export interface SandboxBind {
+  source: string;
+  target?: string; // defaults to source
+  mode: "ro" | "rw";
+  optional?: boolean; // '-' prefix: a missing source skips the bind
+}
 
 export interface BashSandboxConfig {
   systemdRun: string; // path to systemd-run (or a stub, in tests)
@@ -18,6 +28,8 @@ export interface BashSandboxConfig {
   memoryHigh: string; // MemoryHigh= for the unit
   trusted: boolean; // skip filesystem narrowing (ProtectHome) when true
   extraBinds?: string[]; // additional rw paths to bind (e.g. the session dir)
+  env?: Record<string, string>; // --setenv= entries for the unit
+  binds?: SandboxBind[]; // declarative skill/module binds
 }
 
 // The kernel/namespace protection set applied to every sandboxed command,
@@ -59,6 +71,12 @@ export function buildBashSandboxArgv(
     `--working-directory=${c.workdir}`,
     `--property=BindPaths=${c.workdir}:${c.workdir}`,
     ...(c.extraBinds ?? []).map((p) => `--property=BindPaths=${p}:${p}`),
+    ...(c.binds ?? []).map((b) => {
+      const prop = b.mode === "ro" ? "BindReadOnlyPaths" : "BindPaths";
+      const prefix = b.optional ? "-" : "";
+      return `--property=${prop}=${prefix}${b.source}:${b.target ?? b.source}`;
+    }),
+    ...Object.entries(c.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
     ...hardeningProps(c),
   ];
   // Trusted sessions skip filesystem narrowing; the kernel/namespace

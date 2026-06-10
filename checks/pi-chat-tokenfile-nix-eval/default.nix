@@ -24,10 +24,6 @@ let
     }
   ];
 
-  # A stub `pi` so rendering pi-chat.json (which calls lib.getExe piPackage)
-  # doesn't drag in the real agent build.
-  piStub = pkgs.writeShellScriptBin "pi" "exit 0";
-
   mkSystem =
     extra:
     lib.nixosSystem {
@@ -40,7 +36,8 @@ let
 
   common = {
     services.pi-chat.enable = true;
-    services.pi-chat.piPackage = piStub;
+    # Token plumbing only — keep the loopback daemon out of the closure.
+    services.pi-chat.localExecutor.enable = false;
     services.pi-chat.wsUrl = "ws://server:8770";
   };
 

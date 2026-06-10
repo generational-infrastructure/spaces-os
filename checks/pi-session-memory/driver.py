@@ -69,7 +69,7 @@ def materialize_extension(ext_src, stub_bin, work_dir):
 
 
 class PiClient:
-    def __init__(self, pi_bin, env, work_dir):
+    def __init__(self, pi_bin, env, work_dir, session_dir):
         self.proc = subprocess.Popen(
             [
                 pi_bin,
@@ -79,7 +79,12 @@ class PiClient:
                 "local",
                 "--model",
                 "mock-memory-model",
-                "--no-session",
+                # A real session dir (instead of --no-session): the memory
+                # extension resolves its per-session opt-out marker via
+                # ctx.sessionManager.getSessionDir(), so the marker test
+                # needs pi to run against a directory we control.
+                "--session-dir",
+                session_dir,
                 "--offline",
                 "--no-context-files",
             ],
@@ -238,12 +243,11 @@ def main():
 
     sediment_log = os.path.join(work_dir, "sediment.log")
     request_log = os.path.join(work_dir, "mock-requests.log")
-    # Mirror the spaces sandbox env so the extension's per-session
-    # opt-out marker resolves. Pre-create the session dir because the
-    # marker check has to find an existing directory to stat against.
-    pi_state_dir = os.path.join(work_dir, "pi-state")
-    session_id = "test-session"
-    session_dir = os.path.join(pi_state_dir, "sessions", session_id)
+    # The extension resolves the per-session opt-out marker via
+    # ctx.sessionManager.getSessionDir() — the same convention
+    # pi-sessiond's set_memory command writes. Run pi against an
+    # explicit --session-dir so the marker path is under our control.
+    session_dir = os.path.join(work_dir, "session-state")
     os.makedirs(session_dir, exist_ok=True)
     marker_path = os.path.join(session_dir, "memory-off")
 
@@ -258,12 +262,10 @@ def main():
                 "PI_TELEMETRY": "0",
                 "HOME": work_dir,
                 "SEDIMENT_STUB_LOG": sediment_log,
-                "SPACES_PI_CHAT_STATE_DIR": pi_state_dir,
-                "SPACES_SESSION_ID": session_id,
             }
         )
 
-        pi = PiClient(pi_bin, env, work_dir)
+        pi = PiClient(pi_bin, env, work_dir, session_dir)
         try:
             # ── Turn 1 ────────────────────────────────────────────────
             pi.send({"type": "prompt", "message": "I love blue."})

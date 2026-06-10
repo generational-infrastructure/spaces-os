@@ -1,10 +1,11 @@
-// Pi RPC backend for the chat plugin.
+// Executor backend for the chat panel.
 //
 // Loads the sessions index from disk, materializes one PiSession per
-// entry, and exposes `chat` aliased to the active session so the
-// existing Panel/Bubble surface keeps working unchanged. The plugin
-// stays cold until a session is selected: spawn happens on the first
-// send, model query, or explicit selectSession().
+// entry (each pinned to a pi-sessiond executor — the loopback
+// pi-sessiond-local by default), and exposes `chat` aliased to the
+// active session so the existing Panel/Bubble surface keeps working
+// unchanged. Sessions stay cold until selected: attach happens on the
+// first send, model query, or explicit selectSession().
 //
 // Skill-config prompts come through a separate persistent subscriber
 // socket — same NDJSON protocol the skill-config daemon publishes.
@@ -25,8 +26,8 @@ Item {
 
   // Per-user preferences (maxHistory, defaultWorkspaceRoot, …) come
   // from the same Settings singleton the rest of the app uses. The
-  // module-derived deployment knobs (pi binary path, sandbox limits,
-  // openrouter flag) still come from /etc/spaces/pi-chat.json via
+  // module-derived deployment knobs (executor inventory, idle timeout,
+  // memory-wipe dir) still come from /etc/spaces/pi-chat.json via
   // the FileView below — those are root-owned and don't belong in
   // the user-writable settings file.
   function cfg(key) {
@@ -34,11 +35,11 @@ Item {
   }
 
   // ── module-derived config ──
-  // The NixOS pi-chat module writes /etc/spaces/pi-chat.json with all
-  // the deployment-specific knobs (pi binary path, sandbox limits,
-  // openrouter flag). Reading it via FileView keeps the QML
-  // self-contained without forcing the user manager's
-  // DefaultEnvironment to be wired up correctly.
+  // The NixOS pi-chat module writes /etc/spaces/pi-chat.json with the
+  // deployment-specific knobs (executor inventory, default model, idle
+  // timeout). Reading it via FileView keeps the QML self-contained
+  // without forcing the user manager's DefaultEnvironment to be wired
+  // up correctly.
   FileView {
     id: configFile
     // Test seam: headless checks point the backend at a fixture config via
@@ -51,24 +52,11 @@ Item {
       property string llmUrl: "http://127.0.0.1:8012"
       property string defaultModel: "gemma4:e4b"
       property string defaultProvider: "local"
-      property string piBin: "pi"
       property int idleTimeoutMinutes: 10
-      property string memoryHigh: "4G"
-      property bool openrouterEnabled: false
-      // Memory extension paths. memoryDbDir is $HOME-relative; the
-      // QML resolves it against homeDir below. memoryHfHome is an
-      // absolute /nix/store path that ships the pre-baked embedding
-      // model — sediment reads it via HF_HOME and never downloads.
-      // The pi-chat NixOS module is the single source of truth for
-      // both; the per-chat opt-out lives on the session entry.
+      // $HOME-relative dir of the sediment vector store; the panel only
+      // needs it for the destructive "wipe memory" action — recall and
+      // storage run inside the executor daemon.
       property string memoryDbDir: ""
-      property string memoryHfHome: ""
-      // Extra sandbox bind-mounts contributed by NixOS modules via
-      // services.pi-chat.sandboxBinds. List of
-      //   { source, target?, mode: "ro"|"rw", optional?: bool }
-      // Forwarded verbatim to each PiSession; %h/%t are expanded at
-      // session-spawn time inside PiSession._buildCommand().
-      property var sandboxBinds: []
       // Remote executor (pi-sessiond) WebSocket endpoint. When wsUrl is
       // non-empty the panel attaches sessions over WS instead of spawning
       // pi locally; wsToken is the pre-shared `hello` secret.
@@ -91,23 +79,14 @@ Item {
   readonly property string homeDir: String(Quickshell.env("HOME"))
   readonly property string runtimeDir: String(Quickshell.env("XDG_RUNTIME_DIR"))
   readonly property string stateDir: homeDir + "/.local/state/spaces/pi"
-  readonly property string piAgentDir: stateDir + "/pi-agent"
   readonly property string workspacesDir: homeDir + "/.local/share/spaces/workspaces"
   readonly property string sessionsIndexPath: stateDir + "/sessions.json"
-  readonly property string piBin: root._cfg.piBin
   readonly property string llmUrl: root._cfg.llmUrl
-  readonly property string memoryHigh: root._cfg.memoryHigh
-  readonly property bool openrouterEnabled: root._cfg.openrouterEnabled
-  // memoryDbDir is composed against $HOME; memoryHfHome is consumed
-  // as-is because it points at a /nix/store path that's already
-  // accessible inside the sandbox without an extra BindPath. Empty
-  // strings stay empty so PiSession's sandbox setup skips wiring
-  // anything when the module hasn't populated the JSON.
+  // memoryDbDir is composed against $HOME. Empty stays empty so
+  // wipeMemory() is a no-op when the module hasn't populated the JSON.
   readonly property string memoryDbDir: root._cfg.memoryDbDir
     ? homeDir + "/" + String(root._cfg.memoryDbDir).replace(/^\/+/, "")
     : ""
-  readonly property string memoryHfHome: root._cfg.memoryHfHome
-  readonly property var sandboxBinds: root._cfg.sandboxBinds || []
   readonly property string wsUrl: root._cfg.wsUrl
   readonly property string wsToken: root._cfg.wsToken
   readonly property int idleTimeoutMin: {
@@ -350,7 +329,10 @@ Item {
       // header surfaces a per-chat toggle that writes the opt-out
       // marker the extension reads at each hook entry.
       memoryEnabled: true,
-      // Which executor this chat is pinned to ("" / "local" = in-process pi).
+      // Which executor this chat is pinned to. May be "" when minted
+      // during startup before the config (and thus defaultExecutorId)
+      // loaded — resolution falls back to the default executor, so such
+      // entries self-heal instead of staying unroutable.
       executor: executor !== undefined ? executor : root.defaultExecutorId,
       // Daemon-side session id, set after the executor's first
       // create_session ack (or pre-populated when auto-imported from an
@@ -360,16 +342,12 @@ Item {
     };
   }
 
-  // BindPaths refuses to mount missing source paths, so both the
-  // per-session workspace and the per-session pi state directory
-  // must exist on disk before PiSession spawns its systemd-run.
+  // The default per-chat workspace dir, surfaced through listSessions
+  // for external consumers (session indicators etc.). Conversation
+  // state itself lives on the executor.
   function _ensureSessionDirs(sessionId, workspacePath) {
     const proc = _oneShotProcess.createObject(root);
-    proc.command = [
-      "mkdir", "-p",
-      workspacePath,
-      root.stateDir + "/sessions/" + sessionId,
-    ];
+    proc.command = ["mkdir", "-p", workspacePath];
     proc.running = true;
   }
 
@@ -390,18 +368,20 @@ Item {
   }
 
   // Called by PiSession after a fresh create_session ack assigns it a
-  // daemon-side id. Stamping the value on the persisted entry locks the
+  // daemon-side id — or with "" when restart() drops the old daemon
+  // session. Stamping the value on the persisted entry locks the
   // (panel ↔ daemon) session correspondence so future panel restarts
   // attach to the same daemon session (history continues) and so the
   // daemon's broadcast of the new id is recognised as "already ours" by
   // _importRemoteSessions instead of being auto-imported as a duplicate.
   function _onDaemonSessionAssigned(panelId, daemonId) {
-    if (!panelId || !daemonId) return;
+    if (!panelId) return;
+    const dId = daemonId || "";
     let dirty = false;
     sessionsList = sessionsList.map(s => {
-      if (s.id !== panelId || s.daemonSessionId === daemonId) return s;
+      if (s.id !== panelId || s.daemonSessionId === dId) return s;
       dirty = true;
-      return Object.assign({}, s, { daemonSessionId: daemonId });
+      return Object.assign({}, s, { daemonSessionId: dId });
     });
     if (dirty) _persist();
   }
@@ -462,6 +442,12 @@ Item {
       for (let j = 0; j < list.length; j += 1) {
         const r = list[j];
         if (!r || !r.id || known.has(r.id)) continue;
+        // Our own create_session in flight: the broadcast carrying this id
+        // can be processed before the create promise's .then stamps the
+        // panel entry (promise jobs drain after the socket's message
+        // burst). The executor holds a claim for that window — skip, the
+        // owning PiSession will bind it.
+        if (view.exec.isPendingCreated(r.id)) continue;
         const updated = r.updated || 0;
         if (updated <= lastImportTime) continue;
         known.add(r.id);
@@ -889,8 +875,16 @@ Item {
     }
   }
 
+  // Route a skill-config event to its owning session. `instance` is the
+  // SPACES_SESSION_ID baked into the bash sandbox — the *daemon's*
+  // session id — so match entries by daemonSessionId first; legacy
+  // events carrying a panel id still hit the direct lookup.
   function _routeTo(instance) {
-    if (instance && _sessionObjs[instance]) return _sessionObjs[instance];
+    if (instance) {
+      if (_sessionObjs[instance]) return _sessionObjs[instance];
+      const entry = sessionsList.find(s => s.daemonSessionId === instance);
+      if (entry && _sessionObjs[entry.id]) return _sessionObjs[entry.id];
+    }
     return _activeSession;
   }
 
@@ -1015,19 +1009,12 @@ Item {
           trusted: !!s.trusted,
           modelPref: s.model || "",
           unread: s.unread || 0,
-          piBin: Qt.binding(() => root.piBin),
-          stateDir: Qt.binding(() => root.stateDir),
-          piAgentDir: Qt.binding(() => root.piAgentDir),
-          llmUrl: Qt.binding(() => root.llmUrl),
-          memoryHigh: Qt.binding(() => root.memoryHigh),
-          openrouterEnabled: Qt.binding(() => root.openrouterEnabled),
           // Per-session opt-out; missing field (legacy sessions.json)
           // defaults to true so existing chats keep memory on.
           memoryEnabled: s.memoryEnabled !== false,
-          memoryDbDir: Qt.binding(() => root.memoryDbDir),
-          memoryHfHome: Qt.binding(() => root.memoryHfHome),
-          sandboxBinds: Qt.binding(() => root.sandboxBinds),
-          executor: Qt.binding(() => root.executorFor(s.executor !== undefined ? s.executor : root.defaultExecutorId)),
+          // "" (entry minted before the executor inventory loaded, or a
+          // pre-cutover legacy entry) falls back to the default executor.
+          executor: Qt.binding(() => root.executorFor(s.executor || root.defaultExecutorId)),
           // Re-attach to an existing daemon session instead of minting a
           // new one. Populated when this entry was either:
           //   - auto-imported from an executor's remoteSessions push (a

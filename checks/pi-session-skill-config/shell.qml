@@ -17,11 +17,9 @@ Item {
   PiSession {
     id: session
     sessionId: "test"
-    piBin: "/bin/false"
-    stateDir: Quickshell.env("TEST_STATE_DIR")
-    piAgentDir: Quickshell.env("TEST_AGENT_DIR")
+    // No executor configured — spawn() is a no-op; the test only needs
+    // the prompt-bubble surface (messages/patch/promptRespond).
     workspacePath: Quickshell.env("TEST_WORKSPACE")
-    llmUrl: "http://127.0.0.1:1"
     backend: root
   }
 

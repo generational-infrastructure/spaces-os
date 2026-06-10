@@ -56,7 +56,6 @@ QtObject {
       property int maxHistory: 200
       property string defaultWorkspaceRoot: ""
       property int idleTimeoutMinutes: 10
-      property string memoryHigh: "4G"
       property bool showThinking: true
       property bool showInferenceSpeed: false
 

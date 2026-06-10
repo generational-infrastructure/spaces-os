@@ -91,7 +91,12 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     sc '.ProtectHome == "tmpfs"'
     sc '.StateDirectory == "pi-sessiond-local"'
     sc '.LoadCredential == ["token:%t/pi-sessiond-local/token"]'
-    sc '.BindPaths == ["%S/pi-sessiond-local", "%h/.local/state/spaces/pi/sediment"]'
+    # State dir back through the ProtectHome tmpfs, plus the user
+    # manager's IPC endpoints (%t/systemd private socket + %t/bus) —
+    # ProtectHome=tmpfs empties /run/user too, and without these the
+    # daemon's `systemd-run --user` bash spawner cannot reach the
+    # manager. Sediment DB bind comes from memory.enable (default on).
+    sc '.BindPaths == ["%S/pi-sessiond-local", "%t/systemd", "%t/bus", "%h/.local/state/spaces/pi/sediment"]'
 
     # ── 1b. Memory parity (sediment runs in-process, daemon ns) ─────
     env_ '.SEDIMENT_DB == "%h/.local/state/spaces/pi/sediment/data"'

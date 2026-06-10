@@ -7,7 +7,7 @@
 # message_end without usage, or with usage.output=0, or before any
 # text bubble, must not synthesize a tps value.
 #
-# No pi process, no LLM, no compositor. ~3s.
+# No pi-sessiond, no executor, no LLM, no compositor. ~3s.
 { pkgs, ... }:
 pkgs.runCommand "pi-session-inference-speed-test"
   {

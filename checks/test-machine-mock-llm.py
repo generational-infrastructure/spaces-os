@@ -4,7 +4,7 @@
 Pi-chat's local mode would otherwise run qwen2.5:0.5b on the QEMU CPU,
 which can't prefill pi's multi-thousand-token system prompt within a
 sane test budget. The chat round-trip test exercises the *plumbing*
-(shell IPC → PiSession → systemd-run service → pi RPC →
+(shell IPC → PiSession → WebSocket → pi-sessiond → pi →
 OpenAI client → server), not the model itself; this mock keeps that
 plumbing honest while making the e2e completable in seconds.
 

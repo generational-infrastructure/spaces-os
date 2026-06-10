@@ -17,17 +17,15 @@ Item {
   PiSession {
     id: session
     sessionId: "test"
-    piBin: "/bin/false"
-    stateDir: Quickshell.env("TEST_STATE_DIR")
-    piAgentDir: Quickshell.env("TEST_AGENT_DIR")
+    // No executor configured — spawn() is a no-op; events arrive only
+    // via the injectEvent IPC below, mimicking daemon `event` payloads.
     workspacePath: Quickshell.env("TEST_WORKSPACE")
-    llmUrl: "http://127.0.0.1:1"
   }
 
   IpcHandler {
     target: "test:tps"
 
-    // Inject a raw RPC event — same shape as a pi stdout line.
+    // Inject a raw RPC event — same payload a daemon `event` envelope carries.
     function injectEvent(jsonStr: string) {
       const ev = JSON.parse(jsonStr);
       session._handleEvent(ev);

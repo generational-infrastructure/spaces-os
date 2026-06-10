@@ -26,8 +26,8 @@
 #   - the IpcHandler target `pi-chat` is registered with the running
 #     quickshell instance and answers `listSessions` / `send` / …
 #   - the test user can send a message through the shell IPC and the
-#     pi process spawned under systemd-run replies (via local mock or
-#     openrouter, depending on mode)
+#     pi session hosted by the loopback pi-sessiond replies (via local
+#     mock or openrouter, depending on mode)
 #   - the memory extension stores facts in one session and recalls
 #     them in another (cross-session sediment round-trip)
 #   - spaces-notify-forward bridges a desktop notification into the
@@ -97,9 +97,10 @@ let
         # round-trip test only checks plumbing, not model quality.
         services.pi-chat = {
           skills = lib.mkForce { };
-          extensions = {
-            bash-confirm = false;
-          };
+          # bash-confirm stays enabled: the daemon gates every bash tool
+          # call behind the confirm side-channel, which the sandbox probe
+          # exercises end-to-end. The chat round-trip + memory e2e never
+          # invoke bash, so they don't need confirms answered.
           # Opt the test VM into the forwarder so the
           # notification-bridge subtest has something to drive.
           notificationForwarding.enable = true;
@@ -231,13 +232,20 @@ let
                 "/run/user/${uid}/spaces-skill-config.sock", timeout=30
             )
 
-        with subtest("pi-agent config dir is materialized"):
+        with subtest("daemon agent config is staged (settings + skills + allowlist)"):
+            # pi-sessiond-local seeds its own agent dir from the module's
+            # settings template at startup; skills ride settings.json and
+            # the bash-confirm allow-list is a sibling file. The legacy
+            # panel-side ~/.local/state/spaces/pi/pi-agent dir is gone.
             machine.wait_until_succeeds(
-                "test -f /home/test/.local/state/spaces/pi/pi-agent/settings.json",
-                timeout=30,
+                "test -f /home/test/.local/state/pi-sessiond-local/pi-agent/settings.json",
+                timeout=60,
             )
             machine.succeed(
-                "grep -q 'llama-swap-discover' /home/test/.local/state/spaces/pi/pi-agent/settings.json"
+                "grep -q 'skills' /home/test/.local/state/pi-sessiond-local/pi-agent/settings.json"
+            )
+            machine.succeed(
+                "test -f /home/test/.local/state/pi-sessiond-local/pi-agent/bash-confirm.json"
             )
 
         with subtest("llama-swap is up"):
@@ -300,22 +308,17 @@ let
                 "quickshell ${shellConfig} ${target} ${modeArg} 2>&1"
             )
             if code != 0:
-                # Pi spawn lives in a per-session systemd scope; surface
-                # the scope state plus its journal so silent pi failures
-                # are visible at the first run rather than via timeout.
-                _, units = machine.execute(
-                    sudo_env
-                    + "systemctl --user list-units 'pi-chat-*' --all 2>&1"
-                )
-                machine.log("== pi-chat units ==\n" + units)
+                # Sessions live inside the loopback daemon; surface its
+                # journal so silent pi failures are visible at the first
+                # run rather than via timeout.
                 _, j = machine.execute(
                     sudo_env
-                    + "journalctl --user -b --no-pager -u 'pi-chat-*.service' "
+                    + "journalctl --user -b --no-pager -u pi-sessiond-local.service "
                     "2>&1 | tail -100"
                 )
-                machine.log("== pi-chat scope journal ==\n" + j)
+                machine.log("== pi-sessiond-local journal ==\n" + j)
                 _, qs_log = machine.execute(
-                    "tail -80 /run/user/${uid}/quickshell/by-id/*/log.log 2>&1"
+                    "tail -n 80 /run/user/${uid}/quickshell/by-id/*/log.log 2>&1"
                 )
                 machine.log("== quickshell plaintext log ==\n" + qs_log)
                 _, cfg_dump = machine.execute(
@@ -326,34 +329,14 @@ let
                     "chat round-trip failed (exit={}):\n{}".format(code, ptest_out)
                 )
 
-        with subtest("pi-chat scope tagged with the session id"):
-            # The round-trip subtest exchanged messages on the original
-            # session, which spawned a pi-chat-<sid>.service. A later
-            # newSession call switches activeSessionId before we get
-            # here, so don't rely on "active" — look for any session
-            # that has a matching service unit.
-            sessions_json = machine.succeed(
-                sudo_env + "quickshell ipc -c ${shellConfig} call ${target} listSessions"
-            )
-            import json as _json
-            sessions = _json.loads(sessions_json or "[]")
-            assert sessions, f"no sessions returned: {sessions_json!r}"
-            picked = None
-            for s in sessions:
-                sid = s['id']
-                code, _output = machine.execute(
-                    f"systemctl --user --machine=test@.host show "
-                    f"pi-chat-{sid}.service --property=LoadState "
-                    f"| grep -q '^LoadState=loaded'"
-                )
-                if code == 0:
-                    picked = sid
-                    break
-            assert picked, f"no pi-chat-*.service unit for any session in {sessions}"
-            machine.succeed(
-                f"systemctl --user --machine=test@.host show pi-chat-{picked}.service "
-                "--property=ProtectHome | grep -q '^ProtectHome=tmpfs'"
-            )
+        with subtest("no per-session local pi units exist (local spawn is gone)"):
+            # Cutover regression guard: every session must live on the
+            # loopback executor. A pi-chat-<sid>.service unit would mean
+            # the deleted local-spawn path somehow came back.
+            units = machine.succeed(
+                sudo_env + "systemctl --user list-units 'pi-chat-*.service' --all --no-legend 2>&1"
+            ).strip()
+            assert units == "", f"unexpected local pi units: {units!r}"
 
         with subtest("memory extension stores facts and recalls them in a new session"):
             # End-to-end: real sediment binary + real embedding model
@@ -394,13 +377,13 @@ let
                 machine.log("== sediment stats ==\n" + sed_stats)
                 _, mem_units = machine.execute(
                     sudo_env
-                    + "journalctl --user -b --no-pager -u 'pi-chat-*.service' "
+                    + "journalctl --user -b --no-pager -u pi-sessiond-local.service "
                     "2>&1 | tail -120"
                 )
-                machine.log("== pi-chat journal (memory) ==\n" + mem_units)
+                machine.log("== pi-sessiond-local journal (memory) ==\n" + mem_units)
                 _, qs_log = machine.execute(
                     "for f in /run/user/${uid}/quickshell/by-id/*/log.log; do "
-                    "  echo === $f ===; tail -400 \"$f\" 2>&1; "
+                    "  echo === $f ===; tail -n 400 \"$f\" 2>&1; "
                     "done"
                 )
                 machine.log("== quickshell log (memory) ==\n" + qs_log)

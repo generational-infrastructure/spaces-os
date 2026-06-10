@@ -1,21 +1,32 @@
 # Model-directive launch contract test.
 #
-# Proves backend.launchBackground(prompt, {model}) applies the requested
-# model to the pi worker BEFORE the prompt turn runs — the race the
-# awaited set_model fix closes. The mock LLM serves a multi-model list
-# (MOCK_MODELS_JSON); pi's default is deliberately a different model, so
-# the logged /v1/chat/completions request carrying the launched model is
-# a sharp regression guard for the set_model-vs-send race.
+# Proves backend.launchBackground(prompt, {model}) runs the turn on the
+# REQUESTED model, not the executor's default. The session lives on a REAL
+# pi-sessiond (bun, embedding pi via its SDK): the panel's create_session
+# carries the launched model, and the prompt is gated behind the daemon's
+# set_model response (the daemon echoes the request id, so the panel's
+# awaited _request resolves before send). The mock LLM serves a multi-model
+# list and logs which model every /v1/chat/completions request used; the
+# daemon's default is deliberately a different model, so a logged request
+# carrying the launched model is a sharp guard against the turn falling
+# back to the default.
 #
-# Reuses the pi-session-quick-launch stubs and mock so the launch
-# harness stays single-sourced. No VM, no compositor. ~10-20s.
+# Reuses the pi-session-quick-launch mock LLM + notify-send stub so the
+# launch harness stays single-sourced; the daemon's per-command bash
+# confinement wrapper is a passthrough stub (no bash tool commands here).
+# No VM, no compositor. ~10-30s.
 { pkgs, inputs, ... }:
 let
-  piPkg = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
+  daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
   harness = ../pi-session-quick-launch;
+  stub = pkgs.runCommandLocal "systemd-run-stub" { nativeBuildInputs = [ pkgs.bash ]; } ''
+    install -Dm755 ${../pi-sessiond-sidechannel/systemd-run-stub} $out/bin/systemd-run
+    patchShebangs $out/bin/systemd-run
+  '';
 in
 pkgs.runCommand "pi-session-quick-launch-model-directive-test"
   {
+    meta.platforms = [ "x86_64-linux" ];
     nativeBuildInputs = [
       pkgs.python3
       pkgs.quickshell
@@ -23,8 +34,8 @@ pkgs.runCommand "pi-session-quick-launch-model-directive-test"
       pkgs.bash
       pkgs.qt6.qtbase
       pkgs.qt6.qtdeclarative
+      pkgs.qt6.qtwebsockets
     ];
-    extDir = ../../modules/nixos/pi-chat/extensions;
     pluginDir = ../../programs/pi-chat;
   }
   ''
@@ -32,14 +43,15 @@ pkgs.runCommand "pi-session-quick-launch-model-directive-test"
     work=$TMPDIR/work
     mkdir -p "$work"
     export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    # PiChatBackend instantiates PiExecutor, which imports QtWebSockets — it
-    # lives outside quickshell's bundled QML path, so add it explicitly.
+    # PiExecutor imports QtWebSockets, which lives outside quickshell's bundled
+    # QML path — add it on both the Qt and the nixpkgs import-path vars.
     export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml:${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
+    export NIXPKGS_QT6_QML_IMPORT_PATH=${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
     python3 ${./driver.py} \
-      ${pkgs.lib.getExe piPkg} \
+      ${pkgs.lib.getExe daemon} \
       ${pkgs.lib.getExe pkgs.quickshell} \
       ${harness}/mock-llm.py \
-      "$extDir" \
+      ${stub}/bin/systemd-run \
       ${./.} \
       ${harness} \
       "$pluginDir" \

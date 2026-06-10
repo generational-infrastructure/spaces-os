@@ -45,7 +45,11 @@ import {
   ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { type BashSandboxConfig, buildBashSandboxArgv } from "./sandbox";
+import {
+  type BashSandboxConfig,
+  buildBashSandboxArgv,
+  type SandboxBind,
+} from "./sandbox";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -66,6 +70,30 @@ const STATE_DIR = resolve(
 // systemd-run that confines each `bash` tool command (or a stub, in tests).
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
+// Skill plumbing for the sandboxed bash units (NixOS module → JSON env).
+// SPACES_SESSIOND_BASH_ENV: { VAR: value } --setenv'd into every bash unit
+// (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_BASH_BINDS:
+// [{ source, target?, mode, optional? }] bind-mounted through the unit's
+// ProtectHome=tmpfs. Paths arrive pre-expanded — systemd resolves %h/%t in
+// the module's Environment= lines before the daemon ever sees them.
+function jsonEnv<T>(name: string, fallback: T): T {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.error(`pi-sessiond: ignoring malformed ${name}: ${String(err)}`);
+    return fallback;
+  }
+}
+const BASH_ENV = jsonEnv<Record<string, string>>(
+  "SPACES_SESSIOND_BASH_ENV",
+  {},
+);
+const BASH_BINDS = jsonEnv<SandboxBind[]>("SPACES_SESSIOND_BASH_BINDS", []);
+// bash-confirm allow-list template, staged next to settings.json (the
+// bash-confirm extension reads $PI_CODING_AGENT_DIR/bash-confirm.json).
+const BASH_CONFIRM_TEMPLATE = process.env.SPACES_SESSIOND_BASH_CONFIRM ?? "";
 // Trusted executor → skip filesystem narrowing (ProtectHome) for bash; the
 // kernel/namespace hardening still applies. Default: untrusted (sandboxed).
 const TRUSTED = (process.env.SPACES_SESSIOND_TRUSTED ?? "") === "1";
@@ -167,6 +195,9 @@ mkdirSync(`${STATE_DIR}/sessions`, { recursive: true });
 if (SETTINGS_TEMPLATE) {
   copyFileSync(SETTINGS_TEMPLATE, `${AGENT_DIR}/settings.json`);
 }
+if (BASH_CONFIRM_TEMPLATE) {
+  copyFileSync(BASH_CONFIRM_TEMPLATE, `${AGENT_DIR}/bash-confirm.json`);
+}
 // The SDK resolves its agent dir from this env (auth.json, sessions/, …).
 process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
 process.env.HOME = AGENT_DIR;
@@ -208,7 +239,7 @@ interface ProviderModel {
   id: string;
   name: string;
   reasoning: boolean;
-  input: ["text"];
+  input: ["text", "image"];
   cost: { input: 0; output: 0; cacheRead: 0; cacheWrite: 0 };
   contextWindow: number;
   maxTokens: number;
@@ -218,7 +249,11 @@ function providerModel(id: string, ctx = 128000, max = 4096): ProviderModel {
     id,
     name: id,
     reasoning: false,
-    input: ["text"],
+    // Optimistic vision declaration: llama-swap exposes no vision metadata,
+    // and pi-ai silently downgrades image parts to "(image omitted…)" for
+    // models that don't declare "image" input — which would drop every panel
+    // attachment. A non-vision model just errors that one request instead.
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: ctx,
     maxTokens: max,
@@ -270,10 +305,18 @@ async function setupProvider(): Promise<void> {
   });
 }
 
-// Resolve a model for a session: the requested id, else the configured default,
-// else the first available — inference lets us avoid annotating Model<…>.
+// Resolve a model for a session: the requested id (bare, or the panel's
+// "provider/id" form — the first segment is the provider, the rest the id,
+// so OpenRouter's slashed ids survive), else the configured default, else
+// the first available — inference lets us avoid annotating Model<…>.
 function resolveModel(modelId: string) {
+  const slash = modelId.indexOf("/");
+  const qualified =
+    slash > 0
+      ? modelRegistry.find(modelId.slice(0, slash), modelId.slice(slash + 1))
+      : undefined;
   return (
+    qualified ??
     (modelId ? modelRegistry.find(DEFAULT_PROVIDER, modelId) : undefined) ??
     (DEFAULT_MODEL
       ? modelRegistry.find(DEFAULT_PROVIDER, DEFAULT_MODEL)
@@ -403,7 +446,8 @@ function readSessionMeta(id: string): SessionMeta | undefined {
 // (the bouquet from sandbox.ts). Output streams via onData; the AbortSignal and
 // timeout kill the unit. In tests SYSTEMD_RUN is a stub that strips the flags
 // and execs `bash -c <command>` directly.
-function sandboxedBashOperations(sessionDir: string): BashOperations {
+function sandboxedBashOperations(id: string): BashOperations {
+  const sessionDir = sessionDirOf(id);
   return {
     exec(command, cwd, options) {
       const cfg: BashSandboxConfig = {
@@ -413,6 +457,15 @@ function sandboxedBashOperations(sessionDir: string): BashOperations {
         memoryHigh: MEMORY_HIGH,
         trusted: TRUSTED,
         extraBinds: [sessionDir],
+        binds: BASH_BINDS,
+        // Skill CLIs resolve by bare name (PATH from the daemon's unit) and
+        // find their plumbing via the module-provided env. SPACES_SESSION_ID
+        // routes skill-config prompts back to the owning chat session.
+        env: {
+          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+          ...BASH_ENV,
+          SPACES_SESSION_ID: id,
+        },
       };
       const argv = buildBashSandboxArgv(cfg, command);
       const { promise, resolve } = Promise.withResolvers<{
@@ -446,7 +499,7 @@ function buildTools(id: string) {
   const workdir = workdirOf(id);
   return [
     createBashToolDefinition(workdir, {
-      operations: sandboxedBashOperations(sessionDirOf(id)),
+      operations: sandboxedBashOperations(id),
     }),
     createReadToolDefinition(workdir),
     createEditToolDefinition(workdir),
@@ -785,11 +838,37 @@ function listSessions(): SessionInfo[] {
 // ---- command dispatch into the session -------------------------------------
 
 // A pi-rpc `response` event (the shape the panel's _handleResponse consumes).
+// `id` echoes the request id the client attached, so its _request promise
+// resolves; broadcasts carry the requester's id too — other clients ignore
+// ids they didn't mint.
 function responsePayload(
   command: string,
   data: Record<string, unknown>,
+  id?: string,
 ): Record<string, unknown> {
-  return { type: "response", command, success: true, data };
+  const base: Record<string, unknown> = {
+    type: "response",
+    command,
+    success: true,
+    data,
+  };
+  if (id) base.id = id;
+  return base;
+}
+// The matching failure shape — rejects the requester's _request promise.
+function errorPayload(
+  command: string,
+  error: string,
+  id?: string,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    type: "response",
+    command,
+    success: false,
+    error,
+  };
+  if (id) base.id = id;
+  return base;
 }
 // Send an event envelope to a single client (query replies; not buffered).
 function sendEvent(ws: Conn, session: Session, payload: unknown): void {
@@ -803,23 +882,34 @@ function sendEvent(ws: Conn, session: Session, payload: unknown): void {
 }
 
 // Route a §12 `command` payload (pi's own command shape) into the session.
-// prompt/abort/set_model/set_thinking act; get_state / get_messages /
-// get_available_models answer with a `response` event the panel consumes
-// (queries reply to the requester; set_model broadcasts so mirrors update).
+// prompt/abort/set_model/set_thinking/set_memory act; get_state /
+// get_messages / get_available_models answer with a `response` event the
+// panel consumes (queries reply to the requester; set_model and set_memory
+// broadcast so mirrors update). The optional `id` on a command is echoed on
+// its response so the panel's _request promises correlate.
 function dispatchCommand(
   session: Session,
   ws: Conn,
   payload: Record<string, unknown>,
 ): void {
   const type = asString(payload.type);
+  const reqId = asString(payload.id);
   switch (type) {
     case "prompt": {
       const message = asString(payload.message) ?? "";
       const streamingBehavior = asString(payload.streamingBehavior);
-      const opts =
-        streamingBehavior === "steer" || streamingBehavior === "followUp"
-          ? { streamingBehavior }
-          : undefined;
+      // Image attachments arrive in pi's own RPC shape
+      // ({ type: "image", data: <base64>, mimeType }) — the client encodes,
+      // the daemon forwards verbatim to the SDK.
+      const images = Array.isArray(payload.images)
+        ? (payload.images.filter(isRecord) as NonNullable<
+            Parameters<AgentSession["prompt"]>[1]
+          >["images"])
+        : undefined;
+      const opts: Parameters<AgentSession["prompt"]>[1] = {};
+      if (streamingBehavior === "steer" || streamingBehavior === "followUp")
+        opts.streamingBehavior = streamingBehavior;
+      if (images && images.length > 0) opts.images = images;
       void session.agent.prompt(message, opts).catch((err: unknown) => {
         broadcast(session, { type: "error", error: String(err) });
       });
@@ -833,22 +923,46 @@ function dispatchCommand(
         asString(payload.provider) ?? DEFAULT_PROVIDER,
         asString(payload.modelId) ?? asString(payload.model) ?? "",
       );
-      if (model) {
-        void session.agent
-          .setModel(model)
-          .then(() =>
-            broadcast(
-              session,
-              responsePayload("set_model", {
-                provider: model.provider,
-                id: model.id,
-              }),
-            ),
-          )
-          .catch((err: unknown) =>
-            broadcast(session, { type: "error", error: String(err) }),
-          );
+      if (!model) {
+        sendEvent(
+          ws,
+          session,
+          errorPayload("set_model", "unknown model", reqId),
+        );
+        return;
       }
+      void session.agent
+        .setModel(model)
+        .then(() =>
+          broadcast(
+            session,
+            responsePayload(
+              "set_model",
+              { provider: model.provider, id: model.id },
+              reqId,
+            ),
+          ),
+        )
+        .catch((err: unknown) =>
+          sendEvent(ws, session, errorPayload("set_model", String(err), reqId)),
+        );
+      return;
+    }
+    case "set_memory": {
+      // Per-session opt-out marker for the memory extension (file present →
+      // disabled). The extension re-reads it via
+      // ctx.sessionManager.getSessionDir() at every hook entry, so the flip
+      // applies on the next prompt without touching the live AgentSession.
+      const enabled = payload.enabled !== false;
+      const marker = `${sessionDirOf(session.id)}/memory-off`;
+      try {
+        if (enabled) rmSync(marker, { force: true });
+        else writeFileSync(marker, "");
+      } catch (err) {
+        sendEvent(ws, session, errorPayload("set_memory", String(err), reqId));
+        return;
+      }
+      broadcast(session, responsePayload("set_memory", { enabled }, reqId));
       return;
     }
     case "set_thinking": {
@@ -863,34 +977,46 @@ function dispatchCommand(
       sendEvent(
         ws,
         session,
-        responsePayload("get_state", {
-          model: session.agent.model
-            ? {
-                provider: session.agent.model.provider,
-                id: session.agent.model.id,
-              }
-            : null,
-          messageCount: session.agent.messages.length,
-          isStreaming: session.agent.isStreaming,
-        }),
+        responsePayload(
+          "get_state",
+          {
+            model: session.agent.model
+              ? {
+                  provider: session.agent.model.provider,
+                  id: session.agent.model.id,
+                }
+              : null,
+            messageCount: session.agent.messages.length,
+            isStreaming: session.agent.isStreaming,
+          },
+          reqId,
+        ),
       );
       return;
     case "get_messages":
       sendEvent(
         ws,
         session,
-        responsePayload("get_messages", { messages: session.agent.messages }),
+        responsePayload(
+          "get_messages",
+          { messages: session.agent.messages },
+          reqId,
+        ),
       );
       return;
     case "get_available_models":
       sendEvent(
         ws,
         session,
-        responsePayload("get_available_models", {
-          models: modelRegistry
-            .getAvailable()
-            .map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
-        }),
+        responsePayload(
+          "get_available_models",
+          {
+            models: modelRegistry
+              .getAvailable()
+              .map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
+          },
+          reqId,
+        ),
       );
       return;
     default:

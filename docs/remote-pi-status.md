@@ -8,6 +8,51 @@ All work is on branch **`pi-remote-chat`** (not pushed). Checks run with
 `nix build .#checks.x86_64-linux.<name>`.
 
 ---
+## Local-spawn cutover — complete
+
+The panel's legacy local execution path (`PiSession` spawning `pi --mode rpc`
+in a per-session `systemd-run --user` unit) is **deleted**. Every chat session
+now lives on a pi-sessiond executor; the desktop default is the per-user
+loopback daemon (`services.pi-sessiond-local`, enabled by
+`services.pi-chat.localExecutor.enable = true`, which is now the default).
+
+Parity ports that made the deletion possible:
+
+- **Skill plumbing** — the daemon stages skills (settings.json) and the
+  bash-confirm allow-list (`SPACES_SESSIOND_BASH_CONFIRM`); each per-bash
+  sandbox gets the skill env (`SPACES_SESSIOND_BASH_ENV`: skill-config /
+  open-url sockets, state dir, notifications file) and binds
+  (`SPACES_SESSIOND_BASH_BINDS`: sockets, skills-defs, skill-config store,
+  notifications) plus `SPACES_SESSION_ID` and the daemon's PATH via
+  `--setenv`. `services.pi-chat.sandboxBinds` keeps its module contract and
+  forwards into `services.pi-sessiond-local.bashBinds`.
+- **Per-session memory toggle** — new `set_memory` command writes/removes the
+  `memory-off` marker in the daemon-side session dir; the memory extension
+  resolves it via `ctx.sessionManager.getSessionDir()` (env-based resolution
+  removed — one daemon process hosts many sessions).
+- **Image attach** — the panel still encodes panel-side; the daemon forwards
+  `prompt.images` to the SDK (and `providerModel` now declares
+  `input: ["text","image"]` so pi-ai doesn't strip attachments).
+- **Request correlation** — commands carry an `id` the daemon echoes on the
+  matching response, so `setModelAndWait`/`_request` work over WS;
+  `resolveModel` accepts the panel's `provider/id` form.
+- **restart() over WS** — delete-old + create-new (create carries
+  `model=modelPref`); pi's in-place `new_session` is no longer used by the
+  panel.
+- **OpenRouter** — `services.pi-sessiond-local.openrouter.enable` LoadCredentials
+  the staged key into the daemon.
+- **ProtectHome=tmpfs fix** — it empties `/run/user` too; the daemon binds back
+  `%t/systemd` + `%t/bus` or `systemd-run --user` (the bash sandbox spawner)
+  cannot reach the user manager.
+
+Checks: `pi-session-{quick-launch,quick-launch-model-directive,idle-reap,
+attach-image,restart-preserves-model}` migrated to executor harnesses (real
+daemon or mock); `pi-session-sandbox-{env,binds}` deleted (argv contract lives
+in `pi-sessiond-sandbox` bun tests); nix-eval checks repointed at
+`SPACES_SESSIOND_BASH_BINDS`; `test-machine` asserts NO `pi-chat-<sid>.service`
+units exist (cutover regression guard).
+
+---
 ## Architecture revision — SDK-embedded execution (complete)
 
 **Decision reversed: the daemon embeds pi via its SDK instead of spawning

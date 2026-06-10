@@ -1,10 +1,11 @@
 # Pi-chat NixOS module.
 #
-# Standalone Quickshell chat panel for the spaces AI agent
-# (pi --mode rpc). Each chat session spawns its own pi process under
-# a per-session systemd-run --user transient service, so multiple
-# conversations stream in parallel and each lives in its own
-# filesystem sandbox (ProtectHome=tmpfs + selective binds).
+# Standalone Quickshell chat panel for the spaces AI agent. Every chat
+# session lives on a pi-sessiond executor reached over WebSocket — by
+# default the per-user loopback daemon (services.pi-sessiond-local,
+# enabled and fed its skill/sandbox surface by this module); remote
+# executors come in via `executors`/`wsUrl`. The panel itself never
+# spawns pi.
 #
 # The panel is a wlr-layer-shell surface anchored to the right edge,
 # hidden by default, summoned via
@@ -15,10 +16,9 @@
 #
 # Files this module owns:
 #   ~/.config/quickshell/pi-chat/              (materialized shell config, fresh mtimes for Qt qmlcache)
-#   ~/.local/state/spaces/pi/pi-agent/         (pi config dir, settings.json + auth.json + models.json)
-#   ~/.local/state/spaces/pi/sessions/         (one subdir per chat — pi --session-dir target)
-#   ~/.local/share/spaces/workspaces/          (default per-chat cwd, picked by the shell)
-#   /run/spaces-secrets/openrouter-api-key     (when openrouter.enable = true; user-readable)
+#   ~/.local/state/spaces/pi/                  (panel index: sessions.json, activity.json; skills-defs,
+#                                               skill-config store, notifications dir for the bash sandboxes)
+#   /run/spaces-secrets/openrouter-api-key     (when openrouter.enable = true; root:users 0640)
 #
 # User systemd units:
 #   pi-chat.service                            (materializes shell config, then runs `quickshell -c pi-chat`)
@@ -52,7 +52,6 @@ let
   mailCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.mail-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   desktopEntriesPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-desktop-entries;
-  piPkg = cfg.piPackage;
 
   # Memory extension: nix derivation that substitutes the absolute
   # sediment binary path into a single-file pi extension. Path-typed
@@ -107,8 +106,6 @@ let
   # literal expansions that tmpfiles understands.
   stateRel = ".local/state/spaces/pi";
   workspacesRel = ".local/share/spaces/workspaces";
-  piAgentRel = "${stateRel}/pi-agent";
-  sessionsRel = "${stateRel}/sessions";
   sessionsIndexRel = "${stateRel}/sessions.json";
   skillsDefsRel = "${stateRel}/skills-defs";
   skillConfigStoreRel = "${stateRel}/skill-config";
@@ -125,7 +122,6 @@ let
   # baked at build time (sedimentPkg.modelCache) so first runs need
   # no network.
   memoryDbRel = "${stateRel}/sediment";
-  memoryHfHome = sedimentPkg.modelCache;
 
   # All skills (built-ins + user-supplied via cfg.skills), merged
   # into one linked-farm so the plugin can pass a single dir or pi
@@ -179,36 +175,6 @@ let
     bundledExtensions // cfg.extensions
   );
   resolvedEnabledExtensions = lib.mapAttrs resolveExtension enabledExtensions;
-
-  piSettings = cfg.piSettings // {
-    inherit (cfg) defaultProvider;
-    inherit (cfg) defaultModel;
-    quietStartup = true;
-    extensions = lib.attrValues resolvedEnabledExtensions;
-    skills = lib.attrValues allSkills;
-  };
-
-  piSettingsJson = jsonFormat.generate "pi-chat-settings.json" piSettings;
-
-  # Allowlist of regex patterns whose bash invocations skip the
-  # bash-confirm prompt. The bash-confirm extension reads this file at
-  # load from $PI_CODING_AGENT_DIR/bash-confirm.json — keep the name in
-  # sync with modules/nixos/pi-chat/extensions/bash-confirm.ts.
-  bashConfirmJson = jsonFormat.generate "pi-chat-bash-confirm.json" {
-    inherit (cfg.bashConfirm) allowPatterns;
-  };
-  piModelsJson = jsonFormat.generate "pi-chat-models.json" cfg.piModels;
-
-  piAuthJson = jsonFormat.generate "pi-chat-auth.json" {
-    openrouter = {
-      type = "api_key";
-      # The plugin spawns each scope with LoadCredential=, which sets
-      # $CREDENTIALS_DIRECTORY for the pi process. Pi's "!cat …"
-      # indirection is evaluated at request time, so the key never
-      # lands on disk inside the agent dir.
-      key = ''!cat "$CREDENTIALS_DIRECTORY/openrouter-api-key"'';
-    };
-  };
 
   # D-Bus notification forwarder. Posts incoming notifications into
   # the active chat session via the standalone shell's IPC. The
@@ -419,7 +385,11 @@ in
     };
 
     localExecutor = {
-      enable = lib.mkEnableOption "advertising the per-user loopback pi-sessiond (pi-sessiond-local) to the panel";
+      enable =
+        lib.mkEnableOption "the per-user loopback pi-sessiond (pi-sessiond-local) as the panel's executor"
+        // {
+          default = true;
+        };
       id = lib.mkOption {
         type = lib.types.str;
         default = "host";
@@ -440,7 +410,7 @@ in
         OpenAI-compatible endpoint at `llmUrl` (i.e. configured in
         `services.llama-swap.settings.models`). The full model list
         shown in the model picker is discovered at runtime from
-        `''${llmUrl}/v1/models` by the llama-swap-discover extension.
+        `''${llmUrl}/v1/models` by the executor daemon.
       '';
     };
 
@@ -449,17 +419,10 @@ in
       default = "local";
       description = ''
         Provider pi selects at session start. The local default is
-        "local" — populated by the llama-swap-discover extension from
-        the llama-swap endpoint. Set to "openrouter" (or any other
-        bundled pi provider) to route chat through that backend.
+        "local" — populated by the executor daemon's /v1/models
+        discovery. Set to "openrouter" (or any other bundled pi
+        provider) to route chat through that backend.
       '';
-    };
-
-    piPackage = lib.mkOption {
-      type = lib.types.package;
-      default = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
-      defaultText = lib.literalExpression "inputs.llm-agents.packages.\${pkgs.stdenv.hostPlatform.system}.pi";
-      description = "The pi coding agent package.";
     };
 
     skills = lib.mkOption {
@@ -551,14 +514,15 @@ in
         ]
       '';
       description = ''
-        Extra bind-mounts to inject into each per-session pi sandbox.
+        Extra bind-mounts for the per-bash sandboxes of the loopback
+        executor (pi-sessiond-local).
 
         NixOS modules that add a skill **MUST** publish their required
-        host paths through this option rather than patching the
-        pi-chat plugin's internal bind list. The panel resolves these
-        at session-spawn time and appends the corresponding
-        systemd-run `--property=BindPaths` / `--property=BindReadOnlyPaths`
-        flags after the pi-chat-owned baseline binds.
+        host paths through this option. Forwarded into
+        `services.pi-sessiond-local.bashBinds` after the pi-chat-owned
+        baseline binds; the daemon emits the corresponding systemd-run
+        `--property=BindPaths` / `--property=BindReadOnlyPaths` flags on
+        every bash unit.
       '';
     };
 
@@ -581,19 +545,10 @@ in
       inherit (jsonFormat) type;
       default = { };
       description = ''
-        Extra keys to merge into pi's generated settings.json.
-        `defaultProvider`, `defaultModel`, `extensions`, and `skills`
-        are populated by this module and cannot be overridden here.
-      '';
-    };
-
-    piModels = lib.mkOption {
-      inherit (jsonFormat) type;
-      default = { };
-      description = ''
-        Contents of pi's models.json. Used to add custom providers or
-        override model properties via `modelOverrides`. Empty by
-        default — pi-chat ships no models.json when this is `{}`.
+        Extra keys to merge into the loopback executor's generated
+        settings.json (forwarded to services.pi-sessiond-local.piSettings).
+        `defaultProvider`, `defaultModel`, `extensions`, and `skills` are
+        populated by the modules and cannot be overridden here.
       '';
     };
 
@@ -693,11 +648,64 @@ in
       lib.mkDefault cfg.localExecutor.id
     );
 
-    # The loopback daemon the entry points at. Imported below; enabled and
-    # port-synced from the panel-side knob so one flag drives both halves.
+    # The loopback daemon the panel attaches to. Imported above; enabled,
+    # port-synced, and fed the panel-side skill/sandbox surface so one flag
+    # drives both halves.
     services.pi-sessiond-local = lib.mkIf cfg.localExecutor.enable {
       enable = lib.mkDefault true;
       port = lib.mkDefault cfg.localExecutor.port;
+      llmUrl = lib.mkDefault cfg.llmUrl;
+      defaultModel = lib.mkDefault cfg.defaultModel;
+      defaultProvider = lib.mkDefault cfg.defaultProvider;
+      memoryHigh = lib.mkDefault cfg.sandbox.memoryHigh;
+      skills = allSkills;
+      inherit (cfg) piSettings;
+      bashConfirm.allowPatterns = cfg.bashConfirm.allowPatterns;
+      openrouter.enable = cfg.openrouter.enable;
+      # The memory extension is keyed by the daemon's own memory.enable
+      # (which also binds the sediment DB into the daemon namespace), and
+      # llama-swap-discover stays out — the daemon runs its own /v1/models
+      # discovery and a second registration would double-list the local
+      # provider. Everything else forwards as resolved paths.
+      extensions = lib.attrValues (
+        lib.filterAttrs (
+          name: _: name != "memory" && name != "llama-swap-discover"
+        ) resolvedEnabledExtensions
+      );
+      memory.enable = enabledExtensions ? memory;
+      # Skill plumbing for the per-bash sandboxes — same env + binds the
+      # panel used to assemble per session, now applied daemon-side.
+      # %h/%t expand in the daemon unit's Environment=.
+      bashEnv = {
+        SKILL_CONFIG_SOCKET = "%t/spaces-skill-config.sock";
+        SPACES_OPEN_URL_SOCKET = "%t/spaces-pi-open-url.sock";
+        SPACES_PI_CHAT_STATE_DIR = "%h/${stateRel}";
+        SPACES_NOTIFICATIONS_FILE = "%h/${notificationsRel}/history.json";
+      };
+      bashBinds = [
+        # Sockets are optional: a bash unit must still start when the
+        # skill-config daemon / panel listener happens to be down — the
+        # CLIs degrade gracefully on a missing socket.
+        {
+          source = "%t/spaces-skill-config.sock";
+          mode = "rw";
+          optional = true;
+        }
+        {
+          source = "%t/spaces-pi-open-url.sock";
+          mode = "rw";
+          optional = true;
+        }
+        # skill-config needs the skill schemas (read-only nix-store
+        # symlinks) and the user's config/secrets store (read-write).
+        { source = "%h/${skillsDefsRel}"; }
+        {
+          source = "%h/${skillConfigStoreRel}";
+          mode = "rw";
+        }
+        { source = "%h/${notificationsRel}"; }
+      ]
+      ++ cfg.sandboxBinds;
     };
 
     # llama-swap supplies the default LLM endpoint; enable by default
@@ -705,9 +713,9 @@ in
     services.llama-swap.enable = lib.mkDefault true;
 
     # Every built-in skill's CLI lands on the system PATH. Two reasons:
-    #   1. The chat shell forwards its own PATH into the pi-chat
-    #      sandbox via `systemd-run --setenv=PATH=`, so the agent can
-    #      shell out by bare name (`signal threads`, `osm-cli search …`,
+    #   1. pi-sessiond-local forwards a PATH containing the system
+    #      profile into every per-bash sandbox, so the agent can shell
+    #      out by bare name (`signal threads`, `osm-cli search …`,
     #      `caldav list …`, etc.) without each skill's SKILL.md having
     #      to spell out absolute store paths.
     #   2. The user can run the exact same commands from a normal
@@ -757,24 +765,19 @@ in
       SEDIMENT_DB = "$HOME/${memoryDbRel}/data";
     };
 
-    # Materialize pi's config dir into user state. Symlinking from a
-    # /nix/store JSON keeps the file world-readable and tied to the
-    # current system generation; pi reads it on every spawn.
+    # Panel-side state skeleton plus the skill plumbing dirs the per-bash
+    # sandboxes bind (skills-defs / skill-config store / notifications).
     systemd.user.tmpfiles.rules = [
       "d %h/.local 0755 - - -"
       "d %h/.local/state 0755 - - -"
       "d %h/.local/state/spaces 0755 - - -"
       "d %h/${stateRel} 0755 - - -"
-      "d %h/${piAgentRel} 0755 - - -"
-      "d %h/${sessionsRel} 0755 - - -"
       "d %h/.local/share 0755 - - -"
       "d %h/.local/share/spaces 0755 - - -"
       "d %h/${workspacesRel} 0755 - - -"
       # An empty sessions.json so the plugin can read it on first
       # launch without a special-case branch.
       ''f %h/${sessionsIndexRel} 0644 - - - {"version":1,"sessions":[],"activeSessionId":null}''
-      "L+ %h/${piAgentRel}/settings.json - - - - ${piSettingsJson}"
-      "L+ %h/${piAgentRel}/bash-confirm.json - - - - ${bashConfirmJson}"
       # skill-config CLI resolves schemas from $state_dir/skills-defs/<skill>/SKILL.md.
       # Symlink each skill so request-input can validate fields before
       # contacting the daemon.
@@ -793,8 +796,6 @@ in
       # skill-config stores per-skill config.toml / secrets.toml here.
       "d %h/${skillConfigStoreRel} 0755 - - -"
     ]
-    ++ lib.optional (cfg.piModels != { }) "L+ %h/${piAgentRel}/models.json - - - - ${piModelsJson}"
-    ++ lib.optional cfg.openrouter.enable "L+ %h/${piAgentRel}/auth.json - - - - ${piAuthJson}"
     ++ [
       # sediment DB only — the embedding-model cache is a /nix/store
       # path baked into the sediment package, not a writable dir.
@@ -939,22 +940,17 @@ in
         inherit (cfg) defaultExecutor;
         inherit (cfg) defaultModel;
         inherit (cfg) defaultProvider;
-        piBin = lib.getExe piPkg;
         inherit (cfg.sandbox) idleTimeoutMinutes;
-        inherit (cfg.sandbox) memoryHigh;
-        openrouterEnabled = cfg.openrouter.enable;
-        # memoryDbDir is $HOME-relative (the user-writable vector store);
-        # memoryHfHome is the absolute /nix/store path that ships the
-        # pre-baked embedding-model cache. The per-chat memory toggle
-        # in the panel header writes/removes a marker file under each
-        # session's state dir, so both paths stay live regardless.
+        # memoryDbDir is $HOME-relative — the user-writable sediment
+        # vector store. The panel only needs it for the destructive
+        # "wipe memory" action; recall/storage runs inside
+        # pi-sessiond-local.
         memoryDbDir = memoryDbRel;
-        memoryHfHome = toString memoryHfHome;
-        # Extra sandbox binds contributed via services.pi-chat.sandboxBinds.
-        # The panel expands %h / %t and emits one systemd-run BindPaths
-        # (or BindReadOnlyPaths) property per entry, after the
-        # pi-chat-owned baseline binds.
-        inherit (cfg) sandboxBinds;
+        # memoryHfHome is the absolute /nix/store path with the pre-baked
+        # embedding-model cache. Not read by the panel — kept for ops
+        # tooling (e.g. the VM memory e2e runs the sediment CLI under
+        # sudo, which strips environment.sessionVariables).
+        memoryHfHome = toString sedimentPkg.modelCache;
       }
       // lib.optionalAttrs cfg.localExecutor.enable {
         # Per-user loopback pi-sessiond (pi-sessiond-local). The panel folds

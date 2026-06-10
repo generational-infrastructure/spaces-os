@@ -4,7 +4,7 @@
 # IPC and asserts that thinking bubbles appear, stream, finalise, and
 # that empty thinking blocks are cleaned up.
 #
-# No pi process, no LLM, no compositor. ~3s.
+# No pi-sessiond, no executor, no LLM, no compositor. ~3s.
 { pkgs, ... }:
 pkgs.runCommand "pi-session-thinking-test"
   {

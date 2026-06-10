@@ -472,6 +472,11 @@
               enable = true;
               executors = executorsList;
               defaultExecutor = chosenDefault;
+              # The clan instance owns the executor inventory — machines
+              # with the executor role already provide their loopback via
+              # the system pi-sessiond, so the panel's own per-user
+              # loopback daemon stays off.
+              localExecutor.enable = lib.mkDefault false;
             };
           };
       };

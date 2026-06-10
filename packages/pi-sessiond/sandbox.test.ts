@@ -77,3 +77,62 @@ test("the command is preserved verbatim as a single argv element", () => {
   const argv = buildBashSandboxArgv(base, tricky);
   expect(argv[argv.length - 1]).toBe(tricky);
 });
+
+test("env entries become --setenv flags ahead of the payload", () => {
+  const argv = buildBashSandboxArgv(
+    {
+      ...base,
+      env: {
+        SKILL_CONFIG_SOCKET: "/run/user/1000/spaces-skill-config.sock",
+        PATH: "/run/current-system/sw/bin",
+      },
+    },
+    CMD,
+  );
+  const sep = argv.indexOf("--");
+  const head = argv.slice(0, sep);
+  expect(head).toContain(
+    "--setenv=SKILL_CONFIG_SOCKET=/run/user/1000/spaces-skill-config.sock",
+  );
+  expect(head).toContain("--setenv=PATH=/run/current-system/sw/bin");
+});
+
+test("declarative binds map to BindPaths/BindReadOnlyPaths with optional prefix", () => {
+  const argv = buildBashSandboxArgv(
+    {
+      ...base,
+      binds: [
+        // rw, target defaults to source
+        { source: "/home/u/.local/state/spaces/pi/skill-config", mode: "rw" },
+        // ro with explicit target
+        {
+          source: "/home/u/.local/state/spaces/signal",
+          target: "/state/signal",
+          mode: "ro",
+        },
+        // optional socket: '-' prefix so a missing path doesn't abort the unit
+        {
+          source: "/run/user/1000/spaces-pi-open-url.sock",
+          mode: "rw",
+          optional: true,
+        },
+      ],
+    },
+    CMD,
+  );
+  expect(argv).toContain(
+    "--property=BindPaths=/home/u/.local/state/spaces/pi/skill-config:/home/u/.local/state/spaces/pi/skill-config",
+  );
+  expect(argv).toContain(
+    "--property=BindReadOnlyPaths=/home/u/.local/state/spaces/signal:/state/signal",
+  );
+  expect(argv).toContain(
+    "--property=BindPaths=-/run/user/1000/spaces-pi-open-url.sock:/run/user/1000/spaces-pi-open-url.sock",
+  );
+});
+
+test("absent env/binds emit no extra flags", () => {
+  const argv = buildBashSandboxArgv(base, CMD);
+  expect(argv.some((a) => a.startsWith("--setenv="))).toBe(false);
+  expect(argv.some((a) => a.includes("BindReadOnlyPaths"))).toBe(false);
+});

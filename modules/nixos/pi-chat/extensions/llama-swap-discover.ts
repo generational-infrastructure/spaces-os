@@ -40,7 +40,7 @@ export default async function (pi) {
         id: m.id,
         name: m.id,
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: m.context_length ?? m.max_model_len ?? 128000,
         maxTokens: m.max_tokens ?? 4096,

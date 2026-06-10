@@ -39,6 +39,13 @@ QtObject {
   property var _lastSeq: ({})        // daemonSessionId -> highest seq seen
   property bool _welcomed: false
   property var _pendingCreates: []   // FIFO of { resolve, reject }
+  // Daemon ids minted by our own create_session whose .then hasn't stamped
+  // the panel entry yet. The daemon's `sessions` broadcast can be processed
+  // BEFORE the create promise's .then runs (promise jobs drain only after
+  // the socket's whole message burst), so for that window the id is
+  // unclaimed in sessionsList — the importer must not adopt it as a
+  // foreign session. PiSession releases the claim after stamping.
+  property var _pendingCreatedIds: ({})
   property var _connectWaiters: []   // callbacks fired once welcomed
   property bool _live: false         // drives the socket; toggled to reconnect
 
@@ -139,7 +146,10 @@ QtObject {
       // create_session ack (FIFO). attach acks for existing sessions have no
       // pending create and are simply ignored — the caller knows its id.
       const p = _pendingCreates.shift();
-      if (p) p.resolve(sid);
+      if (p) {
+        _pendingCreatedIds[sid] = true;
+        p.resolve(sid);
+      }
       break;
     }
     case "event": {
@@ -242,4 +252,8 @@ QtObject {
 
   function subscribe(sid, obj) { _subscribers[sid] = obj; }
   function unsubscribe(sid) { delete _subscribers[sid]; }
+
+  // Claim bookkeeping for freshly created sessions (see _pendingCreatedIds).
+  function isPendingCreated(sid) { return !!_pendingCreatedIds[sid]; }
+  function releaseCreated(sid) { delete _pendingCreatedIds[sid]; }
 }

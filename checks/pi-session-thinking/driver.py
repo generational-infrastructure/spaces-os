@@ -10,7 +10,8 @@ thinking_end) into PiSession via quickshell IPC and asserts:
   4. empty thinking blocks (no deltas) are removed on end
   5. thinking bubbles don't interfere with normal text bubbles
 
-No pi process, no LLM, no compositor. ~3s.
+No pi-sessiond, no executor, no LLM, no compositor — events are injected
+straight into PiSession._handleEvent. ~3s.
 """
 
 import json
@@ -90,16 +91,11 @@ def find_msg(msgs, **criteria):
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
-    state_dir = os.path.join(work_dir, "state")
-    agent_dir = os.path.join(state_dir, "pi-agent")
     workspace = os.path.join(work_dir, "workspace")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in [state_dir, agent_dir, workspace, xdg_runtime]:
+    for d in [workspace, xdg_runtime]:
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
-
-    with open(os.path.join(agent_dir, "settings.json"), "w") as f:
-        json.dump({"extensions": [], "skills": []}, f)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
@@ -111,8 +107,6 @@ def main():
         "QT_QPA_PLATFORM": "offscreen",
         "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
         "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "TEST_STATE_DIR": state_dir,
-        "TEST_AGENT_DIR": agent_dir,
         "TEST_WORKSPACE": workspace,
     }
 

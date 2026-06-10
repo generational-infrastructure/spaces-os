@@ -6,10 +6,12 @@
 #      daemon args we promise; RuntimeDirectory is set).
 #   2. The module publishes the message store (read-only) and the
 #      bridge's sandbox runtime dir (read-write) into
-#      services.pi-chat.sandboxBinds — and crucially does NOT publish
-#      the signal-cli daemon socket or panel.sock, so a prompt-injected
-#      agent can read messages and queue sends but can neither reach the
-#      daemon directly nor mint its own approval.
+#      services.pi-chat.sandboxBinds, which pi-chat forwards into the
+#      daemon's SPACES_SESSIOND_BASH_BINDS env JSON (the per-bash
+#      sandbox bind list of pi-sessiond-local) — and crucially does NOT
+#      publish the signal-cli daemon socket or panel.sock, so a
+#      prompt-injected agent can read messages and queue sends but can
+#      neither reach the daemon directly nor mint its own approval.
 #   3. Enabling spaces-signal without pi-chat trips the module's own
 #      assertion (the integration is meaningless without the agent).
 #   4. Default-on follows pi-chat: an unconfigured spaces host
@@ -106,13 +108,18 @@ let
   service = enabledSystem.config.systemd.user.services.spaces-signal-cli;
   bridge = enabledSystem.config.systemd.user.services.spaces-signal-bridge;
   pathUnit = enabledSystem.config.systemd.user.paths.spaces-signal-link;
-  pichatConfig = enabledSystem.config.environment.etc."spaces/pi-chat.json".source;
-  disabledPichatCfg = disabledSystem.config.environment.etc."spaces/pi-chat.json";
+  # The bind list the daemon applies to every per-bash sandbox.
+  # services.pi-chat.sandboxBinds forwards into
+  # services.pi-sessiond-local.bashBinds, serialized as JSON into the
+  # daemon user unit's environment.
+  bindsEnv =
+    system:
+    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_BASH_BINDS;
 in
 pkgs.runCommand "spaces-signal-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
-    inherit pichatConfig;
+    bashBinds = bindsEnv enabledSystem;
     execStart = service.serviceConfig.ExecStart;
     runtimeDir = service.serviceConfig.RuntimeDirectory or "";
     runtimeDirMode = service.serviceConfig.RuntimeDirectoryMode or "";
@@ -150,9 +157,9 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
         names = builtins.attrNames disabledSystem.config.systemd.user.services;
       in
       if builtins.elem "spaces-signal-cli" names then "yes" else "no";
-    # Likewise sandboxBinds must not carry signal entries when opted
-    # out — we surface the raw JSON for a jq check.
-    disabledPichatConfig = disabledPichatCfg.source;
+    # Likewise the daemon bind list must not carry signal entries when
+    # opted out — we surface the raw env JSON for a jq check.
+    disabledBashBinds = bindsEnv disabledSystem;
   }
   ''
     set -euo pipefail
@@ -185,28 +192,21 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       *) fail "unit must be wantedBy=default.target, got '$wantedBy'" ;;
     esac
 
-    # ── 2. sandboxBinds integration ──────────────────────────────────
-    jq -e . "$pichatConfig" >/dev/null || fail "$pichatConfig is not valid JSON"
-
-    binds=$(jq -c '.sandboxBinds' "$pichatConfig")
-
+    # ── 2. sandbox bind integration (SPACES_SESSIOND_BASH_BINDS) ────
+    jq -e . >/dev/null <<<"$bashBinds" \
+      || fail "SPACES_SESSIOND_BASH_BINDS is not valid JSON: $bashBinds"
     jq -e '
-      .sandboxBinds
-      | all(.source != "%t/signal-cli/socket")
-    ' "$pichatConfig" >/dev/null \
-      || fail "signal-cli daemon socket MUST NOT be in sandboxBinds (security regression — agent would bypass the approval gate): $binds"
-
+      all(.source != "%t/signal-cli/socket")
+    ' >/dev/null <<<"$bashBinds" \
+      || fail "signal-cli daemon socket MUST NOT be in the sandbox binds (security regression — agent would bypass the approval gate): $bashBinds"
     jq -e '
-      .sandboxBinds
-      | any(.source == "%h/.local/state/spaces/signal" and .mode == "ro" and .optional == false)
-    ' "$pichatConfig" >/dev/null \
-      || fail "signal store dir must be RO in sandboxBinds (sandbox writes would forge messages / fake approvals): $binds"
-
+      any(.source == "%h/.local/state/spaces/signal" and .mode == "ro" and .optional == false)
+    ' >/dev/null <<<"$bashBinds" \
+      || fail "signal store dir must be RO in the sandbox binds (sandbox writes would forge messages / fake approvals): $bashBinds"
     jq -e '
-      .sandboxBinds
-      | any(.source == "%h/.local/share/signal-cli/attachments" and .mode == "ro" and .optional == true)
-    ' "$pichatConfig" >/dev/null \
-      || fail "signal-cli attachments dir not in sandboxBinds: $binds"
+      any(.source == "%h/.local/share/signal-cli/attachments" and .mode == "ro" and .optional == true)
+    ' >/dev/null <<<"$bashBinds" \
+      || fail "signal-cli attachments dir not in the sandbox binds: $bashBinds"
 
     # ── 2b. bridge unit shape ────────────────────────────────────────
     case "$bridgeExecStart" in
@@ -232,10 +232,9 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     # optional) — if this ever drops back to optional we re-introduce
     # the silent-skip race.
     jq -e '
-      .sandboxBinds
-      | any(.source == "%t/spaces-signal/sandbox" and .mode == "rw" and (.optional // false) == false)
-    ' "$pichatConfig" >/dev/null \
-      || fail "spaces-signal sandbox subdir must be in sandboxBinds (rw, mandatory): $binds"
+      any(.source == "%t/spaces-signal/sandbox" and .mode == "rw" and (.optional // false) == false)
+    ' >/dev/null <<<"$bashBinds" \
+      || fail "spaces-signal sandbox subdir must be in the sandbox binds (rw, mandatory): $bashBinds"
 
     # ── 2d. The panel socket — and the parent dir that contains it —
     # MUST stay out of the sandbox. That's the security boundary: a
@@ -244,14 +243,13 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     # expose the panel socket, including the parent `spaces-signal/`
     # dir, the panel file itself, or the legacy flat names.
     jq -e '
-      .sandboxBinds
-      | all(.source != "%t/spaces-signal"
+      all(.source != "%t/spaces-signal"
             and .source != "%t/spaces-signal/panel.sock"
             and .source != "%t/spaces-signal/sandbox/panel.sock"
             and .source != "%t/spaces-signal-panel.sock"
             and .source != "%t/spaces-signal-enqueue.sock")
-    ' "$pichatConfig" >/dev/null \
-      || fail "sandboxBinds exposes the panel socket or its parent dir (security regression — agent could self-approve sends): $binds"
+    ' >/dev/null <<<"$bashBinds" \
+      || fail "sandbox binds expose the panel socket or its parent dir (security regression — agent could self-approve sends): $bashBinds"
 
     # ── 2e. Both runtime dirs are created unconditionally by user-
     # tmpfiles, so the mandatory bind above succeeds even on hosts
@@ -315,16 +313,15 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
 
     # ── 2j. Opt-out path: explicit `enable = false` strips every
     # signal-cli-shaped artifact from the system, including the user
-    # units and the pi-chat sandbox binds.
+    # units and the daemon's sandbox binds.
     [ "$disabledHasSignalUnits" = "no" ] \
       || fail "spaces-signal-cli unit still declared after explicit enable = false"
     jq -e '
-      .sandboxBinds
-      | all(.source | startswith("%t/signal-cli/") | not)
+      all(.source | startswith("%t/signal-cli/") | not)
       and all(.source | startswith("%h/.local/state/spaces/signal") | not)
       and all(.source | startswith("%t/spaces-signal") | not)
-    ' "$disabledPichatConfig" >/dev/null \
-      || fail "sandboxBinds still carry signal-cli entries after explicit enable = false: $(jq -c '.sandboxBinds' "$disabledPichatConfig")"
+    ' >/dev/null <<<"$disabledBashBinds" \
+      || fail "daemon sandbox binds still carry signal-cli entries after explicit enable = false: $disabledBashBinds"
 
     # ── 3. spaces-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then

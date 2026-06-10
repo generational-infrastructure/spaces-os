@@ -1,9 +1,11 @@
 // Headless host for the model-directive launch contract.
 //
 // Same staging as pi-session-quick-launch (the whole pi-chat tree is
-// mirrored beside this file, panel reported hidden), but the launch
-// verb forwards a model so the driver can prove launchBackground applies
-// it to the worker before the prompt turn runs.
+// mirrored beside this file, panel reported hidden, a single "host"
+// executor — a real pi-sessiond — injected via $SPACES_PI_CHAT_EXECUTORS),
+// but the launch verb forwards a model so the driver can prove
+// launchBackground pins it on the daemon session before the prompt turn
+// runs.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -29,9 +31,15 @@ Item {
     function selectSession(id: string) { backend.selectSession(id); }
     function listSessions(): string { return backend.listSessions(); }
 
+    function executorConnected(id: string): bool {
+      const e = backend._executorById[id];
+      return e ? !!e.connected : false;
+    }
+
     // A pending background session is exempt from the idle reaper; the
-    // driver asserts a failed-model launch clears this mark so its idle
-    // worker stays reapable rather than leaking.
+    // driver asserts a failed-model launch (set_model rejected by the
+    // daemon) clears this mark so the session stays reapable rather
+    // than leaking.
     function isPending(id: string): bool {
       return backend._pendingBg.hasOwnProperty(id);
     }

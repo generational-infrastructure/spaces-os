@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
-"""Idle-reap exemption contract test.
+"""WS-era idle-reap contract test.
 
-Guards the PiChatBackend._reapIdle() change: the idle timer must NOT
-kill a session that is actively generating (or a pending background
-launch). A fire-and-forget agent that runs for half an hour can't be
-reaped 10 minutes after the chat panel closes.
+PiSession no longer spawns a local pi worker — every session lives in a
+pi-sessiond executor reached over WebSocket. The reaper moved with it:
+PiChatBackend._reapIdle() calls PiSession.stop() on idle streaming
+sessions, which sends a `detach` frame for the session's daemon id (and
+drops the panel-side subscription); busy sessions and pending background
+launches are skipped — no frame at all.
 
-Two background launches share one backend:
+Two background launches share one backend, both landing on a mock
+pi-sessiond that logs every inbound frame:
 
-  * A: prompt contains "HOLD" — the mock LLM streams the opening chunk
-    then blocks before the closing chunk, so A stays mid-turn (busy)
-    and pending.
-  * B: a quick prompt that streams to completion, so B ends up running
-    but idle (busy false, no longer pending).
+  * A: prompt contains "HOLD" — the mock streams the opening delta but
+    never sends agent_end, so the turn stays in flight and the panel
+    keeps busy=true (A is also still in _pendingBg: doubly exempt).
+  * B: a quick prompt the mock completes (agent_end), so B ends up
+    streaming-but-idle — exactly what the reaper exists to stop.
 
-Then _reapIdle() runs. PiSession.stop() shells out to `systemctl --user
-stop pi-chat-<id>.service`; with no user manager here a stub systemctl
-records the units the reaper *decided* to stop. We assert it stopped B's
-unit and left A's alone, and that A is still streaming + busy.
+Then _reapIdle() runs (invoked directly through the IPC seam — no
+waiting on the real idleTimeoutMinutes timer). Asserted off the mock's
+frame log: a detach frame for B's daemon session id, NO detach for A's;
+panel-side flags agree (B streaming=false, A streaming=true busy=true).
 
-Usage: driver.py <pi_bin> <qs_bin> <mock_llm> <ext_dir> <shared_dir>
-                  <test_dir> <plugin_dir> <work_dir>
+The executor topology is injected as JSON via $SPACES_PI_CHAT_EXECUTORS
+(the panel's test seam) since the root-owned /etc/spaces/pi-chat.json
+can't be written in the build sandbox. No real pi/LLM/daemon. ~10-20s.
 
-`shared_dir` is checks/pi-session-quick-launch (shell.qml + the
-systemd-run / notify-send stubs are reused verbatim); `test_dir` is this
-check's dir (the systemctl stub).
+Usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>
 """
 
 from __future__ import annotations
@@ -32,9 +34,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
+
+TOKEN = "reap-secret"
+
+REPLY = "Background task complete"
 
 
 def fail(msg: str) -> None:
@@ -55,24 +62,20 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
     return None
 
 
-def start_mock_llm(mock_script: str, work_dir: str, hold_file: str):
-    log = open(os.path.join(work_dir, "mock-llm.log"), "w")
-    env = os.environ.copy()
-    env["MOCK_HOLD_FILE"] = hold_file
+def start_mock_daemon(mock_script: str, work_dir: str, frame_log: str):
+    log = open(os.path.join(work_dir, "mock-daemon.log"), "w")
     proc = subprocess.Popen(
-        [sys.executable, mock_script],
-        stdin=subprocess.PIPE,
+        [sys.executable, mock_script, "remote", TOKEN, frame_log],
         stdout=subprocess.PIPE,
         stderr=log,
-        env=env,
     )
     line = proc.stdout.readline()
     if not line:
-        fail("mock LLM did not print its URL")
+        fail("mock daemon did not print its URL")
     return proc, line.decode().strip()
 
 
-def stage_shell(shared_dir: str, plugin_dir: str, work_dir: str) -> str:
+def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     shell_root = os.path.join(work_dir, "shell")
     shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
     for root, _dirs, files in os.walk(shell_root):
@@ -85,7 +88,7 @@ def stage_shell(shared_dir: str, plugin_dir: str, work_dir: str) -> str:
     shell_dst = os.path.join(shell_root, "shell.qml")
     if os.path.exists(shell_dst):
         os.remove(shell_dst)
-    shutil.copy2(os.path.join(shared_dir, "shell.qml"), shell_dst)
+    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
     now = time.time()
     for root, _dirs, files in os.walk(shell_root):
         for f in files:
@@ -96,32 +99,20 @@ def stage_shell(shared_dir: str, plugin_dir: str, work_dir: str) -> str:
     return shell_root
 
 
-def stage_bin(shared_dir: str, test_dir: str, pi_bin: str, work_dir: str) -> str:
+def stage_bin(work_dir: str) -> str:
+    # B's completed background turn fires a notify-send toast; give the
+    # backend a no-op stub so the Process spawn doesn't error in the sandbox.
     bin_dir = os.path.join(work_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
-    shutil.copy2(
-        os.path.join(shared_dir, "fake-systemd-run"),
-        os.path.join(bin_dir, "systemd-run"),
-    )
-    shutil.copy2(
-        os.path.join(shared_dir, "notify-send"), os.path.join(bin_dir, "notify-send")
-    )
-    shutil.copy2(
-        os.path.join(test_dir, "systemctl"), os.path.join(bin_dir, "systemctl")
-    )
-    for n in ("systemd-run", "notify-send", "systemctl"):
-        os.chmod(os.path.join(bin_dir, n), 0o755)
-    pi_link = os.path.join(bin_dir, "pi")
-    if os.path.exists(pi_link):
-        os.remove(pi_link)
-    os.symlink(pi_bin, pi_link)
+    stub = os.path.join(bin_dir, "notify-send")
+    with open(stub, "w") as fh:
+        fh.write("#!/bin/sh\nexit 0\n")
+    os.chmod(stub, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)
     return bin_dir
 
 
-def qs_ipc(
-    qs_bin: str, shell_qml: str, env: dict, *args: str, check: bool = True
-) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:quick-launch", *args]
+def qs_ipc(qs_bin, shell_qml, env, *args, check=True):
+    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:reap", *args]
     out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=20)
     if check and out.returncode != 0:
         raise RuntimeError(
@@ -132,51 +123,31 @@ def qs_ipc(
 
 
 def main() -> None:
-    if len(sys.argv) != 9:
-        fail(
-            "usage: driver.py <pi_bin> <qs_bin> <mock_llm> <ext_dir> "
-            "<shared_dir> <test_dir> <plugin_dir> <work_dir>"
-        )
-    (
-        pi_bin,
-        qs_bin,
-        mock_script,
-        ext_dir,
-        shared_dir,
-        test_dir,
-        plugin_dir,
-        work_dir,
-    ) = sys.argv[1:9]
+    if len(sys.argv) != 5:
+        fail("usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>")
+    qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
     os.makedirs(work_dir, exist_ok=True)
 
     home = os.path.join(work_dir, "home")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    agent_dir = os.path.join(work_dir, "agent")
-    for d in (home, xdg_runtime, agent_dir):
+    for d in (home, xdg_runtime):
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
 
-    with open(os.path.join(agent_dir, "settings.json"), "w") as fh:
-        json.dump(
-            {
-                "extensions": [os.path.join(ext_dir, "llama-swap-discover.ts")],
-                "defaultProvider": "local",
-                "defaultModel": "mock-model",
-                "quietStartup": True,
-                "enableInstallTelemetry": False,
-            },
-            fh,
-        )
+    frame_log = os.path.join(work_dir, "frames.jsonl")
+    open(frame_log, "w").close()
 
-    shell_root = stage_shell(shared_dir, plugin_dir, work_dir)
+    mock_proc, ws_url = start_mock_daemon(
+        os.path.join(test_dir, "mock-daemon.py"), work_dir, frame_log
+    )
+
+    # One remote executor, no defaultExecutor — defaultExecutorId resolves to
+    # it, so both launchBackground sessions land on the mock daemon.
+    executors_json = json.dumps([{"id": "remote", "url": ws_url, "token": TOKEN}])
+
+    shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
-    bin_dir = stage_bin(shared_dir, test_dir, pi_bin, work_dir)
-
-    hold_file = os.path.join(work_dir, "release")
-    systemctl_witness = os.path.join(work_dir, "systemctl.log")
-    open(systemctl_witness, "w").close()
-
-    mock_proc, mock_url = start_mock_llm(mock_script, work_dir, hold_file)
+    bin_dir = stage_bin(work_dir)
 
     env = os.environ.copy()
     env.update(
@@ -186,12 +157,7 @@ def main() -> None:
             "PATH": bin_dir + os.pathsep + env.get("PATH", ""),
             "QT_QPA_PLATFORM": "offscreen",
             "QSG_RHI_BACKEND": "null",
-            "PI_CODING_AGENT_DIR": agent_dir,
-            "LLAMA_SWAP_BASE_URL": mock_url,
-            "PI_OFFLINE": "1",
-            "PI_TELEMETRY": "0",
-            "NOTIFY_WITNESS": os.path.join(work_dir, "notify.log"),
-            "SYSTEMCTL_WITNESS": systemctl_witness,
+            "SPACES_PI_CHAT_EXECUTORS": executors_json,
         }
     )
 
@@ -200,21 +166,40 @@ def main() -> None:
         [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
     )
 
+    def read_frames():
+        out = []
+        with open(frame_log) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    pass
+        return out
+
+    def detach_sids():
+        return {f.get("sessionId") for f in read_frames() if f.get("kind") == "detach"}
+
     def dump_logs():
-        for name in ("qs.log", "mock-llm.log"):
+        for name in ("qs.log", "mock-daemon.log"):
             p = os.path.join(work_dir, name)
             if os.path.isfile(p):
                 sys.stderr.write(f"\n== {name} ==\n")
-                sys.stderr.write(open(p, errors="replace").read()[-6000:])
-        if os.path.exists(systemctl_witness):
-            sys.stderr.write("\n== systemctl witness ==\n")
-            sys.stderr.write(open(systemctl_witness).read())
+                sys.stderr.write(open(p, errors="replace").read()[-4000:])
+        sys.stderr.write("\n== frame log ==\n")
+        try:
+            sys.stderr.write(open(frame_log).read()[-4000:])
+        except OSError as e:
+            sys.stderr.write(f"(could not read frame log: {e})\n")
 
     def die(msg):
         dump_logs()
-        # Best-effort release so the build doesn't hang on the held mock.
-        open(hold_file, "w").close()
         fail(msg)
+
+    def raw_sessions():
+        return json.loads(qs_ipc(qs_bin, shell_qml, env, "rawSessions"))
 
     try:
 
@@ -226,22 +211,27 @@ def main() -> None:
                 text=True,
                 timeout=5,
             )
-            return r.returncode == 0 and "test:quick-launch" in r.stdout
+            return r.returncode == 0 and "test:reap" in r.stdout
 
         if not wait_until(ipc_ready, timeout_s=30):
-            die("quickshell never bound the IPC target")
+            die("quickshell never bound the test:reap IPC target")
+
+        if not wait_until(
+            lambda: (
+                qs_ipc(qs_bin, shell_qml, env, "executorConnected", "remote") == "true"
+            ),
+            timeout_s=30,
+        ):
+            die("panel never connected to the remote executor")
 
         def session_ids():
-            return {
-                s["id"]
-                for s in json.loads(qs_ipc(qs_bin, shell_qml, env, "listSessions"))
-            }
+            return {s["id"] for s in raw_sessions()}
 
-        # ── A: the long-running, held background launch ──
+        # ── A: the held background launch (busy + pending forever) ──
         base = session_ids()
         qs_ipc(qs_bin, shell_qml, env, "launchBackground", "HOLD a long running task")
-        a_id = wait_until(lambda: (session_ids() - base) or None, timeout_s=10)
-        a_id = next(iter(a_id)) if a_id else None
+        a_new = wait_until(lambda: (session_ids() - base) or None, timeout_s=10)
+        a_id = next(iter(a_new)) if a_new else None
         if not a_id:
             die("background launch A created no session")
         if not wait_until(
@@ -253,52 +243,62 @@ def main() -> None:
         # ── B: a quick launch that runs to completion ──
         base2 = session_ids()
         qs_ipc(qs_bin, shell_qml, env, "launchBackground", "quick ping")
-        b_id = wait_until(lambda: (session_ids() - base2) or None, timeout_s=10)
-        b_id = next(iter(b_id)) if b_id else None
+        b_new = wait_until(lambda: (session_ids() - base2) or None, timeout_s=10)
+        b_id = next(iter(b_new)) if b_new else None
         if not b_id:
             die("background launch B created no session")
-        # B finishes: busy clears and the reply streamed in.
+        # B finishes: agent_end clears busy, the reply streamed in.
         if not wait_until(
             lambda: (
                 qs_ipc(qs_bin, shell_qml, env, "sessionBusy", b_id) == "false"
-                and "Background task complete"
-                in qs_ipc(qs_bin, shell_qml, env, "lastAssistantText", b_id)
+                and REPLY in qs_ipc(qs_bin, shell_qml, env, "lastAssistantText", b_id)
             ),
             timeout_s=60,
         ):
             die("session B never completed its turn")
-        # B's worker must still be up so the reaper has something to stop.
+        # B must still be attached (streaming) so the reaper has work to do.
         if qs_ipc(qs_bin, shell_qml, env, "sessionStreaming", b_id) != "true":
-            die("session B worker exited before reap — nothing to reap")
+            die("session B detached before reap — nothing to reap")
 
-        a_unit = f"pi-chat-{a_id}.service"
-        b_unit = f"pi-chat-{b_id}.service"
+        # Both entries need their daemon ids minted before the frame-log
+        # assertions can be keyed.
+        def daemon_ids():
+            m = {s["id"]: s["daemonSessionId"] for s in raw_sessions()}
+            a, b = m.get(a_id, ""), m.get(b_id, "")
+            return (a, b) if a and b else None
+
+        ids = wait_until(daemon_ids, timeout_s=10)
+        if not ids:
+            die(f"daemon session ids never materialised: {raw_sessions()!r}")
+        a_sid, b_sid = ids
+
+        # No detach so far: nothing has been stopped yet.
+        pre = detach_sids()
+        if pre & {a_sid, b_sid}:
+            die(f"unexpected detach frames before reap: {pre!r}")
 
         # ── the reaper runs ──
         qs_ipc(qs_bin, shell_qml, env, "reapIdle")
 
-        # B (idle) must be stopped.
-        if not wait_until(
-            lambda: b_unit in open(systemctl_witness).read(), timeout_s=10
-        ):
-            die(f"reaper did not stop the idle session B ({b_unit})")
+        # B (idle streaming) must be stopped: detach frame for its daemon id.
+        if not wait_until(lambda: b_sid in detach_sids(), timeout_s=10):
+            die(f"reaper sent no detach frame for the idle session B ({b_sid})")
 
-        # A (busy + pending) must SURVIVE: never handed to systemctl, and
-        # still streaming + busy.
-        time.sleep(0.5)
-        witness = open(systemctl_witness).read()
-        if a_unit in witness:
-            die(f"reaper killed the busy background launch A ({a_unit})")
+        # A (busy + pending) must SURVIVE: no detach frame, still busy and
+        # attached. Settle briefly so a late wrongful detach is counted.
+        time.sleep(1.0)
+        sids = detach_sids()
+        if a_sid in sids:
+            die(f"reaper detached the busy background launch A ({a_sid})")
+        if qs_ipc(qs_bin, shell_qml, env, "sessionStreaming", b_id) != "false":
+            die("session B still reports streaming after reap — stop() didn't land")
         if qs_ipc(qs_bin, shell_qml, env, "sessionStreaming", a_id) != "true":
-            die("session A worker is gone after reap — it should have survived")
+            die("session A is no longer streaming after reap — it should survive")
         if qs_ipc(qs_bin, shell_qml, env, "sessionBusy", a_id) != "true":
             die("session A is no longer busy after reap — it was disturbed")
 
-        # Release the held turn so A can finish and the build exits cleanly.
-        open(hold_file, "w").close()
         print("PASS")
     finally:
-        open(hold_file, "w").close()
         qs_proc.terminate()
         try:
             qs_proc.wait(timeout=5)

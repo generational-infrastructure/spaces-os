@@ -3,8 +3,8 @@
 
 Drives the shell entirely via Quickshell IPC. The shell's
 `send`/`lastAssistantText`/`listSessions` verbs are stable contract;
-the underlying pi process is spawned lazily inside a systemd-run scope
-the shell owns.
+the underlying pi session lives inside the loopback pi-sessiond the
+panel attaches to over WebSocket.
 
 Usage: test-pi-chat.py <quickshell_bin> <shell_config> <target> [mode]
 

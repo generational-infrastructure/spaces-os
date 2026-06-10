@@ -1,15 +1,19 @@
-// One pi --mode rpc process plus all the in-memory state the chat
-// panel binds against. Lives inside PiChatBackend's Repeater so the
-// lifecycle tracks the sessionsList.
+// One chat session on a pi-sessiond executor, plus all the in-memory
+// state the chat panel binds against. Lives inside PiChatBackend's
+// reconciler so the lifecycle tracks the sessionsList.
 //
-// Wire-protocol summary (commands written to stdin, events read from
-// stdout — both as JSON lines):
+// Transport: a WebSocket executor connection (PiExecutor). The daemon
+// assigns a session id on create_session (or we re-attach to a
+// persisted one); commands ride `command` envelopes carrying pi's own
+// RPC shapes, events come back as `event` envelopes whose payload is
+// fed to _handleEvent:
 //
 //   send  { type: "prompt", message, images? }
 //         { type: "abort" }
 //         { type: "get_messages" }
 //         { type: "get_available_models" }
 //         { type: "set_model", provider, modelId }
+//         { type: "set_memory", enabled }
 //         { type: "extension_ui_response", id, confirmed | value | cancelled }
 //
 //   recv  { type: "agent_start" }
@@ -21,8 +25,8 @@
 //         { type: "response", command, success, data?, error? }
 //
 // The component does not touch sessions.json — PiChatBackend persists
-// the index. Per-session pi-managed history lives in pi's session.jsonl
-// under stateDir, replayed via get_messages on every (re)spawn.
+// the index. Conversation history lives daemon-side in session.jsonl,
+// replayed via get_messages on every (re)attach.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -42,35 +46,15 @@ QtObject {
 
   // ── deployment env (set by the backend before spawn) ──
   property var    backend: null      // PiChatBackend, used for skill-config socket sends
-  // When set (WS / remote mode), the session attaches to a pi-sessiond
-  // executor over this connection instead of spawning a local pi.
+  // The pi-sessiond executor this session lives on (PiExecutor). Null
+  // until the backend resolves the entry's executor id — spawn() is a
+  // guarded no-op then.
   property var    executor: null
-  property string piBin              // /nix/store/.../bin/pi
-  property string stateDir           // ~/.local/state/spaces/pi
-  property string piAgentDir         // <stateDir>/pi-agent
-  property string llmUrl: "http://127.0.0.1:8012"
-  property string memoryHigh: "4G"
-  property bool   openrouterEnabled: false
-  // Memory extension. memoryDbDir is the writable vector store the
-  // sandbox bind-mounts; memoryHfHome is the absolute /nix/store
-  // path that ships the pre-baked embedding model — reachable from
-  // inside the sandbox without a bind because /nix/store is visible.
-  // memoryEnabled is per-session; toggling it writes/removes a marker
-  // file in the session state dir and the extension's hooks pick
-  // that up on the next prompt without a respawn.
+  // Long-term memory: per-session opt-out. Toggling sends `set_memory`
+  // to the executor, which writes/removes the session's `memory-off`
+  // marker; the memory extension picks that up on the next prompt
+  // without a respawn.
   property bool   memoryEnabled: true
-  property string memoryDbDir: ""
-  property string memoryHfHome: ""
-  // Extra sandbox bind-mounts contributed by NixOS modules via
-  // services.pi-chat.sandboxBinds. Each entry:
-  //   { source: string, target?: string, mode: "ro"|"rw", optional?: bool }
-  // Both source and target accept systemd specifiers `%h` (HOME) and
-  // `%t` ($XDG_RUNTIME_DIR), expanded at session-spawn time. When
-  // target is omitted, source is reused on both sides of the bind.
-  // `optional: true` prefixes the source with `-` so a missing path
-  // doesn't abort sandbox start — useful for sockets the publisher
-  // may not have bound yet.
-  property var    sandboxBinds: []
 
   // ── live state observable by Panel.qml via PiChatBackend.chat ──
   property string peerName: sessionName
@@ -92,11 +76,8 @@ QtObject {
   // ── signals up to the backend ──
   signal needsPersist
   signal incomingNotification(string text)
-  signal exitedWithError(int code)
 
   // ── internal ──
-  property var _process: null
-  property var _stopProcess: null
   property string _streamingId: ""    // id of the bubble currently receiving deltas
   property string _thinkingId: ""    // id of the bubble currently receiving thinking deltas
   // tps tracking: stamp on the first text_start of an assistant message;
@@ -106,14 +87,8 @@ QtObject {
   // text bubbles — the tps gets attached to the final one only.
   property real _assistantStartedAt: 0
   property string _assistantLastTextBubbleId: ""
-  property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
-  // Resolves once a fresh local session's modelPref has been applied
-  // or its application failed. Never rejects. send() gates the first
-  // prompt's wire write on it. Null when no application is in flight.
-  property var _modelPrefApply: null
-  // ── WebSocket transport state (used when `executor` is set) ──
-  readonly property bool _useWs: executor !== null
+  // ── WebSocket transport state ──
   // Set by PiChatBackend when constructing this session from a persisted
   // entry that carries a `daemonSessionId` (auto-imported from a remote
   // executor's session list, or persisted from this entry's previous
@@ -180,24 +155,18 @@ QtObject {
     replyTarget = null;
     typing = true;
     busy = true;
-    // The optimistic bubble and busy/typing flips above stay
-    // synchronous for immediate UI feedback. Only the wire write waits
-    // for a fresh session's pending set_model ack, so the first turn
-    // cannot race onto pi's default model. _modelPrefApply never
-    // rejects, so the prompt always goes out.
     const prompt = { type: "prompt", message: text, streamingBehavior: "steer" };
-    if (_modelPrefApply) _modelPrefApply.then(() => _send(prompt));
-    else _send(prompt);
+    _send(prompt);
     needsPersist();
   }
 
   function sendFile(path, _unlink) {
     if (!path) return;
     if (path.startsWith("file://")) path = decodeURIComponent(path.slice(7));
-    // We don't have a host→container hop in pi-chat mode; pi runs as
-    // the user and can read paths directly. Images get inlined as
-    // base64 via a one-shot file reader; non-image paths land in the
-    // prompt text and pi can choose to read them with its Read tool.
+    // Images get inlined as base64 via a one-shot panel-side reader and
+    // travel inside the prompt command. Non-image paths only land in the
+    // prompt text — the executor's sandbox must be able to see them
+    // (workspace or a configured bind) for pi's Read tool to follow up.
     const lower = path.toLowerCase();
     const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].some(ext => lower.endsWith(ext));
     if (isImage) {
@@ -246,39 +215,38 @@ QtObject {
     if (backend) backend.skillConfigSend({ op: "cancel", request_id: id });
   }
 
-  // Wipe local UI and tell pi to start a fresh session in-place.
-  // Pi's runtimeHost.newSession() tears down the current agent, swaps
-  // the SessionManager to a new sessionId, and starts emitting events
-  // for the new session — so the same proc keeps streaming RPC, just
-  // against an empty history. Cold sessions get spawn()ed first so the
-  // new_session command has a process to land in; the next user
-  // message proceeds against that fresh session.
-  //
-  // pi's RPC pump dispatches stdin lines as fire-and-forget async tasks,
-  // so we cannot fire set_model immediately after new_session — they'd
-  // race and set_model would land on the dying session. _request awaits
-  // the new_session response (which pi emits *after* rebindSession), so
-  // the follow-up set_model is guaranteed to land on the fresh session.
+  // Wipe local UI and start a fresh conversation: drop the daemon
+  // session backing this entry and mint a new one on the same executor.
+  // Sessions are cheap daemon-side, so "restart" is delete + create
+  // rather than an in-place rebind; deleting the old id also clears its
+  // on-disk history, so no sibling client re-imports a ghost. The fresh
+  // create_session carries modelPref, so the selected model survives
+  // without a set_model replay.
   function restart() {
     messages = [];
     replyTarget = null;
     typing = false;
+    busy = false;
     lastError = "";
     _streamingId = "";
     _thinkingId = "";
+    if (!executor) return;
+    const old = _daemonSessionId;
+    if (old) {
+      executor.unsubscribe(old);
+      executor.detach(old);
+      executor.deleteSession(old);
+    }
+    _shouldRun = false;
+    _wsAttached = false;
+    _wsCreating = false;
+    _daemonSessionId = "";
+    initialDaemonSessionId = "";
+    // Clear the persisted mapping so a panel restart mid-create doesn't
+    // re-attach to the deleted session.
+    if (backend && backend._onDaemonSessionAssigned)
+      backend._onDaemonSessionAssigned(sessionId, "");
     spawn();
-    _request({ type: "new_session" })
-      .then(() => {
-        if (!modelPref) return;
-        const slash = modelPref.indexOf("/");
-        if (slash <= 0) return;
-        _send({
-          type: "set_model",
-          provider: modelPref.slice(0, slash),
-          modelId: modelPref.slice(slash + 1),
-        });
-      })
-      .catch(e => Logger.w("PiSession", sessionId, "restart aborted", e));
   }
 
   function listModels() {
@@ -318,69 +286,33 @@ QtObject {
   // Backend-facing lifecycle.
 
   function spawn() {
-    if (_useWs) { _wsSpawn(); return; }
-    if (_shouldRun && _process) return;
-    if (!piBin) {
-      Logger.w("PiSession", "spawn without piBin", sessionId);
+    if (!executor) {
+      // Executor not resolved yet — at panel startup the config FileView
+      // (executor inventory) can still be loading when the first send
+      // arrives. Record the intent; onExecutorChanged fires _wsSpawn the
+      // moment the binding resolves, and commands sent meanwhile buffer
+      // in _wsPending.
+      _shouldRun = true;
+      Logger.w("PiSession", sessionId, "spawn deferred: executor not resolved yet");
       return;
     }
-    _shouldRun = true;
-    _spawnSeq += 1;
-    _syncMemoryMarker();
-    const proc = _processComponent.createObject(session);
-    _process = proc;
-    proc.command = _buildCommand();
-    proc.running = true;
-    streaming = true;
-    _applyModelPrefToFreshSession();
+    _wsSpawn();
   }
 
-  // A fresh local session comes up on pi's settings.json default, so
-  // an inherited or persisted modelPref must be applied explicitly.
-  // Issue one awaitable set_model right after the spawn. An existing
-  // session (_existingSessionFlag) needs nothing here, because pi
-  // restores its model from session.jsonl via --continue. The WS
-  // transport never gets here either, since _wsCreate carries
-  // modelPref in create_session opts.
-  //
-  // pi's RPC pump dispatches stdin lines as fire-and-forget async
-  // tasks. A prompt written right behind this set_model could still
-  // run on the default model (see setModelAndWait), so send() gates
-  // the prompt's wire write on _modelPrefApply. Failure is non-fatal.
-  // An implicit inherited model may not exist on this executor (stale
-  // frecency entry, openrouter disabled). Log it and let the turn run
-  // on pi's default rather than blocking it. The explicit /model:
-  // directive keeps its abort-on-failure semantics in
-  // PiChatBackend.launchBackground via setModelAndWait.
-  function _applyModelPrefToFreshSession() {
-    if (!modelPref || _existingSessionFlag) return;
-    const slash = modelPref.indexOf("/");
-    if (slash <= 0) return;
-    const apply = _request({
-      type: "set_model",
-      provider: modelPref.slice(0, slash),
-      modelId: modelPref.slice(slash + 1),
-    }).then(data => {
-      // Correlated responses skip _handleResponse's by-command branch.
-      // Mirror it so the dropdown reflects the applied model.
-      if (data && data.provider && data.id) {
-        activeModel = data.provider + "/" + data.id;
-        models = models.map(m => Object.assign({}, m, {
-          active: m.provider === data.provider && m.id === data.id,
-        }));
-      }
-    }).catch(e => {
-      Logger.w("PiSession", sessionId, "inherited set_model failed; running on pi's default", e);
-    });
-    _modelPrefApply = apply;
-    // Steady state stays promise-free: later prompts write straight out.
-    apply.then(() => {
-      if (_modelPrefApply === apply) _modelPrefApply = null;
-    });
+  // The backend rebinds `executor` when the inventory loads (or when the
+  // entry is repinned). Pick up deferred spawn intent / buffered commands.
+  onExecutorChanged: {
+    if (executor && _shouldRun && !_wsAttached) {
+      // _wsSpawn's coalescing guard keys on _shouldRun, which the deferred
+      // spawn already set — clear the flag so the guard doesn't eat this.
+      _wsCreating = false;
+      _shouldRun = false;
+      _wsSpawn();
+    }
   }
 
-  // WS mode: create the session on (or re-attach it to) the executor,
-  // buffering commands until the daemon assigns an id and we subscribe.
+  // Create the session on (or re-attach it to) the executor, buffering
+  // commands until the daemon assigns an id and we subscribe.
   function _wsSpawn() {
     // Idempotent: already attached, or a create is still in flight (no id
     // yet) — repeat spawns coalesce onto that create (see _wsCreating). Safe
@@ -389,6 +321,9 @@ QtObject {
     if (_shouldRun && (_wsAttached || _wsCreating)) return;
     _shouldRun = true;
     streaming = true;
+    // Reapply the persisted memory intent; buffers until attached, so it
+    // lands ahead of any prompt queued behind this spawn.
+    _syncMemory();
     if (_daemonSessionId) {
       executor.subscribe(_daemonSessionId, session);
       executor.attach(_daemonSessionId);
@@ -413,10 +348,15 @@ QtObject {
       if (_wsAttached || _daemonSessionId) { _wsCreating = false; return; }
       const opts = { name: sessionName };
       if (modelPref) opts.model = modelPref;
-      if (workspacePath) opts.workspace = workspacePath;
       executor.createSession(opts).then(id => {
         _wsCreating = false;
-        if (!_shouldRun) { executor.detach(id); return; }
+        if (!_shouldRun) {
+          // Stop raced the create: the daemon session exists but nobody
+          // claims it — release so a later `sessions` push may import it.
+          executor.detach(id);
+          executor.releaseCreated(id);
+          return;
+        }
         _daemonSessionId = id;
         // Persist on the panel entry so a panel restart re-attaches to the
         // same daemon session (cross-restart history continuity) and so
@@ -424,6 +364,9 @@ QtObject {
         // against an existing entry instead of being auto-imported again.
         if (backend && backend._onDaemonSessionAssigned)
           backend._onDaemonSessionAssigned(sessionId, id);
+        // Entry stamped — the executor-side create claim (which kept the
+        // importer from adopting this id during the promise-job gap) can go.
+        executor.releaseCreated(id);
         executor.subscribe(id, session);
         _wsAttached = true;
         _wsFlush();
@@ -444,79 +387,44 @@ QtObject {
   // ── per-session memory toggle ──
   //
   // The marker convention is opt-out: file present → disabled. The
-  // memory extension reads this from
-  // $SPACES_PI_CHAT_STATE_DIR/sessions/<id>/memory-off at each hook
+  // daemon owns the marker (set_memory writes/removes `memory-off` in
+  // the session dir); the memory extension re-reads it at each hook
   // entry, so flipping the bit here propagates to the next prompt
-  // without a respawn. Reapplied on every spawn (and on startup) so
-  // the marker matches the persisted intent even after the session
-  // dir was wiped or pi was restarted.
-  function _syncMemoryMarker() {
-    if (_useWs) return;  // marker is local-only; remote sessions live on the executor
-    if (!stateDir || !sessionId) return;
-    const markerPath = stateDir + "/sessions/" + sessionId + "/memory-off";
-    const cmd = memoryEnabled
-      ? ["rm", "-f", markerPath]
-      : ["sh", "-c", "mkdir -p \"$(dirname \"$0\")\" && touch \"$0\"", markerPath];
-    const proc = _markerComponent.createObject(session);
-    proc.command = cmd;
-    proc.running = true;
+  // without touching the live agent. Cold sessions buffer the command
+  // in _wsPending until the next spawn attaches.
+  function _syncMemory() {
+    if (!executor) return;
+    _send({ type: "set_memory", enabled: memoryEnabled });
   }
-  onMemoryEnabledChanged: _syncMemoryMarker()
-  Component.onCompleted: _syncMemoryMarker()
+  onMemoryEnabledChanged: _syncMemory()
 
   function stop() {
     _shouldRun = false;
-    if (_useWs) {
-      if (_daemonSessionId) {
-        executor.detach(_daemonSessionId);
-        executor.unsubscribe(_daemonSessionId);
-      }
-      _wsAttached = false;
-      // Any in-flight create's .then sees _shouldRun false and detaches the
-      // minted id; clear the flag so a later respawn isn't wedged.
-      _wsCreating = false;
-      streaming = false;
-      typing = false;
-      return;
+    if (executor && _daemonSessionId) {
+      executor.detach(_daemonSessionId);
+      executor.unsubscribe(_daemonSessionId);
     }
-    if (!_process) {
-      streaming = false;
-      typing = false;
-      return;
-    }
-    // Graceful shutdown — systemctl --user stop sends SIGTERM, pi
-    // flushes session.jsonl, then exits. The scope unit garbage-
-    // collects via --collect on the spawn side.
-    const sp = _stopComponent.createObject(session);
-    _stopProcess = sp;
-    sp.command = ["systemctl", "--user", "stop", "pi-chat-" + sessionId + ".service"];
-    sp.running = true;
+    _wsAttached = false;
+    // Any in-flight create's .then sees _shouldRun false and detaches the
+    // minted id; clear the flag so a later respawn isn't wedged.
+    _wsCreating = false;
+    streaming = false;
+    typing = false;
   }
 
   function _send(cmd) {
-    if (_useWs) {
-      if (_wsAttached && _daemonSessionId) executor.command(_daemonSessionId, cmd);
-      else _wsPending.push(cmd);
-      return;
-    }
-    if (!_process || !_process.running) return;
-    try {
-      _process.write(JSON.stringify(cmd) + "\n");
-    } catch (e) {
-      Logger.w("PiSession", sessionId, "write failed", e);
-    }
+    if (_wsAttached && _daemonSessionId) executor.command(_daemonSessionId, cmd);
+    else _wsPending.push(cmd);
   }
 
-  // Send a command and resolve when pi emits the matching response.
-  // We attach a unique `id`; pi echoes it back on the success/error
-  // response, which _handleResponse uses to fulfill this promise.
-  // Rejects immediately when the process is not running.
+  // Send a command and resolve when the executor relays pi's matching
+  // response. We attach a unique `id`; the daemon echoes it back on the
+  // success/error response, which _handleResponse uses to fulfill the
+  // promise. With the executor still unresolved the command buffers like
+  // any other; the promise settles after attach (or rejects via
+  // _rejectInflight on disconnect).
   function _request(cmd) {
     return new Promise((resolve, reject) => {
-      if (!_useWs && (!_process || !_process.running)) {
-        reject("process not running");
-        return;
-      }
       _nextReqId += 1;
       const id = "q" + _nextReqId;
       _inflight[id] = { resolve: resolve, reject: reject };
@@ -534,157 +442,9 @@ QtObject {
     }
   }
 
-  function _buildCommand() {
-    const xdgRuntime = String(Quickshell.env("XDG_RUNTIME_DIR"));
-    const sessionState = stateDir + "/sessions/" + sessionId;
-    const skillSockHost = xdgRuntime + "/spaces-skill-config.sock";
-    const openUrlSockHost = xdgRuntime + "/spaces-pi-open-url.sock";
-    const skillsDefs = stateDir + "/skills-defs";
-    const skillConfigStore = stateDir + "/skill-config";
-    // Dedicated dir for the desktop notification-history file. Whatever
-    // writer is running (noctalia configured to redirect here, a future
-    // standalone bridge, etc.) writes its history JSON to
-    // <notificationsDir>/history.json so we can bind this single dir
-    // read-only without exposing any wider cache. The `notifications`
-    // skill reads the file via SPACES_NOTIFICATIONS_FILE.
-    const notificationsDir = stateDir + "/notifications";
-    const notificationsFile = notificationsDir + "/history.json";
-
-    // systemd-run --user as a transient service (not --scope): user
-    // scopes silently reject namespace-creating properties like
-    // BindPaths/ProtectHome/PrivateTmp ("Unknown assignment"). The
-    // service path supports the full sandbox bouquet AND --pipe wires
-    // stdin/stdout/stderr back to us for the RPC channel.
-    const cmd = [
-      "systemd-run", "--user", "--pipe", "--quiet", "--collect",
-      "--unit=pi-chat-" + sessionId + ".service",
-      "--slice=pi-chat.slice",
-      "--service-type=exec",
-      "--working-directory=" + workspacePath,
-      "--setenv=SPACES_SESSION_ID=" + sessionId,
-      "--setenv=PI_CODING_AGENT_DIR=" + piAgentDir,
-      "--setenv=LLAMA_SWAP_BASE_URL=" + llmUrl,
-      "--setenv=SKILL_CONFIG_SOCKET=" + skillSockHost,
-      "--setenv=SPACES_OPEN_URL_SOCKET=" + openUrlSockHost,
-      "--setenv=SPACES_PI_CHAT_STATE_DIR=" + stateDir,
-      "--setenv=SPACES_NOTIFICATIONS_FILE=" + notificationsFile,
-      "--setenv=PI_TELEMETRY=0",
-      "--setenv=PI_OFFLINE=0",
-      // Propagate the chat shell's PATH into the transient unit.
-      // `systemd-run --user` builds the unit's exec environment from
-      // the user manager's Manager.Environment, which is just the
-      // baked-in user@.service PATH (coreutils + systemd's bin) on
-      // NixOS — none of /run/current-system/sw/bin or the user profile
-      // makes it through. Without this, every skill CLI shelled out by
-      // bare name from SKILL.md (signal, notifications, skill-config,
-      // …) ENOENTs. niri-session imports the full env into the user
-      // manager so the inheritance happens implicitly there, but we
-      // can't rely on the compositor doing that for sway / hyprland /
-      // GNOME hosts. Forwarding PATH explicitly closes the gap.
-      "--setenv=PATH=" + String(Quickshell.env("PATH")),
-      "--property=BindPaths=" + sessionState + ":" + sessionState,
-      "--property=BindPaths=" + workspacePath + ":" + workspacePath,
-      "--property=BindPaths=" + skillSockHost + ":" + skillSockHost,
-      // `-` prefix: don't abort sandbox start if the open-url socket
-      // hasn't been bound yet (the listener lives in the panel
-      // process). google-cli falls back to local webbrowser.open when
-      // the path isn't reachable.
-      "--property=BindPaths=-" + openUrlSockHost + ":" + openUrlSockHost,
-      // skill-config needs the skill schemas (read-only nix-store
-      // symlinks) and the user's config/secrets store (read-write).
-      "--property=BindReadOnlyPaths=" + skillsDefs + ":" + skillsDefs,
-      "--property=BindPaths=" + skillConfigStore + ":" + skillConfigStore,
-      "--property=BindReadOnlyPaths=" + notificationsDir + ":" + notificationsDir,
-      "--property=PrivateTmp=true",
-      "--property=PrivateDevices=true",
-      "--property=ProtectKernelTunables=true",
-      "--property=ProtectKernelModules=true",
-      "--property=ProtectKernelLogs=true",
-      "--property=ProtectControlGroups=true",
-      "--property=ProtectClock=true",
-      "--property=ProtectProc=invisible",
-      "--property=NoNewPrivileges=true",
-      "--property=RestrictSUIDSGID=true",
-      "--property=LockPersonality=true",
-      "--property=RestrictNamespaces=true",
-      "--property=SystemCallArchitectures=native",
-      "--property=MemoryHigh=" + memoryHigh,
-    ];
-    // Trusted sessions skip the filesystem-narrowing properties. The
-    // cgroup limits + kernel-protection set stay so even trusted pi
-    // can't fiddle with /proc/sysrq-trigger and friends.
-    if (!trusted) {
-      cmd.push("--property=ProtectHome=tmpfs");
-      // BindPaths (RW) not BindReadOnlyPaths: pi mkdir's a
-      // `settings.json.lock` directory next to settings.json for
-      // advisory locking. The settings files themselves are nix-store
-      // symlinks so they remain immutable; only the lock mkdir needs
-      // the parent dir writable.
-      cmd.push("--property=BindPaths=" + piAgentDir + ":" + piAgentDir);
-    }
-    if (openrouterEnabled) {
-      cmd.push("--property=LoadCredential=openrouter-api-key:/run/spaces-secrets/openrouter-api-key");
-    }
-    if (memoryDbDir && memoryHfHome) {
-      // SEDIMENT_DB is the vector store (bind-mounted RW so the
-      // sandbox can write to the user's persistent state dir).
-      // HF_HOME points at the /nix/store path that bakes the
-      // embedding-model cache — already visible inside the sandbox
-      // because /nix/store is not hidden by ProtectHome=tmpfs, so no
-      // BindPath is needed. The per-session opt-out lives as a
-      // marker file inside the already-bound session state dir, so
-      // we don't need a separate sandbox flag for it.
-      cmd.push("--setenv=SEDIMENT_DB=" + memoryDbDir + "/data");
-      cmd.push("--setenv=HF_HOME=" + memoryHfHome);
-      cmd.push("--property=BindPaths=" + memoryDbDir + ":" + memoryDbDir);
-    }
-    // Module-contributed binds (services.pi-chat.sandboxBinds). Pushed
-    // last so the baseline pi-chat-owned binds above stay in a stable
-    // position regardless of how many skills opt in. Anything malformed
-    // is silently skipped — a typo in a downstream module must not be
-    // able to abort sandbox setup.
-    const homeDir = String(Quickshell.env("HOME"));
-    function _expandSpecifiers(p) {
-      return String(p || "").replace(/%h/g, homeDir).replace(/%t/g, xdgRuntime);
-    }
-    const extraBinds = sandboxBinds || [];
-    for (let i = 0; i < extraBinds.length; i++) {
-      const b = extraBinds[i];
-      if (!b || !b.source) continue;
-      const src = _expandSpecifiers(b.source);
-      const tgt = b.target ? _expandSpecifiers(b.target) : src;
-      const prop = b.mode === "ro" ? "BindReadOnlyPaths" : "BindPaths";
-      const prefix = b.optional ? "-" : "";
-      cmd.push("--property=" + prop + "=" + prefix + src + ":" + tgt);
-    }
-    cmd.push("--", piBin, "--mode", "rpc", "--session-dir", sessionState);
-    // --continue picks the most recent jsonl in the session dir. On
-    // first launch the dir is empty; pi falls back to a fresh session.
-    if (_hasExistingSession()) cmd.push("--continue");
-    return cmd;
-  }
-
-  function _hasExistingSession() {
-    // We can't stat from QML directly; pi handles the empty case by
-    // creating a new session, but its diagnostic noise is louder when
-    // --continue resolves to nothing. PiChatBackend stamps a flag on
-    // the session entry once the first agent_end has been observed.
-    return !!_existingSessionFlag;
-  }
-  // Set true after the first agent_end; persisted by PiChatBackend.
-  property bool _existingSessionFlag: false
-
-  // ── pi RPC parser ──
-
-  function _onLine(line) {
-    if (!line) return;
-    let ev;
-    try { ev = JSON.parse(line); }
-    catch (e) { Logger.w("PiSession", sessionId, "bad json", line); return; }
-    _handleEvent(ev);
-  }
-  // WS mode: an event envelope's payload (already parsed) is the pi
-  // event — feed it to the same state machine as the local pipe.
+  // ── pi event intake ──
+  // An event envelope's payload (already parsed by PiExecutor) is the
+  // pi event — feed it into the state machine.
   function _onEnvelopeEvent(payload) {
     if (payload) _handleEvent(payload);
   }
@@ -721,7 +481,6 @@ QtObject {
       typing = false;
       busy = false;
       _finalizeStreaming();
-      _existingSessionFlag = true;
       if (lastError) lastError = "";
       _assistantStartedAt = 0;
       _assistantLastTextBubbleId = "";
@@ -1048,7 +807,6 @@ QtObject {
     }
     if (out.length > 0) {
       messages = out.concat(messages);
-      _existingSessionFlag = true;
     }
   }
 
@@ -1127,45 +885,6 @@ QtObject {
   // ── child components (Process, SplitParser) — declared as
   //    properties so they're owned by this QtObject without polluting
   //    the visible API.
-
-  readonly property Component _processComponent: Component {
-    Process {
-      stdout: SplitParser { onRead: line => session._onLine(line) }
-      stderr: SplitParser { onRead: line => Logger.w("PiSession", session.sessionId, "stderr", line) }
-      onExited: code => {
-        session.streaming = false;
-        session.busy = false;
-        session.typing = false;
-        session._streamingId = "";
-        // Decline any in-flight extension UI so the agent loop doesn't
-        // wait on a process that won't come back.
-        for (const id in session._pendingExtensionUI) {
-          session.patch(id, { confirmState: "denied" });
-        }
-        session._pendingExtensionUI = ({});
-        session._rejectInflight("process exited (" + code + ")");
-        session._process = null;
-        if (code !== 0 && code !== 143 /* SIGTERM */ ) {
-          session.lastError = "pi exited (" + code + ")";
-          session.exitedWithError(code);
-        }
-      }
-    }
-  }
-
-  readonly property Component _stopComponent: Component {
-    Process {
-      onExited: _ => {
-        session._stopProcess = null;
-      }
-    }
-  }
-
-  // Short-lived process for `touch`/`rm -f` of the memory-off marker.
-  // Self-destructs on exit so we don't accumulate one per toggle.
-  readonly property Component _markerComponent: Component {
-    Process { onExited: _ => destroy(2000) }
-  }
 
   readonly property Component _imageReaderComponent: Component {
     Process {

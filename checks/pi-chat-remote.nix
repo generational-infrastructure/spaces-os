@@ -84,13 +84,16 @@ pkgs.testers.runNixOSTest {
 
       environment.systemPackages = [ pkgs.python3 ];
 
-      # Point the panel at the remote executor instead of spawning pi
-      # locally; no local LLM needed (the server has the mock).
+      # Point the panel at the remote executor; no local LLM needed (the
+      # server has the mock). The per-user pi-sessiond-local is disabled and
+      # the default pinned so the session demonstrably routes to the server.
       services.pi-chat = {
         skills = lib.mkForce { };
         extensions.bash-confirm = false;
         wsUrl = "ws://server:${toString wsPort}";
         wsToken = token;
+        localExecutor.enable = false;
+        defaultExecutor = "remote";
       };
       services.llama-swap.enable = lib.mkForce false;
     };

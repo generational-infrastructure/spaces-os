@@ -143,6 +143,9 @@ else
             extensions.bash-confirm = false;
             wsUrl = "ws://192.0.2.1:${toString wsPort}";
             wsToken = token;
+            # The loopback executor is on by default; pin new sessions at
+            # the remote half so the topology actually exercises it.
+            defaultExecutor = "remote";
           };
           services.llama-swap.enable = lib.mkForce false;
         }

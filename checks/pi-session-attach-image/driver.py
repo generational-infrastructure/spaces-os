@@ -1,35 +1,50 @@
 #!/usr/bin/env python3
-"""Attach-image contract test for the chat plugin.
+"""Attach-image contract test — end-to-end over WS against the REAL pi-sessiond.
 
-We mount PiSession.qml directly inside a small test shell, bypass the
-noctalia plugin host and the pi-chat NixOS module, and exercise the
-`sendFile(image_path)` IPC entry that the paperclip button and drag-
-and-drop both end up calling.
+PiSession has no local pi-spawn path anymore; it only talks to pi-sessiond
+executors over WebSocket. So this check runs the real PiChatBackend in a
+headless quickshell with one executor injected via $SPACES_PI_CHAT_EXECUTORS,
+pointed at a real pi-sessiond (bun, embedded pi SDK) whose llama-swap is a
+recording mock LLM, and drives `sendFile(<image_path>)` — the entry point the
+paperclip button and drag-and-drop both call.
 
 What this test guarantees:
 
-  - clicking the picker (or any IPC caller) and handing PiSession an
-    image path **immediately** produces a local "from: me" message
-    bubble that carries the image path. The user has to see the thing
-    they just attached, without waiting for a roundtrip to pi.
+  - handing PiSession an image path **immediately** produces a local
+    "from: me" bubble carrying the image path. The user has to see the
+    thing they just attached, before any daemon roundtrip. (The original
+    regression: `_readImage` only sent the prompt — no local bubble, so
+    pressing "attach" showed nothing.)
 
-  - the same path lands at pi over the RPC channel as a `{type:
-    "prompt", images: [{type: "image", data, mimeType}]}` payload and
-    pi processes it (we wait for `agent_end` via the streaming mock).
+  - the attachment actually reaches the model: the panel base64-encodes
+    the file (`file -b --mime-type` + `base64 -w0` in a one-shot Process —
+    both binaries must be on PATH), ships it inside the WS `prompt`
+    command as `images: [{type:"image", data, mimeType}]`, pi-sessiond
+    forwards that verbatim to the SDK's prompt options, and pi posts a
+    multimodal /v1/chat/completions request. Asserted on the stable part:
+    the tiny PNG's exact base64 payload appears in the recorded request
+    body (however pi shapes the content block around it).
 
-The first guarantee is the regression we're catching: until today,
-`_readImage` only called `_send(...)` and `typing = true` — no local
-bubble was appended, so the user pressed "attach" and saw nothing.
+Token plumbing mirrors production: the daemon reads its token from
+$CREDENTIALS_DIRECTORY/token (LoadCredential), the panel-side executor entry
+carries a `tokenPath` to the same file.
+
+Usage: driver.py <qs_bin> <daemon_bin> <systemd_run_stub> <test_dir>
+       <plugin_dir> <work_dir>
 """
 
+import base64
 import json
 import os
 import shutil
+import socket
 import struct
 import subprocess
 import sys
 import time
 import zlib
+
+TOKEN = "attach-image-secret"
 
 
 # 1×1 transparent PNG, constructed inline so the test stays hermetic.
@@ -50,294 +65,294 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def start_mock_llm(mock_script: str, work_dir: str):
-    log = open(os.path.join(work_dir, "mock-llm.log"), "w")
-    proc = subprocess.Popen(
-        [sys.executable, mock_script],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=log,
-    )
-    line = proc.stdout.readline()
-    if not line:
-        fail("mock LLM did not print its URL")
-    return proc, line.decode().strip()
+def free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            v = predicate()
+            if v:
+                return v
+        except Exception:
+            pass
+        time.sleep(interval_s)
+    return None
+
+
+def wait_for_port(port: int, *, timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
 
 
 def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Lay out a fresh shell.qml + Commons stub + PiSession copy under
-    work_dir/shell. We copy rather than symlink so Qt's qmlcache can't
-    pin stale bytecode keyed off /nix/store mtimes."""
+    """Stage the whole plugin tree (PiChatBackend pulls in PiExecutor /
+    PiSession / qs.Commons / qs.Widgets) with our shell.qml on top, fresh
+    mtimes so qmlcache can't pin stale bytecode keyed off /nix/store."""
     shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "PiSession.qml"),
-        os.path.join(shell_root, "PiSession.qml"),
-    )
+    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
+    for root, _dirs, files in os.walk(shell_root):
+        os.chmod(root, 0o755)
+        for f in files:
+            try:
+                os.chmod(os.path.join(root, f), 0o644)
+            except OSError:
+                pass
+    shell_dst = os.path.join(shell_root, "shell.qml")
+    if os.path.exists(shell_dst):
+        os.remove(shell_dst)
+    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
     now = time.time()
     for root, _dirs, files in os.walk(shell_root):
         for f in files:
             try:
                 os.utime(os.path.join(root, f), (now, now))
-            except PermissionError:
+            except OSError:
                 pass
-    return shell_root
-
-
-def stage_systemd_run_stub(test_dir: str, work_dir: str) -> str:
-    bin_dir = os.path.join(work_dir, "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    dst = os.path.join(bin_dir, "systemd-run")
-    shutil.copy2(os.path.join(test_dir, "systemd-run-stub"), dst)
-    os.chmod(dst, 0o755)
-    return bin_dir
-
-
-def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [
-        qs_bin,
-        "ipc",
-        "-p",
-        shell_qml,
-        "call",
-        "test:pi-session",
-        *args,
-    ]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    last_err = None
-    while time.monotonic() < deadline:
-        try:
-            value = predicate()
-            if value:
-                return value
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-        time.sleep(interval_s)
-    if last_err:
-        raise last_err
-    return None
+    return os.path.join(shell_root, "shell.qml")
 
 
 def main() -> None:
-    if len(sys.argv) != 8:
+    if len(sys.argv) != 7:
         fail(
-            "usage: driver.py <pi_bin> <qs_bin> <mock_llm_script> <ext_dir> "
+            "usage: driver.py <qs_bin> <daemon_bin> <systemd_run_stub> "
             "<test_dir> <plugin_dir> <work_dir>"
         )
-    (
-        pi_bin,
-        qs_bin,
-        mock_script,
-        ext_dir,
-        test_dir,
-        plugin_dir,
-        work_dir,
-    ) = sys.argv[1:8]
+    qs_bin, daemon_bin, stub, test_dir, plugin_dir, work_dir = sys.argv[1:7]
     os.makedirs(work_dir, exist_ok=True)
 
-    # Filesystem layout under work_dir.
     home = os.path.join(work_dir, "home")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    agent_dir = os.path.join(work_dir, "agent")
-    state_dir = os.path.join(work_dir, "state")
-    session_dir = os.path.join(state_dir, "sessions", "test")
-    workspace = os.path.join(work_dir, "workspace")
-    for d in (home, xdg_runtime, agent_dir, state_dir, session_dir, workspace):
+    state_dir = os.path.join(work_dir, "sessiond-state")
+    cred_dir = os.path.join(work_dir, "creds")
+    for d in (home, xdg_runtime, state_dir, cred_dir):
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
 
-    shell_root = stage_shell(test_dir, plugin_dir, work_dir)
-    shell_qml = os.path.join(shell_root, "shell.qml")
-    bin_dir = stage_systemd_run_stub(test_dir, work_dir)
+    # Token file shared by both ends: the daemon loads it via
+    # $CREDENTIALS_DIRECTORY/token, the executor entry points its tokenPath
+    # here. Trailing newline checks the panel trims the read.
+    token_path = os.path.join(cred_dir, "token")
+    with open(token_path, "w") as fh:
+        fh.write(TOKEN + "\n")
+    os.chmod(token_path, 0o600)
 
-    # Pi agent config: same shape as the NixOS module writes, minus the
-    # extensions we don't exercise here (we only care that pi accepts a
-    # multimodal prompt and replies).
-    with open(os.path.join(agent_dir, "settings.json"), "w") as fh:
-        json.dump(
-            {
-                "extensions": [os.path.join(ext_dir, "llama-swap-discover.ts")],
-                "defaultProvider": "local",
-                "defaultModel": "mock-model",
-                "quietStartup": True,
-                "enableInstallTelemetry": False,
-            },
-            fh,
-        )
-
-    # Write the test image.
+    # The test image + the exact base64 the panel-side `base64 -w0` must
+    # produce; the LLM-request assertion greps for this payload.
+    png = _tiny_png_bytes()
     image_path = os.path.join(work_dir, "test.png")
     with open(image_path, "wb") as fh:
-        fh.write(_tiny_png_bytes())
+        fh.write(png)
+    expected_b64 = base64.b64encode(png).decode()
 
-    # Boot the mock LLM first so the QML side can spawn pi against a
-    # live OpenAI endpoint.
-    mock_proc, mock_url = start_mock_llm(mock_script, work_dir)
+    shell_qml = stage_shell(test_dir, plugin_dir, work_dir)
 
-    # Environment for quickshell + child pi.
+    # ── mock LLM (records every completion request body) ──────────────────
+    llm_port = free_port()
+    capture_path = os.path.join(work_dir, "llm-requests.jsonl")
+    llm_log = open(os.path.join(work_dir, "mock-llm.log"), "w")
+    llm_proc = subprocess.Popen(
+        [
+            sys.executable,
+            os.path.join(test_dir, "mock-llm.py"),
+            str(llm_port),
+            capture_path,
+        ],
+        stdout=llm_log,
+        stderr=subprocess.STDOUT,
+    )
+
+    # ── real pi-sessiond ───────────────────────────────────────────────────
+    ws_port = free_port()
+    daemon_env = os.environ.copy()
+    daemon_env.update(
+        {
+            "HOME": state_dir,
+            "SPACES_SESSIOND_HOST": "127.0.0.1",
+            "SPACES_SESSIOND_PORT": str(ws_port),
+            "CREDENTIALS_DIRECTORY": cred_dir,
+            "SPACES_SESSIOND_STATE_DIR": state_dir,
+            "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
+            "SPACES_SESSIOND_SYSTEMD_RUN": stub,
+            "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # no idle-GC mid-test
+            "LLAMA_SWAP_BASE_URL": f"http://127.0.0.1:{llm_port}",
+        }
+    )
+    daemon_log = open(os.path.join(work_dir, "daemon.log"), "w")
+    daemon = subprocess.Popen(
+        [daemon_bin], env=daemon_env, stdout=daemon_log, stderr=subprocess.STDOUT
+    )
+
+    # ── headless quickshell hosting the real backend ───────────────────────
     env = os.environ.copy()
     env.update(
         {
             "HOME": home,
             "XDG_RUNTIME_DIR": xdg_runtime,
-            "PATH": bin_dir + os.pathsep + env.get("PATH", ""),
             "QT_QPA_PLATFORM": "offscreen",
-            "QSG_RHI_BACKEND": "null",  # don't try to allocate a GPU surface
-            "TEST_PI_BIN": pi_bin,
-            "TEST_STATE_DIR": state_dir,
-            "TEST_AGENT_DIR": agent_dir,
-            "TEST_WORKSPACE": workspace,
-            "TEST_LLM_URL": mock_url,
-            "PI_CODING_AGENT_DIR": agent_dir,
-            "LLAMA_SWAP_BASE_URL": mock_url,
-            "PI_OFFLINE": "1",
-            "PI_TELEMETRY": "0",
+            "QSG_RHI_BACKEND": "null",
+            # The executor topology, as the panel's test seam takes it. The
+            # tokenPath (not an inline token) proves the file-read plumbing.
+            "SPACES_PI_CHAT_EXECUTORS": json.dumps(
+                [
+                    {
+                        "id": "local",
+                        "url": f"ws://127.0.0.1:{ws_port}",
+                        "tokenPath": token_path,
+                    }
+                ]
+            ),
         }
     )
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    # Run qs with merged stdout/stderr so we capture QML load errors.
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs_proc = None
 
-    def cleanup_logs():
-        try:
-            qs_stdout.flush()
-            qs_stderr.flush()
-            sys.stderr.write("\n== qs.stdout.log ==\n")
-            with open(os.path.join(work_dir, "qs.stdout.log")) as fh:
-                sys.stderr.write(fh.read())
-            sys.stderr.write("\n== qs.stderr.log ==\n")
-            with open(os.path.join(work_dir, "qs.stderr.log")) as fh:
-                sys.stderr.write(fh.read())
-            # Dump quickshell's own binary log (qslog) — this contains
-            # QML compilation errors that don't surface on stdout/stderr.
-            qs_log_root = os.path.join(xdg_runtime, "quickshell")
-            for dirpath, _, filenames in os.walk(qs_log_root):
-                for fn in filenames:
-                    fp = os.path.join(dirpath, fn)
-                    sys.stderr.write(f"\n== {fp} ==\n")
-                    try:
-                        with open(fp, errors="replace") as lf:
-                            sys.stderr.write(lf.read()[-4000:])
-                    except Exception:
-                        sys.stderr.write("<unreadable>\n")
-            sys.stderr.write("\n== mock-llm.log ==\n")
-            with open(os.path.join(work_dir, "mock-llm.log")) as fh:
-                sys.stderr.write(fh.read())
-            rc = qs_proc.poll()
-            if rc is not None:
-                sys.stderr.write(f"\n== quickshell exited with code {rc} ==\n")
-        except Exception as e:
-            sys.stderr.write(f"(cleanup_logs error: {e})\n")
+    def dump_logs():
+        for name in ("qs.log", "daemon.log", "mock-llm.log"):
+            p = os.path.join(work_dir, name)
+            if os.path.isfile(p):
+                sys.stderr.write(f"\n== {name} ==\n")
+                sys.stderr.write(open(p, errors="replace").read()[-8000:])
+        if os.path.isfile(capture_path):
+            sys.stderr.write("\n== llm-requests.jsonl (truncated) ==\n")
+            sys.stderr.write(open(capture_path, errors="replace").read()[:4000])
+
+    def die(msg):
+        dump_logs()
+        fail(msg)
+
+    def ipc(*args):
+        r = subprocess.run(
+            [qs_bin, "ipc", "-p", shell_qml, "call", "test:pi-session", *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"ipc {args} failed (exit={r.returncode}): {r.stderr!r}")
+        return r.stdout.strip()
+
+    def ipc_ready():
+        r = subprocess.run(
+            [qs_bin, "ipc", "-p", shell_qml, "show"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return r.returncode == 0 and "test:pi-session" in r.stdout
 
     try:
-        # Wait for the IPC handler to register. `qs ipc show` returns a
-        # non-zero exit until quickshell finishes loading the shell.
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
+        # Mock LLM first: the daemon discovers models from /v1/models at boot.
+        if not wait_for_port(llm_port, timeout_s=15):
+            die(f"mock LLM never listened on {llm_port} (exit={llm_proc.poll()})")
+        # bun + SDK import make the daemon the slowest riser here.
+        if not wait_for_port(ws_port, timeout_s=60):
+            die(f"pi-sessiond never listened on {ws_port} (exit={daemon.poll()})")
+
+        qs_log = open(os.path.join(work_dir, "qs.log"), "w")
+        qs_proc = subprocess.Popen(
+            [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
+        )
+
+        if not wait_until(ipc_ready, timeout_s=30):
+            die("quickshell never bound the test:pi-session IPC target")
+
+        # hello/welcome with the token-file content — tokenPath end-to-end.
+        if not wait_until(
+            lambda: ipc("executorConnected", "local") == "true", timeout_s=30
+        ):
+            die("panel never connected/authenticated against pi-sessiond")
+
+        sid = ipc("newSessionOn", "AttachImage", "local")
+        if not sid:
+            die("newSessionOn returned no id")
+
+        # ── the contract under test ────────────────────────────────────────
+        ipc("sendFile", sid, image_path)
+
+        # (1) The picker just closed; the user must see their attachment
+        # immediately — the local bubble precedes the (async) base64 encode
+        # and the whole daemon roundtrip.
+        def user_image_bubbles():
+            msgs = json.loads(ipc("messages", sid))
+            return [
+                m
+                for m in msgs
+                if isinstance(m, dict)
+                and m.get("from") == "me"
+                and m.get("image") == image_path
+            ] or None
+
+        bubbles = wait_until(user_image_bubbles, timeout_s=10)
+        if not bubbles:
+            die(
+                f"expected a local user bubble with image={image_path!r} after "
+                f"sendFile, got messages={ipc('messages', sid)!r}"
             )
-            if r.returncode != 0:
-                sys.stderr.write(
-                    f"[ipc_ready] exit={r.returncode} stderr={r.stderr!r}\n"
-                )
-                return False
-            return "test:pi-session" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            cleanup_logs()
-            fail("quickshell never bound the test:pi-session IPC target")
-
-        # Drive the actual contract under test.
-        qs_ipc_call(qs_bin, shell_qml, env, "sendFile", image_path)
-
-        # The picker just closed; the user must see their attachment.
-        # Poll briefly for the local bubble.
-        def has_user_image_bubble():
-            raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
-            try:
-                msgs = json.loads(raw)
-            except Exception:
-                return False
-            for m in msgs:
-                if (
-                    isinstance(m, dict)
-                    and m.get("from") == "me"
-                    and m.get("image") == image_path
-                ):
-                    return True
-            return False
-
-        try:
-            wait_until(has_user_image_bubble, timeout_s=10)
-        except Exception:
-            pass
-
-        # Final read so we get a stable snapshot for the assertion message.
-        raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
-        msgs = json.loads(raw)
-        user_bubbles = [
-            m
-            for m in msgs
-            if isinstance(m, dict)
-            and m.get("from") == "me"
-            and m.get("image") == image_path
-        ]
-        if not user_bubbles:
-            cleanup_logs()
-            fail(
-                "expected a local user bubble with image="
-                f"{image_path!r} after sendFile, got messages={msgs!r}"
-            )
-
-        # Sanity-check the rest of the bubble: a state-machine bug that
-        # marks our message as "queued" forever would still satisfy the
-        # bubble check above but break the panel's send affordance.
-        bubble = user_bubbles[0]
+        # A state-machine bug that leaves our message "queued" forever would
+        # still satisfy the bubble check but break the panel's send affordance.
+        bubble = bubbles[0]
         if bubble.get("state") not in ("sent", "delivered", "streaming"):
-            cleanup_logs()
-            fail(f"user image bubble has unexpected state: {bubble!r}")
+            die(f"user image bubble has unexpected state: {bubble!r}")
 
-        print("OK")
+        # (2) The multimodal payload reaches the LLM: panel encodes ->
+        # WS prompt {images:[{type:"image", data, mimeType}]} -> daemon
+        # forwards verbatim to the SDK -> pi posts /v1/chat/completions.
+        # Assert on the stable part — the exact base64 of the PNG — rather
+        # than the content-block shape pi wraps around it.
+        def capture_has_image():
+            if not os.path.isfile(capture_path):
+                return False
+            return expected_b64 in open(capture_path, errors="replace").read()
+
+        if not wait_until(capture_has_image, timeout_s=120, interval_s=0.5):
+            die(
+                "mock LLM never received a completion request carrying the "
+                "attached PNG's base64 payload"
+            )
+
+        # The reply streamed by the mock should also round-trip back into the
+        # chat — proves the session stayed attached through the image turn.
+        def got_reply():
+            msgs = json.loads(ipc("messages", sid))
+            return any(
+                isinstance(m, dict)
+                and m.get("from") != "me"
+                and "I can see the image." in (m.get("text") or "")
+                for m in msgs
+            )
+
+        if not wait_until(got_reply, timeout_s=60):
+            die("assistant reply never streamed back into the session")
+
+        print("PASS: local bubble + base64 PNG in the recorded LLM request")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
-        mock_proc.terminate()
-        try:
-            mock_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            mock_proc.kill()
+        if qs_proc:
+            qs_proc.terminate()
+            try:
+                qs_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                qs_proc.kill()
+        for p in (daemon, llm_proc):
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
 
 
 if __name__ == "__main__":

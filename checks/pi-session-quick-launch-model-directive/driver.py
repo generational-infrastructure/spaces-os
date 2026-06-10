@@ -1,30 +1,44 @@
 #!/usr/bin/env python3
 """Model-directive launch contract test.
 
-Proves that backend.launchBackground(prompt, {model}) applies the
-requested model to the pi worker BEFORE the prompt turn runs — the
-race the awaited set_model fix closes.
+Proves that backend.launchBackground(prompt, {model}) runs the turn on
+the REQUESTED model, not the executor's default.
 
-pi dispatches stdin RPC lines as fire-and-forget async tasks, so a
-fire-and-forget `set_model` followed immediately by the prompt can race:
-the turn starts on the *default* model. The backend must await pi's
-set_model response before sending the prompt. This check pins that:
+The session lives on a REAL pi-sessiond on loopback. Two layers carry
+the directive over the WebSocket, and this check pins their net effect:
 
-  1. The mock LLM serves a multi-model list; pi's default is a model
-     that is deliberately NOT the one we launch with.
+  - the panel's create_session carries model "provider/id" (modelPref is
+    persisted on the entry before the first spawn), so the daemon mints
+    the session on the launched model; and
+  - the prompt is sent only from the awaited set_model continuation —
+    the daemon echoes the request `id` on its set_model response, which
+    is what makes PiSession.setModelAndWait resolvable over the WS at
+    all. A rejected set_model (unknown model) must abort the launch
+    instead of silently running on whatever the daemon fell back to.
+
+Assertions:
+
+  1. The mock LLM serves a multi-model list (discovered by the daemon at
+     startup); the daemon's default is a model that is deliberately NOT
+     the one we launch with.
   2. launchBackground("summarize logs", {model:"local/gemma4:e4b"}).
-  3. The logged /v1/chat/completions request must carry model
-     "gemma4:e4b" — if set_model raced (or was ignored), pi would have
-     run the turn on the default model and the assertion fails.
+  3. Every logged /v1/chat/completions request must carry model
+     "gemma4:e4b" — if the directive were dropped anywhere along
+     create_session/set_model, the turn would run on the default model
+     and the assertion fails.
   4. The session title and "Agent finished" notification summarize the
      PROMPT ("summarize logs"), and the session stays in the index.
 
-Reuses the pi-session-quick-launch harness: a stub `systemd-run` execs
-pi directly (no user systemd manager in the build sandbox) and a stub
-`notify-send` records completion notifications.
+Failure path: a model the daemon's registry doesn't know makes set_model
+respond with an error (same echoed id); the launch must then NOT send
+the prompt and must clear its reaper-exempt pending mark.
 
-Usage: driver.py <pi_bin> <qs_bin> <mock_llm> <ext_dir> <test_dir>
-                  <stubs_dir> <plugin_dir> <work_dir>
+Reuses the pi-session-quick-launch harness (mock LLM + stub notify-send
+recording completion notifications); the daemon's bash confinement
+wrapper is a passthrough stub since no bash tool commands run here.
+
+Usage: driver.py <daemon_bin> <qs_bin> <mock_llm> <systemd_run_stub>
+                  <test_dir> <harness_dir> <plugin_dir> <work_dir>
 """
 
 from __future__ import annotations
@@ -32,20 +46,24 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 
-# pi's default at startup; deliberately != LAUNCH_MODEL so asserting on
-# LAUNCH_MODEL proves set_model actually changed the active model rather
-# than coincidentally matching the default.
+TOKEN = "model-directive-secret"
+
+# The daemon's default at startup (SPACES_SESSIOND_DEFAULT_MODEL);
+# deliberately != LAUNCH_MODEL so asserting on LAUNCH_MODEL proves the
+# directive actually selected the model rather than coincidentally
+# matching the default.
 DEFAULT_MODEL = "llama-3.2"
 LAUNCH_MODEL = "gemma4:e4b"
 MODELS = [LAUNCH_MODEL, "gpt-oss", DEFAULT_MODEL]
 PROMPT = "summarize logs"
-# A model pi will reject (not in MODELS): set_model fails, so the launch
-# must abort without sending the prompt and without leaking a pending
-# background session.
+# A model the daemon's registry rejects (not in MODELS): set_model fails,
+# so the launch must abort without sending the prompt and without leaking
+# a pending background session.
 BAD_PROMPT = "diagnose the outage"
 BAD_MODEL = "local/does-not-exist"
 
@@ -68,6 +86,25 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
     return None
 
 
+def free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def wait_for_port(port: int, *, timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
 def start_mock_llm(mock_script: str, work_dir: str):
     log = open(os.path.join(work_dir, "mock-llm.log"), "w")
     env = os.environ.copy()
@@ -84,6 +121,55 @@ def start_mock_llm(mock_script: str, work_dir: str):
     if not line:
         fail("mock LLM did not print its URL")
     return proc, line.decode().strip()
+
+
+def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir: str):
+    """Real pi-sessiond on a free loopback port, as executor id "host".
+
+    It discovers MODELS from the mock LLM's /v1/models at startup (the
+    port only opens after discovery) and defaults to DEFAULT_MODEL — the
+    model the launch directive must override."""
+    state_dir = os.path.join(work_dir, "daemon-state")
+    creds_dir = os.path.join(work_dir, "creds")
+    os.makedirs(state_dir, exist_ok=True)
+    os.makedirs(creds_dir, exist_ok=True)
+    with open(os.path.join(creds_dir, "token"), "w") as fh:
+        fh.write(TOKEN + "\n")
+
+    # pi settings template for the daemon's embedded pi; the default model
+    # mirrors the daemon-level default. No discovery extension — the daemon
+    # does its own llama-swap model discovery.
+    settings_path = os.path.join(work_dir, "settings.json")
+    with open(settings_path, "w") as fh:
+        json.dump(
+            {
+                "defaultProvider": "local",
+                "defaultModel": DEFAULT_MODEL,
+                "quietStartup": True,
+                "enableInstallTelemetry": False,
+            },
+            fh,
+        )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "SPACES_SESSIOND_HOST": "127.0.0.1",
+            "SPACES_SESSIOND_PORT": str(port),
+            "SPACES_SESSIOND_EXECUTOR_ID": "host",
+            "CREDENTIALS_DIRECTORY": creds_dir,
+            "LLAMA_SWAP_BASE_URL": mock_url,
+            "SPACES_SESSIOND_DEFAULT_MODEL": DEFAULT_MODEL,
+            "SPACES_SESSIOND_PI_SETTINGS": settings_path,
+            "SPACES_SESSIOND_SYSTEMD_RUN": stub,
+            "STATE_DIRECTORY": state_dir,
+            # Idle-GC off so the launched/aborted sessions survive untouched
+            # until every assertion has read them.
+            "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",
+        }
+    )
+    log = open(os.path.join(work_dir, "daemon.log"), "wb")
+    return subprocess.Popen([daemon_bin], env=env, stdout=log, stderr=subprocess.STDOUT)
 
 
 def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
@@ -111,19 +197,14 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     return shell_root
 
 
-def stage_bin(stubs_dir: str, pi_bin: str, work_dir: str) -> str:
+def stage_bin(harness_dir: str, work_dir: str) -> str:
+    """PATH overlay for quickshell: just the harness's notify-send witness
+    (sessions run daemon-side; the panel only execs notify-send)."""
     bin_dir = os.path.join(work_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
-    for name in ("fake-systemd-run", "notify-send"):
-        dst = os.path.join(
-            bin_dir, "systemd-run" if name == "fake-systemd-run" else name
-        )
-        shutil.copy2(os.path.join(stubs_dir, name), dst)
-        os.chmod(dst, 0o755)
-    pi_link = os.path.join(bin_dir, "pi")
-    if os.path.exists(pi_link):
-        os.remove(pi_link)
-    os.symlink(pi_bin, pi_link)
+    dst = os.path.join(bin_dir, "notify-send")
+    shutil.copy2(os.path.join(harness_dir, "notify-send"), dst)
+    os.chmod(dst, 0o755)
     return bin_dir
 
 
@@ -177,16 +258,16 @@ def agent_finished_notifications(witness: str) -> list:
 def main() -> None:
     if len(sys.argv) != 9:
         fail(
-            "usage: driver.py <pi_bin> <qs_bin> <mock_llm> <ext_dir> "
-            "<test_dir> <stubs_dir> <plugin_dir> <work_dir>"
+            "usage: driver.py <daemon_bin> <qs_bin> <mock_llm> "
+            "<systemd_run_stub> <test_dir> <harness_dir> <plugin_dir> <work_dir>"
         )
     (
-        pi_bin,
+        daemon_bin,
         qs_bin,
         mock_script,
-        ext_dir,
+        stub,
         test_dir,
-        stubs_dir,
+        harness_dir,
         plugin_dir,
         work_dir,
     ) = sys.argv[1:9]
@@ -194,34 +275,22 @@ def main() -> None:
 
     home = os.path.join(work_dir, "home")
     xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    agent_dir = os.path.join(work_dir, "agent")
-    for d in (home, xdg_runtime, agent_dir):
+    for d in (home, xdg_runtime):
         os.makedirs(d, exist_ok=True)
     os.chmod(xdg_runtime, 0o700)
 
-    # pi agent config: local provider + the llama-swap discovery
-    # extension (so pi resolves the multi-model list against the mock).
-    # defaultModel is a discovered model so pi starts on it deterministically
-    # — and it is NOT LAUNCH_MODEL, so the request-model assertion is sharp.
-    with open(os.path.join(agent_dir, "settings.json"), "w") as fh:
-        json.dump(
-            {
-                "extensions": [os.path.join(ext_dir, "llama-swap-discover.ts")],
-                "defaultProvider": "local",
-                "defaultModel": DEFAULT_MODEL,
-                "quietStartup": True,
-                "enableInstallTelemetry": False,
-            },
-            fh,
-        )
-
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
-    bin_dir = stage_bin(stubs_dir, pi_bin, work_dir)
+    bin_dir = stage_bin(harness_dir, work_dir)
     notify_witness = os.path.join(work_dir, "notify.log")
     request_log = os.path.join(work_dir, "mock-requests.log")
 
     mock_proc, mock_url = start_mock_llm(mock_script, work_dir)
+
+    port = free_port()
+    daemon_proc = start_daemon(daemon_bin, stub, mock_url, port, work_dir)
+    if not wait_for_port(port, timeout_s=60):
+        fail(f"pi-sessiond never listened on port {port} (exit={daemon_proc.poll()})")
 
     env = os.environ.copy()
     env.update(
@@ -231,11 +300,12 @@ def main() -> None:
             "PATH": bin_dir + os.pathsep + env.get("PATH", ""),
             "QT_QPA_PLATFORM": "offscreen",
             "QSG_RHI_BACKEND": "null",
-            "PI_CODING_AGENT_DIR": agent_dir,
-            "LLAMA_SWAP_BASE_URL": mock_url,
-            "PI_OFFLINE": "1",
-            "PI_TELEMETRY": "0",
             "NOTIFY_WITNESS": notify_witness,
+            # Executor topology seam: the lone "host" executor — the real
+            # daemon above — which defaultExecutorId resolves to.
+            "SPACES_PI_CHAT_EXECUTORS": json.dumps(
+                [{"id": "host", "url": f"ws://127.0.0.1:{port}", "token": TOKEN}]
+            ),
         }
     )
 
@@ -245,7 +315,7 @@ def main() -> None:
     )
 
     def dump_logs():
-        for name in ("qs.log", "mock-llm.log"):
+        for name in ("qs.log", "mock-llm.log", "daemon.log"):
             p = os.path.join(work_dir, name)
             if os.path.isfile(p):
                 sys.stderr.write(f"\n== {name} ==\n")
@@ -277,12 +347,22 @@ def main() -> None:
         if not wait_until(ipc_ready, timeout_s=30):
             die("quickshell never bound the test:quick-launch IPC target")
 
+        if not wait_until(
+            lambda: (
+                qs_ipc(qs_bin, shell_qml, env, "executorConnected", "host") == "true"
+            ),
+            timeout_s=30,
+        ):
+            die("panel never connected/authenticated to the host executor")
+
         if qs_ipc(qs_bin, shell_qml, env, "panelVisible") != "false":
             die("panel reported visible; the test requires it hidden")
 
-        # Failure path first: an unknown model must NOT silently launch on
-        # the default (plan §4a) and must not leak a reaper-exempt pending
-        # session. set_model rejects, so the awaited .then(send) never runs.
+        # Failure path first: a model the daemon doesn't know must NOT
+        # silently launch on the default and must not leak a reaper-exempt
+        # pending session. The daemon answers the panel's id-tagged
+        # set_model with an error response, rejecting the awaited
+        # _request, so the .then(send) never runs.
         bad_id = qs_ipc(
             qs_bin, shell_qml, env, "launchBackground", BAD_PROMPT, BAD_MODEL
         )
@@ -323,8 +403,9 @@ def main() -> None:
                 f"note: launchBackground returned {new_id!r}, index shows {sid!r}\n"
             )
 
-        # The prompt must stream back (proves the turn ran AND that pi
-        # logged its chat request — the model assertion reads that log).
+        # The prompt must stream back (proves the turn ran AND that the
+        # daemon's pi logged its chat request — the model assertion reads
+        # that log).
         if not wait_until(
             lambda: (
                 "Background task complete"
@@ -334,13 +415,14 @@ def main() -> None:
         ):
             die("background session never received the streamed mock reply")
 
-        # (a) THE RACE GUARD. The prompt is sent only from the awaited
-        # .then(set_model) continuation, so the chat request is causally
-        # after pi applied the model — not merely "eventually". A racy or
-        # ignored set_model runs the turn on DEFAULT_MODEL, and a request
-        # carrying it fails this. No sleep: the streamed reply waited on
-        # above guarantees the request is already logged, so reading it now
-        # is deterministic.
+        # (a) THE DIRECTIVE GUARD. The prompt is sent only from the awaited
+        # set_model continuation (resolved by the daemon's id-echoing
+        # response), and create_session already carried the launched model
+        # — so the chat request is causally after the daemon applied it. A
+        # dropped or ignored directive runs the turn on DEFAULT_MODEL, and
+        # a request carrying it fails this. No sleep: the streamed reply
+        # waited on above guarantees the request is already logged, so
+        # reading it now is deterministic.
         reqs = wait_until(lambda: chat_requests(request_log) or None, timeout_s=10)
         if not reqs:
             die("mock LLM logged no chat-completions request")
@@ -348,7 +430,7 @@ def main() -> None:
         if any(m != LAUNCH_MODEL for m in used):
             die(
                 f"chat request ran on {used!r}, expected all {LAUNCH_MODEL!r} "
-                f"(set_model raced or was ignored; default is {DEFAULT_MODEL!r})"
+                f"(directive dropped or ignored; default is {DEFAULT_MODEL!r})"
             )
 
         # (b) title + notification summarize the PROMPT (directive stripped).
@@ -389,6 +471,11 @@ def main() -> None:
             qs_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             qs_proc.kill()
+        daemon_proc.terminate()
+        try:
+            daemon_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            daemon_proc.kill()
         mock_proc.terminate()
         try:
             mock_proc.wait(timeout=5)

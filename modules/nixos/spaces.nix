@@ -4,7 +4,7 @@
 { config, lib, ... }:
 {
   imports = [
-    # AI chat Quickshell panel + pi --mode rpc backend
+    # AI chat Quickshell panel + loopback pi-sessiond executor
     inputs.self.nixosModules.pi-chat
     # local LLM server with bundled GGUF models
     inputs.self.nixosModules.llama-swap
@@ -21,7 +21,6 @@
   ];
 
   services.pi-chat.enable = lib.mkDefault true;
-  services.pi-chat.localExecutor.enable = lib.mkDefault true;
 
   services.greetd = {
     enable = lib.mkDefault true;
