@@ -175,6 +175,13 @@ def main():
         ):
             die("ModelFrecency startup FileView load never completed")
 
+        # mostRecent on an empty store is "". PiChatBackend.newSession
+        # treats that as nothing to inherit and leaves the entry on
+        # pi's default. Must run before the first record().
+        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        if mr != "":
+            die(f"mostRecent on empty store: expected '', got {mr!r}")
+
         # (1) Recency dominates. Both used once, but b a full day later.
         record("local/a1", T0)
         record("local/b1", T0 + DAY)
@@ -216,6 +223,14 @@ def main():
         if o != ["openrouter/o6", "local/l6"]:
             die(f"frecency precedence: expected used remote first, got {o!r}")
 
+        # mostRecent is pure recency, not frecency score. local/a2 was
+        # recorded 3x (score 3) but at T0. local/b1 was recorded once
+        # at T0+DAY, so b1 wins. A new chat must start on what the
+        # user last selected, not on their overall favourite.
+        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        if mr != "local/b1":
+            die(f"mostRecent: expected 'local/b1' (max lastUsed), got {mr!r}")
+
         # (no mutation) sortModels must return a new array; its input
         # stays in input order.
         probe = json.loads(
@@ -242,6 +257,12 @@ def main():
         o = order(["local/a1", "local/b1"], T0 + DAY)
         if o != ["local/b1", "local/a1"]:
             die(f"persistence: ordering broke after reload, got {o!r}")
+
+        # mostRecent survives the reload too. It reads the same
+        # persisted lastUsed stamps the sort does.
+        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        if mr != "local/b1":
+            die(f"mostRecent after reload: expected 'local/b1', got {mr!r}")
 
         sys.stderr.write("PASS: frecency ordering + persistence hold\n")
     finally:

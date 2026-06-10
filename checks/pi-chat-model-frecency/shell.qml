@@ -49,6 +49,13 @@ Item {
       return JSON.stringify({ before: before, after: arr });
     }
 
+    // The most recently selected key (max lastUsed). The guard turns
+    // a missing implementation into a recognizable assertion failure
+    // instead of an opaque IPC error.
+    function mostRecent(): string {
+      return ModelFrecency.mostRecent ? String(ModelFrecency.mostRecent()) : "__missing__";
+    }
+
     // The FileView reload is async, so the driver waits on loadGen()
     // bumping before asserting the post-reload ordering.
     function reload() { ModelFrecency.reload(); }

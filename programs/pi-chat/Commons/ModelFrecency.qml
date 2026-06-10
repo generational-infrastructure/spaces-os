@@ -72,6 +72,23 @@ QtObject {
     root.persist();
   }
 
+  // The key the user picked most recently (max lastUsed), "" for an
+  // empty store. Pure recency, no decay math. A new chat should start
+  // on the last explicit pick, not on the highest-scoring favourite.
+  function mostRecent() {
+    const store = _store();
+    let bestKey = "";
+    let bestTs = -1;
+    for (const k in store) {
+      const e = store[k];
+      if (e && e.lastUsed > bestTs) {
+        bestTs = e.lastUsed;
+        bestKey = k;
+      }
+    }
+    return bestKey;
+  }
+
   // Provider-priority rank for the never-used tail. The key is
   // "<provider>/<id>", so a local model is one whose key begins with
   // "local/". Local ranks ahead of everything else; see sortModels.

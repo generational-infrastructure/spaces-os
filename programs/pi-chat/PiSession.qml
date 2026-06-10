@@ -108,6 +108,10 @@ QtObject {
   property string _assistantLastTextBubbleId: ""
   property int _spawnSeq: 0           // bumps every spawn for diagnostic logs
   property bool _shouldRun: false     // intent (true between spawn() and stop())
+  // Resolves once a fresh local session's modelPref has been applied
+  // or its application failed. Never rejects. send() gates the first
+  // prompt's wire write on it. Null when no application is in flight.
+  property var _modelPrefApply: null
   // ── WebSocket transport state (used when `executor` is set) ──
   readonly property bool _useWs: executor !== null
   // Set by PiChatBackend when constructing this session from a persisted
@@ -176,7 +180,14 @@ QtObject {
     replyTarget = null;
     typing = true;
     busy = true;
-    _send({ type: "prompt", message: text, streamingBehavior: "steer" });
+    // The optimistic bubble and busy/typing flips above stay
+    // synchronous for immediate UI feedback. Only the wire write waits
+    // for a fresh session's pending set_model ack, so the first turn
+    // cannot race onto pi's default model. _modelPrefApply never
+    // rejects, so the prompt always goes out.
+    const prompt = { type: "prompt", message: text, streamingBehavior: "steer" };
+    if (_modelPrefApply) _modelPrefApply.then(() => _send(prompt));
+    else _send(prompt);
     needsPersist();
   }
 
@@ -321,6 +332,51 @@ QtObject {
     proc.command = _buildCommand();
     proc.running = true;
     streaming = true;
+    _applyModelPrefToFreshSession();
+  }
+
+  // A fresh local session comes up on pi's settings.json default, so
+  // an inherited or persisted modelPref must be applied explicitly.
+  // Issue one awaitable set_model right after the spawn. An existing
+  // session (_existingSessionFlag) needs nothing here, because pi
+  // restores its model from session.jsonl via --continue. The WS
+  // transport never gets here either, since _wsCreate carries
+  // modelPref in create_session opts.
+  //
+  // pi's RPC pump dispatches stdin lines as fire-and-forget async
+  // tasks. A prompt written right behind this set_model could still
+  // run on the default model (see setModelAndWait), so send() gates
+  // the prompt's wire write on _modelPrefApply. Failure is non-fatal.
+  // An implicit inherited model may not exist on this executor (stale
+  // frecency entry, openrouter disabled). Log it and let the turn run
+  // on pi's default rather than blocking it. The explicit /model:
+  // directive keeps its abort-on-failure semantics in
+  // PiChatBackend.launchBackground via setModelAndWait.
+  function _applyModelPrefToFreshSession() {
+    if (!modelPref || _existingSessionFlag) return;
+    const slash = modelPref.indexOf("/");
+    if (slash <= 0) return;
+    const apply = _request({
+      type: "set_model",
+      provider: modelPref.slice(0, slash),
+      modelId: modelPref.slice(slash + 1),
+    }).then(data => {
+      // Correlated responses skip _handleResponse's by-command branch.
+      // Mirror it so the dropdown reflects the applied model.
+      if (data && data.provider && data.id) {
+        activeModel = data.provider + "/" + data.id;
+        models = models.map(m => Object.assign({}, m, {
+          active: m.provider === data.provider && m.id === data.id,
+        }));
+      }
+    }).catch(e => {
+      Logger.w("PiSession", sessionId, "inherited set_model failed; running on pi's default", e);
+    });
+    _modelPrefApply = apply;
+    // Steady state stays promise-free: later prompts write straight out.
+    apply.then(() => {
+      if (_modelPrefApply === apply) _modelPrefApply = null;
+    });
   }
 
   // WS mode: create the session on (or re-attach it to) the executor,

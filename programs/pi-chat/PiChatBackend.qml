@@ -483,8 +483,14 @@ Item {
     const entry = _freshSessionEntry(id, (name && String(name).trim()) || ("Chat " + (sessionsList.length + 1)), executorId);
     // opts.model is "provider/id"; persisted on the entry so the
     // reconciler binds it to the PiSession's modelPref. Shape is
-    // extensible (cwd, skill) without touching callers.
-    entry.model = (opts && opts.model) || "";
+    // extensible (cwd, skill) without touching callers. Without an
+    // explicit model, inherit the user's most recent pick from the
+    // frecency store so a new chat starts where they left off instead
+    // of on pi's default. The inheritance lives only here, not in
+    // _freshSessionEntry(). Sessions auto-imported from a remote
+    // executor must keep "" because their model lives on the daemon
+    // side.
+    entry.model = (opts && opts.model) || ModelFrecency.mostRecent() || "";
     _ensureSessionDirs(entry.id, entry.workspacePath);
     sessionsList = sessionsList.concat([entry]);
     activeSessionId = id;
