@@ -51,6 +51,7 @@ let
   contactsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.contacts-cli;
   mailCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.mail-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
+  desktopEntriesPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-desktop-entries;
   piPkg = cfg.piPackage;
 
   # Memory extension: nix derivation that substitutes the absolute
@@ -714,6 +715,7 @@ in
       (pkgs.writeShellScriptBin "pi-chat-toggle" ''
         exec ${pkgs.quickshell}/bin/quickshell ipc -c ${shellName} call ${shellName} "''${1:-toggle}"
       '')
+      desktopEntriesPkg
     ];
 
     environment.sessionVariables = {
@@ -935,6 +937,7 @@ in
       Type=Application
       Name=pi-chat
       Comment=Standalone Quickshell chat panel for the spaces AI agent
+      Icon=pi-chat
       Exec=${pkgs.systemd}/bin/systemctl --user start pi-chat.service
       X-GNOME-Autostart-enabled=true
       OnlyShowIn=niri;sway;Hyprland;river;KDE;
