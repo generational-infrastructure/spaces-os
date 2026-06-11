@@ -13,14 +13,19 @@
 #
 # Also keeps a purge that cleans up leftover state from the prior
 # patched-build / spaces-plugin era.
-{ pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   # Managed top-level settings.json. Pins bar position and the center
   # bar's widget list (Workspace pills + the bundled session indicator).
   # Merged, not symlinked, so the user can still change everything else
   # from the UI.
   managedSettings = (pkgs.formats.json { }).generate "noctalia-settings.json" {
-    bar.position = "top";
+    bar.position = config.services.noctalia.bar.position;
     bar.widgets.center = [
       { id = "Workspace"; }
       { id = "plugin:spaces-sessions"; }
@@ -156,6 +161,25 @@ let
   };
 in
 {
+  options.services.noctalia = {
+    bar.position = lib.mkOption {
+      # Deliberately only the horizontal edges: noctalia itself also knows
+      # left/right, but vertical bars are untested with the pinned center
+      # widget list (Workspace pills + spaces-sessions plugin).
+      type = lib.types.enum [
+        "top"
+        "bottom"
+      ];
+      default = "top";
+      description = ''
+        Edge of the screen the noctalia bar sits on. Pins `bar.position`
+        in the managed settings.json, which is re-applied on every
+        noctalia-shell (re)start — so it overrides any position chosen
+        in the in-app settings UI.
+      '';
+    };
+  };
+
   config = {
     environment.systemPackages = [
       pkgs.noctalia-shell
