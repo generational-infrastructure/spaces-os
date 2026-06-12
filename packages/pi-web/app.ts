@@ -1,21 +1,26 @@
-// pi-web: a custom web client (PWA) for a pi-sessiond executor.
+// pi-web: a custom web client (PWA) for the spaces-os pi-sessiond fleet.
 //
 // Speaks the §12 WebSocket envelope protocol — the same one the quickshell
 // panel uses — so a browser can attach a session and mirror it alongside the
-// desktop panel (n:m). The conversation is folded by the pure reducer; this
-// file owns the transport + the DOM.
+// desktop panel (n:m).
 //
-// Served by the daemon itself (same origin), so the WS endpoint is this page's
-// own host. The hello token is entered once and kept in localStorage.
+// Topology (mirrors the panel):
 //
-// Visual language follows the Spaces OS design system (see /design/styles.css
-// and docs/design-system/source/ in the repo). The DOM is a vanilla-TS translation
-// of the PWA UI kit's two-screen flow: a chat list (with a machine rail per
-// row, name + machine identity + preview) and a chat view (back · title ·
-// runtime control · message list · compose). The full multi-machine fleet
-// roster + "Where this runs" sheet from the kit are deferred — the daemon
-// only serves one executor, so the runtime control is a labelled affordance
-// pointing at that single machine for now.
+//   1. Loaded over HTTPS from any one executor (agent-<host>.<meta.domain>).
+//   2. GET /executors (unauthenticated) lists every peer in the clan instance
+//      with `webUi.enable = true`. The bearer token still gates every WS.
+//   3. The PWA opens one WS to each peer (cross-origin, but the WS handshake
+//      isn't subject to same-origin and the daemon doesn't validate Origin).
+//      The hello token is the shared `pi-pi-sessiond-token` clan var, so the
+//      user pastes it once and it works against every executor.
+//   4. The chat list merges sessions across executors, each row tagged with
+//      its executor's host. New chats prompt for the executor when the fleet
+//      has more than one (single-executor clans skip the picker).
+//
+// State keying: every session is identified by (executorId, sessionId) — the
+// pair is unique even if two executors mint colliding ids, and lets a chat
+// know which conn to route its prompt/confirm against. The reducer fold is
+// stored per-pair (only for sessions we've attached to in this tab session).
 
 import {
   type ChatState,
@@ -32,6 +37,14 @@ interface SessionInfo {
   name: string;
   state: string;
   updated: number;
+}
+interface PeerEntry {
+  id: string;
+  host: string;
+}
+interface DiscoveryPayload {
+  self: string;
+  executors: PeerEntry[];
 }
 
 const TOKEN_KEY = "pi-web.token";
@@ -53,11 +66,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function wsUrl(): string {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/`;
-}
-
 function num(v: unknown): number {
   return typeof v === "number" ? v : 0;
 }
@@ -65,12 +73,14 @@ function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-// Single-machine identity: the host serving this PWA *is* the executor.
-// When the WebSocket is open the chat is reachable; when it drops we render
-// the offline banner and disable the composer (matching the design's
-// "hard-disable composing when the home machine is unreachable" rule).
-function machineName(): string {
-  return location.hostname || "this machine";
+// Compose a `wss://` (or `ws://` in dev) URL for one executor. Same-origin
+// peers reuse `location.host` (preserves the port the page was served on —
+// matters in nix-sandbox tests where the daemon binds an ephemeral port);
+// cross-origin peers go through Caddy on 443.
+function wsUrl(host: string): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const target = host === location.hostname ? location.host : host;
+  return `${proto}//${target}/`;
 }
 
 // "now" / "12m" / "3h" / "2d" — terse, lowercase, design-system voice.
@@ -97,23 +107,46 @@ function previewOf(state: ChatState): string {
   return "—";
 }
 
-class Client {
-  private sock: WebSocket | null = null;
-  private sessions: SessionInfo[] = [];
-  private active = "";
-  private lastSeq = 0; // highest event seq seen for the active session
-  private pendingCreate = false;
-  private state: ChatState = emptyState();
-  // Per-session reducer state so the chat list previews stay accurate when
-  // switching between chats and the active tab still gets the latest fold.
-  private states: Map<string, ChatState> = new Map();
-  private connected = false;
+interface ActiveRef {
+  executorId: string;
+  sessionId: string;
+}
 
-  constructor(private readonly token: string) {}
+// One WebSocket to one pi-sessiond. Owns its own session list, per-session
+// reducer state, and reconnect loop. The Fleet calls `onUpdate` after any
+// state change so the unified UI re-renders against the merged view.
+class ExecutorConn {
+  sock: WebSocket | null = null;
+  connected = false;
+  sessions: SessionInfo[] = [];
+  // Per-session: highest seq seen (for replay-from-seq on reconnect) and the
+  // folded ChatState. Maps survive ws drops; `connected` gates writes.
+  lastSeq: Map<string, number> = new Map();
+  states: Map<string, ChatState> = new Map();
+  // Tracks the next-acked attached envelope so we know which freshly-created
+  // session id belongs to the user's "+ new chat" tap.
+  pendingCreate = false;
+
+  constructor(
+    readonly id: string,
+    readonly host: string,
+    private readonly token: string,
+    private readonly onUpdate: (
+      conn: ExecutorConn,
+      kind:
+        | "welcome"
+        | "sessions"
+        | "event"
+        | "attached"
+        | "sidechannel"
+        | "error"
+        | "close",
+      payload?: unknown,
+    ) => void,
+  ) {}
 
   connect(): void {
-    this.setStatus("connecting…");
-    const sock = new WebSocket(wsUrl());
+    const sock = new WebSocket(wsUrl(this.host));
     this.sock = sock;
     sock.onopen = () =>
       this.send({
@@ -125,14 +158,13 @@ class Client {
     sock.onmessage = (e) => this.onMessage(String(e.data));
     sock.onclose = () => {
       this.connected = false;
-      this.setStatus("reconnecting…");
-      this.refreshReachability();
+      this.onUpdate(this, "close");
       setTimeout(() => this.connect(), 1000);
     };
     sock.onerror = () => sock.close();
   }
 
-  private send(env: Envelope): void {
+  send(env: Envelope): void {
     if (this.sock && this.sock.readyState === WebSocket.OPEN)
       this.sock.send(JSON.stringify(env));
   }
@@ -147,19 +179,14 @@ class Client {
     switch (msg.kind) {
       case "welcome":
         this.connected = true;
-        this.setStatus("connected");
-        this.refreshReachability();
         this.send({ v: 1, kind: "list_sessions" });
-        // Reconnect: re-attach the active session and replay only what we missed
-        // (seq > lastSeq), so the conversation continues without duplication.
-        if (this.active) {
-          this.send({
-            v: 1,
-            kind: "attach",
-            sessionId: this.active,
-            lastSeq: this.lastSeq,
-          });
+        // Reconnect: re-attach every session we had folded state for and replay
+        // only what we missed (seq > lastSeq). The folded states stay live so
+        // the conversation continues without duplication.
+        for (const [sid, seq] of this.lastSeq.entries()) {
+          this.send({ v: 1, kind: "attach", sessionId: sid, lastSeq: seq });
         }
+        this.onUpdate(this, "welcome");
         break;
       case "sessions":
         this.sessions = (
@@ -167,82 +194,66 @@ class Client {
         )
           .slice()
           .sort((a, b) => num(b.updated) - num(a.updated));
-        // If our previously-active session disappeared (deleted upstream by
-        // another client, or by us via deleteSession), fall back the same
-        // way the initial connect does: most recent surviving session, or
-        // a freshly created one if the list is empty.
-        const activeStillThere =
-          !!this.active && this.sessions.some((s) => s.id === this.active);
-        if (!activeStillThere) {
-          this.active = "";
-          this.state = emptyState();
-          if (!this.pendingCreate) {
-            if (this.sessions.length > 0) this.attach(this.sessions[0].id);
-            else this.create();
-          }
-          this.renderChat();
-        }
-        this.renderList();
+        this.onUpdate(this, "sessions");
         break;
       case "attached": {
         const sid = str(msg.sessionId);
+        const seq = num(msg.seq);
         if (this.pendingCreate) {
           this.pendingCreate = false;
-          // The created session post-dates the last list_sessions; add it so its
-          // tab appears immediately (a later list_sessions refreshes the rest).
+          // Post-dates the last list_sessions; insert so the row appears
+          // before the next list_sessions refresh arrives.
           if (!this.sessions.some((s) => s.id === sid)) {
             this.sessions = [
               { id: sid, name: "web", state: "live-idle", updated: Date.now() },
               ...this.sessions,
             ];
           }
-          this.switchTo(sid);
-          this.viewChat();
-        } else if (sid === this.active && num(msg.seq) < this.lastSeq) {
-          // The session was resurrected (cold respawn → seq reset); rebuild it.
-          this.lastSeq = num(msg.seq);
-          this.state = emptyState();
-          this.states.set(sid, this.state);
-          this.renderChat();
+          this.states.set(sid, emptyState());
+          this.lastSeq.set(sid, 0);
+          this.onUpdate(this, "attached", { sessionId: sid, fresh: true });
+        } else {
+          // Session was resurrected (cold respawn → seq reset); rebuild fold.
+          const known = this.lastSeq.get(sid);
+          if (known !== undefined && seq < known) {
+            this.states.set(sid, emptyState());
+            this.lastSeq.set(sid, seq);
+            this.onUpdate(this, "attached", { sessionId: sid, fresh: false });
+          }
         }
         break;
       }
-      case "event":
-        if (msg.sessionId === this.active) {
-          this.lastSeq = num(msg.seq);
-          this.state = withPiEvent(this.state, msg.payload);
-          this.states.set(this.active, this.state);
-          this.renderChat();
-          this.renderList();
+      case "event": {
+        const sid = str(msg.sessionId);
+        const cur = this.states.get(sid) ?? emptyState();
+        this.states.set(sid, withPiEvent(cur, msg.payload));
+        this.lastSeq.set(sid, num(msg.seq));
+        this.onUpdate(this, "event", { sessionId: sid });
+        break;
+      }
+      case "sidechannel_resolved": {
+        const sid = str(msg.sessionId);
+        const cur = this.states.get(sid);
+        if (cur) {
+          this.states.set(sid, withSidechannelResolved(cur, str(msg.id)));
+          this.onUpdate(this, "sidechannel", { sessionId: sid });
         }
         break;
-      case "sidechannel_resolved":
-        if (msg.sessionId === this.active) {
-          this.state = withSidechannelResolved(this.state, str(msg.id));
-          this.states.set(this.active, this.state);
-          this.renderChat();
-        }
-        break;
+      }
       case "error":
-        this.setStatus(`error: ${str(msg.error) || "unknown"}`, "error");
+        this.onUpdate(this, "error", str(msg.error) || "unknown");
         break;
       default:
         break;
     }
   }
 
-  // Switch to (and replay from the start of) an existing session, and surface
-  // it in the chat view — opening the app drops the user in their most-recent
-  // chat (Slack/iMessage pattern). The Back button is how they reach the list.
-  attach(id: string): void {
-    if (!id) return;
-    if (id === this.active) {
-      this.viewChat();
-      return;
+  attach(sessionId: string): void {
+    if (!this.states.has(sessionId)) {
+      this.states.set(sessionId, emptyState());
+      this.lastSeq.set(sessionId, 0);
     }
-    this.switchTo(id);
-    this.send({ v: 1, kind: "attach", sessionId: id, lastSeq: 0 });
-    this.viewChat();
+    this.send({ v: 1, kind: "attach", sessionId, lastSeq: 0 });
   }
 
   create(): void {
@@ -250,56 +261,193 @@ class Client {
     this.send({ v: 1, kind: "create_session", name: "web" });
   }
 
-  private switchTo(id: string): void {
-    this.active = id;
-    this.lastSeq = 0;
-    this.state = this.states.get(id) ?? emptyState();
-    this.states.set(id, this.state);
-    this.renderList();
-    this.renderChat();
-  }
-
-  sendPrompt(textValue: string): void {
-    const text = textValue.trim();
-    if (!text || !this.active || !this.connected) return;
-    this.state = withUserPrompt(this.state, text);
-    this.states.set(this.active, this.state);
-    this.renderChat();
+  sendPrompt(sessionId: string, text: string): void {
+    if (!this.connected) return;
+    const cur = this.states.get(sessionId) ?? emptyState();
+    this.states.set(sessionId, withUserPrompt(cur, text));
+    this.onUpdate(this, "event", { sessionId, local: true });
     this.send({
       v: 1,
       kind: "command",
-      sessionId: this.active,
+      sessionId,
       payload: { type: "prompt", message: text, streamingBehavior: "steer" },
     });
   }
 
-  answerConfirm(id: string, allowed: boolean): void {
-    this.state = withConfirmAnswer(this.state, id, allowed);
-    this.states.set(this.active, this.state);
-    this.renderChat();
+  answerConfirm(sessionId: string, id: string, allowed: boolean): void {
+    const cur = this.states.get(sessionId);
+    if (!cur) return;
+    this.states.set(sessionId, withConfirmAnswer(cur, id, allowed));
+    this.onUpdate(this, "event", { sessionId, local: true });
     this.send({
       v: 1,
       kind: "command",
-      sessionId: this.active,
+      sessionId,
       payload: { type: "extension_ui_response", id, confirmed: allowed },
     });
   }
 
-  deleteActive(): void {
-    if (!this.active) return;
-    const s = this.sessions.find((x) => x.id === this.active);
-    const label = s?.name || this.active.slice(0, 6);
-    this.deleteSession(this.active, label);
+  deleteSession(sessionId: string): void {
+    this.send({ v: 1, kind: "delete_session", sessionId });
+  }
+}
+
+class Fleet {
+  // executorId → ExecutorConn. Insertion order = discovery order = render
+  // order in the executor picker.
+  private execs: Map<string, ExecutorConn> = new Map();
+  private selfId = "";
+  private active: ActiveRef | null = null;
+
+  constructor(private readonly token: string) {}
+
+  async start(): Promise<void> {
+    // Discovery: ask the serving daemon who else is in the fleet. Falls back
+    // to a single self-conn against the page origin if the endpoint is absent
+    // (e.g., test sandbox with no PEERS) or returns an empty list.
+    let peers: PeerEntry[] = [];
+    let self = "local";
+    try {
+      const res = await fetch("/executors");
+      if (res.ok) {
+        const body = (await res.json()) as DiscoveryPayload;
+        if (typeof body.self === "string") self = body.self;
+        if (Array.isArray(body.executors)) {
+          peers = body.executors.filter(
+            (p) => p && typeof p.id === "string" && typeof p.host === "string",
+          );
+        }
+      }
+    } catch {
+      // Ignore — fallback fills in.
+    }
+    if (peers.length === 0) {
+      peers = [{ id: self, host: location.hostname || "127.0.0.1" }];
+    }
+    this.selfId = self;
+    for (const peer of peers) {
+      const conn = new ExecutorConn(peer.id, peer.host, this.token, (c, k, p) =>
+        this.onConnUpdate(c, k, p),
+      );
+      this.execs.set(peer.id, conn);
+      conn.connect();
+    }
+    this.viewList();
+    this.refreshStatus();
   }
 
-  private deleteSession(id: string, label: string): void {
+  // Aggregate dispatch from every ExecutorConn. The conn has already mutated
+  // its own state; we just re-render and propagate cross-cutting concerns
+  // (status pill, auto-attach on first welcome, offline banner).
+  private onConnUpdate(
+    conn: ExecutorConn,
+    kind:
+      | "welcome"
+      | "sessions"
+      | "event"
+      | "attached"
+      | "sidechannel"
+      | "error"
+      | "close",
+    payload?: unknown,
+  ): void {
+    if (kind === "welcome") {
+      // Eager auto-attach: pick the most-recent session across the whole
+      // fleet on first welcome so the user lands in a real chat instead of
+      // the empty-list view. Only fire if nothing is active yet.
+      if (!this.active) this.autoLand();
+    }
+    if (kind === "attached") {
+      const info = payload as { sessionId: string; fresh: boolean } | undefined;
+      if (info?.fresh) {
+        this.active = { executorId: conn.id, sessionId: info.sessionId };
+        this.viewChat();
+      }
+    }
+    if (kind === "error") {
+      this.setStatus(`error: ${String(payload)}`, "error");
+      return;
+    }
+    this.refreshStatus();
+    this.renderList();
+    if (this.active?.executorId === conn.id) this.renderChat();
+  }
+
+  // After every welcome, opportunistically land the user in a real chat if
+  // one is available across the fleet. If not, create one on the local
+  // executor (the one whose origin served the PWA).
+  private autoLand(): void {
+    let best: { execId: string; session: SessionInfo } | null = null;
+    for (const conn of this.execs.values()) {
+      for (const s of conn.sessions) {
+        if (!best || s.updated > best.session.updated) {
+          best = { execId: conn.id, session: s };
+        }
+      }
+    }
+    if (best) {
+      this.attach(best.execId, best.session.id);
+      return;
+    }
+    // No sessions anywhere → create one on the serving executor. Wait for
+    // its WS to be ready (welcome already fired here, so it is).
+    const home =
+      this.execs.get(this.selfId) ?? this.execs.values().next().value;
+    if (home && home.connected) home.create();
+  }
+
+  // ----- routing -----
+
+  attach(executorId: string, sessionId: string): void {
+    const conn = this.execs.get(executorId);
+    if (!conn) return;
+    const sameChat =
+      this.active?.executorId === executorId &&
+      this.active.sessionId === sessionId;
+    this.active = { executorId, sessionId };
+    if (!sameChat) conn.attach(sessionId);
+    this.viewChat();
+  }
+
+  create(executorId: string): void {
+    const conn = this.execs.get(executorId);
+    if (!conn || !conn.connected) return;
+    conn.create();
+  }
+
+  sendPrompt(text: string): void {
+    if (!this.active) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const conn = this.execs.get(this.active.executorId);
+    if (!conn || !conn.connected) return;
+    conn.sendPrompt(this.active.sessionId, trimmed);
+  }
+
+  answerConfirm(id: string, allowed: boolean): void {
+    if (!this.active) return;
+    const conn = this.execs.get(this.active.executorId);
+    if (!conn) return;
+    conn.answerConfirm(this.active.sessionId, id, allowed);
+  }
+
+  deleteActive(): void {
+    if (!this.active) return;
+    const conn = this.execs.get(this.active.executorId);
+    if (!conn) return;
+    const sess = conn.sessions.find((s) => s.id === this.active!.sessionId);
+    const label = sess?.name || this.active.sessionId.slice(0, 6);
     if (
       !confirm(`Delete chat "${label}" and its history? This can't be undone.`)
     ) {
       return;
     }
-    this.send({ v: 1, kind: "delete_session", sessionId: id });
+    conn.deleteSession(this.active.sessionId);
+    this.active = null;
+    this.viewList();
   }
+
+  // ----- status / reachability -----
 
   private setStatus(text: string, tone: "default" | "error" = "default"): void {
     const node = $("#status");
@@ -308,21 +456,38 @@ class Client {
     node.classList.toggle("error", tone === "error");
   }
 
-  // Toggle the offline banner + composer state. Hard-disabling the composer
-  // (no silent queue) matches the design system's offline rule.
+  private refreshStatus(): void {
+    const total = this.execs.size;
+    const live = [...this.execs.values()].filter((c) => c.connected).length;
+    if (live === 0) {
+      this.setStatus("disconnected");
+    } else if (live < total) {
+      this.setStatus(`${live}/${total} online`);
+    } else {
+      this.setStatus("connected");
+    }
+    this.refreshReachability();
+  }
+
+  // Per-executor reachability drives the chat-view affordances. The "active
+  // chat's executor is offline" case = banner shown + composer disabled.
   private refreshReachability(): void {
     const banner = $("#offline-banner") as HTMLElement;
     const input = $("#input") as HTMLInputElement;
     const send = $("#send") as HTMLButtonElement;
     const dot = $("#runtime-dot");
-    if (this.connected) {
+    const activeConn = this.active
+      ? this.execs.get(this.active.executorId)
+      : null;
+    const reachable = !this.active || !!activeConn?.connected;
+    if (reachable) {
       banner.hidden = true;
       input.disabled = false;
       send.disabled = false;
       dot.classList.remove("offline");
       dot.classList.add("online");
     } else {
-      $("#offline-machine").textContent = machineName();
+      $("#offline-machine").textContent = activeConn?.host ?? "—";
       banner.hidden = false;
       input.disabled = true;
       send.disabled = true;
@@ -331,46 +496,54 @@ class Client {
     }
   }
 
-  // Two-view router. The chat list is the home; tapping a row opens that
-  // chat. The back button returns to the list. We keep both DOM subtrees
-  // mounted so `#input`/`#send`/`.tab.active` selectors stay reachable.
+  // ----- view router (list ↔ chat) -----
+
   viewList(): void {
     ($("#view-list") as HTMLElement).hidden = false;
     ($("#view-chat") as HTMLElement).hidden = true;
-    // Tab title follows context: machine identity always trails so the user
-    // can tell two pi-web tabs apart by executor at a glance.
-    document.title = `Chats · ${machineName()}`;
+    document.title = `Chats · ${location.hostname || "this machine"}`;
   }
   viewChat(): void {
     if (!this.active) return;
     ($("#view-list") as HTMLElement).hidden = true;
     ($("#view-chat") as HTMLElement).hidden = false;
     this.renderChat();
-    // Scroll the freshly-shown log to bottom on each entry.
     const log = $("#log");
     log.scrollTop = log.scrollHeight;
   }
 
   // ----- list view -----
-  private renderList(): void {
+
+  renderList(): void {
     const list = $("#tabs");
     list.replaceChildren();
-    if (this.sessions.length === 0) {
-      const empty = el("li", "chat-empty", "No chats yet. Tap + to start one.");
-      list.append(empty);
+    // Merge sessions across all executors, tag each with its conn, sort by
+    // updated. A clan-of-one collapses to one machine-host per row, same
+    // visual rule the design system uses for fleet rendering.
+    const rows: { conn: ExecutorConn; session: SessionInfo }[] = [];
+    for (const conn of this.execs.values()) {
+      for (const s of conn.sessions) rows.push({ conn, session: s });
+    }
+    rows.sort((a, b) => num(b.session.updated) - num(a.session.updated));
+    if (rows.length === 0) {
+      list.append(el("li", "chat-empty", "No chats yet. Tap + to start one."));
       return;
     }
-    for (const s of this.sessions) {
-      const isActive = s.id === this.active;
+    for (const { conn, session } of rows) {
+      const isActive =
+        this.active?.executorId === conn.id &&
+        this.active.sessionId === session.id;
       const row = el("li", `tab${isActive ? " active" : ""}`);
       row.append(el("span", "machine-rail"));
       const body = el("div", "chat-row");
       const top = el("div", "chat-row-top");
-      top.append(el("span", "chat-name", s.name || s.id.slice(0, 6)));
-      top.append(el("span", "chat-machine", machineName()));
-      top.append(el("span", "chat-time", fmtAgo(s.updated)));
+      top.append(
+        el("span", "chat-name", session.name || session.id.slice(0, 6)),
+      );
+      top.append(el("span", "chat-machine", conn.host));
+      top.append(el("span", "chat-time", fmtAgo(session.updated)));
       const bot = el("div", "chat-row-bottom");
-      const st = this.states.get(s.id);
+      const st = conn.states.get(session.id);
       bot.append(el("span", "chat-preview", st ? previewOf(st) : "—"));
       const pendingConfirm =
         !!st && st.confirms.some((c) => c.state === "pending");
@@ -381,33 +554,50 @@ class Client {
         b.append(el("span", "dot working"));
         b.append(document.createTextNode("working"));
         bot.append(b);
+      } else if (!conn.connected) {
+        bot.append(el("span", "chat-badge offline", "offline"));
       }
       body.append(top, bot);
       row.append(body);
-      row.onclick = () => this.attach(s.id);
+      row.onclick = () => this.attach(conn.id, session.id);
       list.append(row);
     }
   }
 
   // ----- chat view -----
-  private renderChat(): void {
+
+  renderChat(): void {
     this.renderChatHead();
     this.renderRuntime();
     this.renderMessages();
   }
 
-  // Chat-head title doubles as the document title so background tabs surface
-  // the current chat name (matching the runtime pill's machine identity).
+  private activeSession(): {
+    conn: ExecutorConn;
+    session?: SessionInfo;
+  } | null {
+    if (!this.active) return null;
+    const conn = this.execs.get(this.active.executorId);
+    if (!conn) return null;
+    return {
+      conn,
+      session: conn.sessions.find((s) => s.id === this.active!.sessionId),
+    };
+  }
+
   private renderChatHead(): void {
-    const s = this.sessions.find((x) => x.id === this.active);
-    const name = s?.name || (this.active ? this.active.slice(0, 6) : "—");
+    const a = this.activeSession();
+    const name =
+      a?.session?.name ||
+      (this.active ? this.active.sessionId.slice(0, 6) : "—");
     $("#chat-title").textContent = name;
-    document.title = `${name} · ${machineName()}`;
+    document.title = `${name} · ${location.hostname || "this machine"}`;
   }
 
   private renderRuntime(): void {
-    $("#runtime-mach").textContent = machineName();
-    // No model id on SessionInfo today; the kit's "kiwi · qwen2.5-coder:14b"
+    const a = this.activeSession();
+    $("#runtime-mach").textContent = a?.conn.host ?? "—";
+    // Model id isn't on SessionInfo today; the kit's "kiwi · qwen2.5-coder:14b"
     // collapses to just the machine for now (the separator hides when empty).
     $("#runtime-model").textContent = "";
     const sep = document.querySelector(".runtime-sep") as HTMLElement | null;
@@ -417,12 +607,15 @@ class Client {
   private renderMessages(): void {
     const log = $("#log");
     log.replaceChildren();
-    for (const m of this.state.messages) {
+    const a = this.activeSession();
+    if (!a) return;
+    const state = a.conn.states.get(this.active!.sessionId) ?? emptyState();
+    for (const m of state.messages) {
       const row = el("li", `msg ${m.role}${m.streaming ? " streaming" : ""}`);
       row.textContent = m.text;
       log.append(row);
     }
-    for (const c of this.state.confirms) {
+    for (const c of state.confirms) {
       const card = el("li", `confirm ${c.state}`);
       card.append(el("div", "title", c.title));
       if (c.state === "pending") {
@@ -448,8 +641,35 @@ class Client {
       }
       log.append(card);
     }
-    if (this.state.typing) log.append(el("li", "typing", "thinking…"));
+    if (state.typing) log.append(el("li", "typing", "thinking…"));
     log.scrollTop = log.scrollHeight;
+  }
+
+  // ----- executor picker (for "+ new chat" when fleet has >1 executor) -----
+
+  openCreatePicker(): void {
+    const conns = [...this.execs.values()];
+    if (conns.length === 1) {
+      // Trivial fleet: skip the sheet entirely.
+      this.create(conns[0].id);
+      return;
+    }
+    const picker = $("#picker") as HTMLElement;
+    const list = $("#picker-list");
+    list.replaceChildren();
+    for (const conn of conns) {
+      const row = el("li", "picker-row");
+      const dot = el("span", `dot ${conn.connected ? "online" : "offline"}`);
+      const host = el("span", "picker-host", conn.host);
+      const id = el("span", "picker-id", conn.id);
+      row.append(dot, host, id);
+      row.onclick = () => {
+        picker.hidden = true;
+        this.create(conn.id);
+      };
+      list.append(row);
+    }
+    picker.hidden = false;
   }
 }
 
@@ -457,9 +677,8 @@ function start(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
   $("#gate").style.display = "none";
   $("#app").style.display = "flex";
-  const client = new Client(token);
-  client.connect();
-  client.viewList();
+  const fleet = new Fleet(token);
+  void fleet.start();
 
   const input = $("#input") as HTMLInputElement;
   const send = $("#send") as HTMLButtonElement;
@@ -473,7 +692,7 @@ function start(token: string): void {
 
   const submit = (): void => {
     if (!input.value.trim()) return;
-    client.sendPrompt(input.value);
+    fleet.sendPrompt(input.value);
     input.value = "";
     syncEmpty();
   };
@@ -485,16 +704,21 @@ function start(token: string): void {
       submit();
     }
   });
-  $("#new-chat").onclick = () => client.create();
-  $("#back").onclick = () => client.viewList();
-  $("#chat-menu").onclick = () => client.deleteActive();
+  $("#new-chat").onclick = () => fleet.openCreatePicker();
+  $("#back").onclick = () => fleet.viewList();
+  $("#chat-menu").onclick = () => fleet.deleteActive();
+  // Backdrop tap dismisses the picker; the inner sheet swallows its own clicks.
+  const picker = $("#picker") as HTMLElement;
+  picker.onclick = (e) => {
+    if (e.target === picker) picker.hidden = true;
+  };
 }
 
 function main(): void {
   const tokenInput = $("#token") as HTMLInputElement;
   // Tab title starts as "pi · <host>" so even a fresh browser tab parked at
   // the gate is immediately distinguishable from other executors / other PWAs.
-  document.title = `pi · ${machineName()}`;
+  document.title = `pi · ${location.hostname || "this machine"}`;
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) tokenInput.value = saved;
   $("#connect").onclick = () => start(tokenInput.value.trim());

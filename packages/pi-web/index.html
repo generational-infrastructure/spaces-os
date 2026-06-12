@@ -624,6 +624,84 @@
         color: var(--m-error);
         font-weight: var(--weight-bold);
       }
+
+      /* ---------- executor picker (bottom sheet) ---------- */
+      .picker {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        background: rgba(7, 7, 34, 0.6);
+        backdrop-filter: blur(2px);
+      }
+      .picker-sheet {
+        width: min(420px, 100%);
+        max-height: 70%;
+        overflow-y: auto;
+        background: var(--m-surface);
+        border: var(--border);
+        border-bottom: none;
+        border-radius: var(--radius-s) var(--radius-s) 0 0;
+        padding: var(--space-l);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-s);
+      }
+      .picker-title {
+        margin: 0 0 var(--space-s);
+        font:
+          var(--weight-bold) var(--text-m) / 1.2 var(--font-sans);
+        color: var(--m-on-surface);
+      }
+      .picker-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+      }
+      .picker-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-m);
+        padding: var(--space-m) var(--space-s);
+        border-bottom: var(--border);
+        cursor: pointer;
+        transition: background var(--duration-fast) var(--ease-standard);
+      }
+      .picker-row:last-child {
+        border-bottom: none;
+      }
+      .picker-row:hover {
+        background: var(--m-hover);
+        color: var(--m-on-hover);
+      }
+      .picker-host {
+        flex: 1;
+        min-width: 0;
+        font:
+          var(--weight-bold) var(--text-s) / 1.2 var(--font-mono);
+        color: var(--m-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .picker-row:hover .picker-host {
+        color: var(--m-on-hover);
+      }
+      .picker-id {
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+        color: var(--m-on-surface-variant);
+      }
+
+      /* offline state for chat row badge (per-executor reachability) */
+      .chat-badge.offline {
+        color: var(--m-error);
+      }
+
     </style>
   </head>
   <body>
@@ -692,6 +770,13 @@
           </button>
         </footer>
       </section>
+    </div>
+    <!-- Executor picker (bottom sheet for "+ new chat" on multi-executor fleets) -->
+    <div id="picker" class="picker" hidden>
+      <div class="picker-sheet">
+        <h3 class="picker-title">Run new chat on…</h3>
+        <ul id="picker-list" class="picker-list"></ul>
+      </div>
     </div>
     <script type="module" src="/app.js"></script>
   </body>

@@ -30,6 +30,12 @@ let
 
   jsonFormat = pkgs.formats.json { };
 
+  # PWA topology file: the list of executors in this clan instance so
+  # `GET /executors` can hand it back to browsing clients (see main.ts:
+  # loadPeers). Materialized as a tracked store path so nix's reference
+  # scanner pins it to the unit closure (same trick as piSettings below).
+  peersFile = jsonFormat.generate "pi-sessiond-peers.json" cfg.peers;
+
   # Materialize each extension as its own store object. A bare `toString` of a
   # flake-relative path embeds the whole-flake `…-source` path, which nix's
   # reference scanner does NOT capture as a runtime dependency of settings.json
@@ -195,6 +201,42 @@ in
       '';
     };
 
+    peers = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            id = lib.mkOption {
+              type = lib.types.str;
+              description = "Peer executor's stable id (matches its own `executorId`).";
+            };
+            host = lib.mkOption {
+              type = lib.types.str;
+              description = ''
+                Public hostname fronting the peer's WS (Caddy reverse-proxy
+                origin, typically `agent-<name>.<meta.domain>`). The PWA opens
+                `wss://<host>/` against this name; the cert must be trusted
+                on the user's browser (clan PKI handles that across the mesh).
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          { id = "kiwi";   host = "agent-kiwi.pin"; }
+          { id = "mango";  host = "agent-mango.pin"; }
+        ]
+      '';
+      description = ''
+        Every executor in this clan instance, surfaced verbatim to PWA
+        clients via the unauthenticated `GET /executors` discovery endpoint.
+        Include the local executor too — the PWA treats `self` and the rest
+        uniformly (see main.ts: loadPeers). Empty list = clan-of-one fleet;
+        the PWA falls back to "open a WS to wherever served me".
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -267,6 +309,10 @@ in
           toString cfg.notifyCommand
         );
         SPACES_SESSIOND_PWA_DIR = lib.optionalString cfg.serveWebUi (toString cfg.webUiPackage);
+        # Fleet topology: read by main.ts loadPeers, exposed via GET /executors.
+        # Empty list → peersFile is `{}` JSON for an empty array, daemon treats
+        # that as a single-executor fleet (matches the historical default).
+        SPACES_SESSIOND_PEERS_FILE = toString peersFile;
         # Bun (and pi) want a writable HOME for caches.
         HOME = stateDir;
       }

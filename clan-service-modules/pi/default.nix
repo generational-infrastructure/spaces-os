@@ -255,6 +255,27 @@
 
             effectiveFirewall =
               if settings.openFirewall != null then settings.openFirewall else hasRemoteClient;
+
+            # Every executor in the instance with `webUi.enable = true` — the
+            # PWA can only open WS against hosts that have a public Caddy vhost
+            # (the browser can't reach loopback-only daemons). Symmetric across
+            # the fleet (each peer's pi-sessiond gets the same list) so a chat
+            # created on any executor surfaces in any PWA.
+            executorMachinesAttrs = roles.executor.machines or { };
+            peerNames = lib.naturalSort (
+              lib.attrNames (lib.filterAttrs (_: m: m.settings.webUi.enable) executorMachinesAttrs)
+            );
+            mkPeer =
+              name:
+              let
+                m = executorMachinesAttrs.${name};
+              in
+              {
+                id = if m.settings.executorId == null then name else m.settings.executorId;
+                host =
+                  if m.settings.webUi.host != null then m.settings.webUi.host else "agent-${name}.${meta.domain}";
+              };
+            peersList = map mkPeer peerNames;
           in
           {
             imports = [
@@ -314,6 +335,7 @@
                     null;
               };
               serveWebUi = settings.webUi.enable;
+              peers = peersList;
             };
 
             # Caddy reverse-proxies fronting the executor's two optional

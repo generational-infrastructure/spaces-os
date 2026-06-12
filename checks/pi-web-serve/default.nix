@@ -20,6 +20,8 @@ pkgs.runCommand "pi-web-serve-test"
     SPACES_SESSIOND_TOKEN=serve-test \
     SPACES_SESSIOND_PWA_DIR=${web} \
     SPACES_SESSIOND_STATE_DIR="$TMPDIR/state" \
+    SPACES_SESSIOND_EXECUTOR_ID=alpha \
+    SPACES_SESSIOND_PEERS='[{"id":"alpha","host":"127.0.0.1:8790"},{"id":"beta","host":"127.0.0.1:8791"}]' \
       ${pkgs.lib.getExe daemon} &
     daemon=$!
     trap 'kill "$daemon" 2>/dev/null || true' EXIT

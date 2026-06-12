@@ -84,6 +84,45 @@ const MAX_LIVE = Number(process.env.SPACES_SESSIOND_MAX_LIVE ?? "0");
 // clients attached, so the user is reached out-of-band. SPACES_NOTIFY_* env.
 const NOTIFY_CMD = process.env.SPACES_SESSIOND_NOTIFY_CMD ?? "";
 
+// Peer executors in the same clan instance, surfaced to PWA clients via
+// `GET /executors` so they can fan out their own WS connections (fleet view).
+// Format: JSON `[{ "id": "kiwi", "host": "agent-kiwi.pin" }, …]` — the host
+// is whatever public name fronts each peer's WS (Caddy reverse-proxy origin).
+// SPACES_SESSIOND_PEERS_FILE wins over the inline env so the clan module can
+// stage it as a normal file without touching the systemd unit's Environment
+// (the inline form is for tests). The local executor itself is included so
+// the list is the whole fleet, not "the others".
+function loadPeers(): { id: string; host: string }[] {
+  const path = process.env.SPACES_SESSIOND_PEERS_FILE ?? "";
+  const inline = process.env.SPACES_SESSIOND_PEERS ?? "";
+  let raw = "";
+  if (path.length > 0) {
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      // Falls through to inline; an empty list is a valid clan-of-one.
+    }
+  }
+  if (raw.length === 0) raw = inline;
+  if (raw.trim().length === 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry): { id: string; host: string }[] => {
+      if (!entry || typeof entry !== "object") return [];
+      const id = (entry as { id?: unknown }).id;
+      const host = (entry as { host?: unknown }).host;
+      if (typeof id !== "string" || typeof host !== "string") return [];
+      if (id.length === 0 || host.length === 0) return [];
+      return [{ id, host }];
+    });
+  } catch {
+    console.error("pi-sessiond: malformed SPACES_SESSIOND_PEERS, ignoring");
+    return [];
+  }
+}
+const PEERS = loadPeers();
+
 function loadToken(): string {
   const credDir = process.env.CREDENTIALS_DIRECTORY;
   if (credDir) {
@@ -1060,6 +1099,18 @@ Bun.serve<ConnData>({
   fetch(req, server) {
     if (server.upgrade(req, { data: { id: randomUUID(), authed: false } })) {
       return undefined;
+    }
+    const pathname = new URL(req.url).pathname;
+    if (pathname === "/executors") {
+      // Topology discovery for PWA clients. Unauthenticated on purpose: the
+      // list itself is not a secret (it's `agent-<name>.<meta.domain>` hosts
+      // that clan PKI + dm-dns already publish across the mesh) — the shared
+      // bearer token still gates every WS attach/command. Empty PEERS is a
+      // valid clan-of-one; the caller treats it as a single-executor fleet.
+      return Response.json({
+        self: EXECUTOR_ID,
+        executors: PEERS,
+      });
     }
     return serveStatic(req);
   },

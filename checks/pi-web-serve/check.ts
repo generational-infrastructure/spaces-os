@@ -27,9 +27,27 @@ if (!index.includes("<title>pi · loading…</title>"))
 const appjs = await get("/app.js");
 if (!appjs.includes("withPiEvent"))
   throw new Error("app.js missing the bundled reducer");
-
 for (const asset of ["/manifest.webmanifest", "/sw.js", "/icon.svg"])
   await get(asset);
+
+// Discovery endpoint: PWA fan-out target list. Asserts the daemon's `self`
+// matches its EXECUTOR_ID and that the peer list round-trips verbatim from
+// the SPACES_SESSIOND_PEERS env. Validates the (id, host) shape too.
+const disc = JSON.parse(await get("/executors")) as {
+  self: string;
+  executors: { id: string; host: string }[];
+};
+if (disc.self !== "alpha")
+  throw new Error(`/executors self mismatch: ${disc.self}`);
+if (disc.executors.length !== 2)
+  throw new Error(
+    `/executors expected 2 entries, got ${disc.executors.length}`,
+  );
+const beta = disc.executors.find((e) => e.id === "beta");
+if (!beta || beta.host !== "127.0.0.1:8791")
+  throw new Error(
+    `/executors missing beta peer: ${JSON.stringify(disc.executors)}`,
+  );
 
 // Client-side routing: an unknown path serves index.html, not a 404.
 const fallback = await get("/no/such/route");
