@@ -18,6 +18,6 @@
 { pkgs, ... }:
 pkgs.fetchgit {
   url = "https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7.git";
-  rev = "aacb10b335589bbab35034464427bc13bc2db87d";
-  hash = "sha256-TfxU3sBugW5txrIahTHlHzrJyxrWjPdlvfXaRpWbMWk=";
+  rev = "e7cd790a84979ea626e241071c49c4c0834e2f59";
+  hash = "sha256-MjDSjMbcv3ltQ8Z4MSnSIQEpWJ0/hzZHM6YJz+yGHng=";
 }
