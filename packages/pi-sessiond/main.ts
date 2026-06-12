@@ -330,6 +330,14 @@ function resolveModel(modelId: string) {
 interface ConnData {
   id: string;
   authed: boolean;
+  // Per-connection envelope pipeline. WebSocket framing delivers messages
+  // in order; this chain makes the daemon PROCESS them in order too. A
+  // client pipelines `attach` + commands on one socket — if the commands
+  // dispatched concurrently while the attach awaited a cold resume, they'd
+  // look up an id that isn't registered yet and bounce with "no such
+  // session" (seen in production as a model-less session after a daemon
+  // restart). Cross-connection concurrency is untouched.
+  queue: Promise<void>;
 }
 type Conn = ServerWebSocket<ConnData>;
 
@@ -366,6 +374,18 @@ const authedConns = new Set<Conn>();
 
 function send(ws: Conn, msg: unknown): void {
   ws.send(JSON.stringify(msg));
+}
+
+// A session-scoped envelope failed. Echo the offending sessionId so a
+// client multiplexing many sessions over one socket can route the error
+// to the right one (e.g. drop a stale persisted id and recreate).
+function sendNoSuchSession(ws: Conn, sessionId: string): void {
+  send(ws, {
+    v: 1,
+    kind: "error",
+    error: "no such session",
+    ...(sessionId ? { sessionId } : {}),
+  });
 }
 
 // Stamp a session event with the next monotonic seq and fan it out verbatim.
@@ -722,12 +742,26 @@ async function createSession(
 // Reload a cold session from its committed jsonl (design §5.1: attach to cold).
 // Returns undefined when nothing is persisted under this id.
 async function resumeSession(id: string): Promise<Session | undefined> {
+  // Dedup concurrent cold attaches from different connections: without
+  // this, two clients attaching the same cold id race two resumes and
+  // the loser's AgentSession leaks unsubscribed.
+  const inflight = resuming.get(id);
+  if (inflight) return inflight;
   const meta = readSessionMeta(id);
   if (!meta) return undefined;
-  mkdirSync(workdirOf(id), { recursive: true });
-  const sm = SessionManager.continueRecent(workdirOf(id), sessionDirOf(id));
-  return registerSession(id, meta.name, sm, meta.model);
+  const p = (async () => {
+    mkdirSync(workdirOf(id), { recursive: true });
+    const sm = SessionManager.continueRecent(workdirOf(id), sessionDirOf(id));
+    return registerSession(id, meta.name, sm, meta.model);
+  })();
+  resuming.set(id, p);
+  try {
+    return await p;
+  } finally {
+    resuming.delete(id);
+  }
 }
+const resuming = new Map<string, Promise<Session>>();
 
 // ---- idle-GC + resident-session ceiling (design §5.1) ----------------------
 
@@ -1077,6 +1111,11 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         kind: "attached",
         sessionId: session.id,
         seq: session.seq,
+        // Distinguishes a create ack from a plain attach ack: the client
+        // resolves its pending-create FIFO only on created acks, so a
+        // racing re-attach ack can't consume a create resolver and stamp
+        // the wrong daemon id onto a session entry.
+        created: true,
       });
       // Fan the new entry out to every authenticated client so siblings'
       // tab strips refresh without polling (design §12 "n:m clients").
@@ -1095,7 +1134,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       // id is a no-op + an error reply for diagnostics.
       const sessionId = asString(parsed.sessionId) ?? "";
       if (!isSessionId(sessionId)) {
-        send(ws, { v: 1, kind: "error", error: "no such session" });
+        sendNoSuchSession(ws, sessionId);
         return;
       }
       const live = sessions.get(sessionId);
@@ -1140,13 +1179,13 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
     case "attach": {
       const sessionId = asString(parsed.sessionId) ?? "";
       if (!isSessionId(sessionId)) {
-        send(ws, { v: 1, kind: "error", error: "no such session" });
+        sendNoSuchSession(ws, sessionId);
         return;
       }
       const live = sessions.get(sessionId);
       const session = live ?? (await resumeSession(sessionId));
       if (!session) {
-        send(ws, { v: 1, kind: "error", error: "no such session" });
+        sendNoSuchSession(ws, sessionId);
         return;
       }
       session.subscribers.add(ws);
@@ -1172,9 +1211,10 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     case "command": {
-      const session = sessions.get(asString(parsed.sessionId) ?? "");
+      const sessionId = asString(parsed.sessionId) ?? "";
+      const session = sessions.get(sessionId);
       if (!session) {
-        send(ws, { v: 1, kind: "error", error: "no such session" });
+        sendNoSuchSession(ws, sessionId);
         return;
       }
       touch(session);
@@ -1223,7 +1263,11 @@ Bun.serve<ConnData>({
   hostname: HOST,
   port: PORT,
   fetch(req, server) {
-    if (server.upgrade(req, { data: { id: randomUUID(), authed: false } })) {
+    if (
+      server.upgrade(req, {
+        data: { id: randomUUID(), authed: false, queue: Promise.resolve() },
+      })
+    ) {
       return undefined;
     }
     const pathname = new URL(req.url).pathname;
@@ -1242,9 +1286,28 @@ Bun.serve<ConnData>({
   },
   websocket: {
     message(ws, message) {
-      void handleMessage(
-        ws,
-        typeof message === "string" ? message : message.toString("utf8"),
+      const text =
+        typeof message === "string" ? message : message.toString("utf8");
+      // Serialize per connection (see ConnData.queue). A handler that
+      // throws must not silently swallow the envelope: answer with a
+      // correlated error so the client can route the failure.
+      ws.data.queue = ws.data.queue.then(() =>
+        handleMessage(ws, text).catch((err) => {
+          console.error("pi-sessiond: envelope failed:", err);
+          let sessionId: string | undefined;
+          try {
+            const parsed = JSON.parse(text);
+            if (isRecord(parsed)) sessionId = asString(parsed.sessionId);
+          } catch {
+            // unparseable text already got its "invalid json" reply
+          }
+          send(ws, {
+            v: 1,
+            kind: "error",
+            error: "internal error",
+            ...(sessionId ? { sessionId } : {}),
+          });
+        }),
       );
     },
     close(ws) {

@@ -143,10 +143,31 @@ Item {
     }
     return list;
   }
-  // Default executor for new/legacy sessions: the lone configured one (so an
-  // old single-wsUrl deployment keeps putting sessions there), else "" = the
-  // local in-process pi.
-  readonly property string defaultExecutorId: root._cfg.defaultExecutor || (executors.length === 1 ? executors[0].id : "")
+  // Default executor for new/legacy sessions: the configured default, else
+  // the first configured executor. "" only when the inventory is empty (or
+  // not loaded yet) — there is no local in-process transport anymore, so a
+  // session pinned to "" has nothing to run on and stays deferred until an
+  // executor resolves.
+  readonly property string defaultExecutorId: root._cfg.defaultExecutor || (executors.length > 0 ? executors[0].id : "")
+  // Entries minted before the config loaded persist `executor: ""` and
+  // ride executorFor's runtime fallback to the default executor. Stamp
+  // them as soon as the default is known: a later defaultExecutor config
+  // change must not silently migrate an existing chat — its
+  // daemonSessionId only exists on the executor that minted it.
+  onDefaultExecutorIdChanged: _stampDefaultExecutor()
+  function _stampDefaultExecutor() {
+    if (!defaultExecutorId) return;
+    let changed = false;
+    const next = sessionsList.map(s => {
+      if (s.executor) return s;
+      changed = true;
+      return Object.assign({}, s, { executor: defaultExecutorId });
+    });
+    if (changed) {
+      sessionsList = next;
+      _persist();
+    }
+  }
 
   property var _executorById: ({})
   Instantiator {
@@ -184,7 +205,9 @@ Item {
     root._executorById = m;
   }
 
-  // Resolve a session's executor id to its live PiExecutor (null = local pi).
+  // Resolve a session's executor id to its live PiExecutor. null = not
+  // resolvable (unknown id, or the inventory hasn't loaded yet) — the
+  // session defers its spawn until the binding re-resolves.
   function executorFor(id) {
     if (!id) return null;
     return root._executorById[id] || null;
@@ -280,6 +303,10 @@ Item {
     // lastImportTime still at 0 (no-op then); replay the import now that
     // the cutoff is durable.
     _importRemoteSessions();
+    // Entries persisted by an older build (or minted pre-config) may
+    // carry executor: "" — pin them now if the default is already known;
+    // otherwise onDefaultExecutorIdChanged catches up when it loads.
+    _stampDefaultExecutor();
   }
 
   function _persist() {
@@ -431,13 +458,20 @@ Item {
     // from a *connected* executor's view were deleted upstream (by a
     // sibling client's delete_session). Drop them locally so the tab
     // strip mirrors the daemon's truth — the reconciler stop/destroys
-    // the orphaned PiSession in the same pass.
+    // the orphaned PiSession in the same pass. Gated on hasSeenRemote:
+    // only ids this connection actually observed earlier count as
+    // "deleted upstream". A persisted id the daemon never knew (state
+    // wiped, turnless session lost) is NOT a sibling delete — that entry
+    // must stay so its attach-bounce recovery can mint a fresh daemon
+    // session instead of the tab silently vanishing.
     const removeIds = [];
     for (const s of sessionsList) {
       if (!s.daemonSessionId || !s.executor) continue;
       const view = liveByExec[s.executor];
       if (!view) continue; // executor offline → withhold judgement
-      if (!view.ids.has(s.daemonSessionId)) removeIds.push(s.id);
+      if (view.ids.has(s.daemonSessionId)) continue;
+      if (!view.exec.hasSeenRemote(s.daemonSessionId)) continue;
+      removeIds.push(s.id);
     }
 
     // Additions: new ids past the time cutoff.
@@ -764,7 +798,13 @@ Item {
   }
 
   function _maybeSpawn() {
-    const s = _activeSession;
+    // Direct lookup, NOT the _activeSession binding: this runs inside
+    // onActiveSessionIdChanged, and QML invokes change handlers BEFORE
+    // dependent bindings re-evaluate — the binding still resolves the
+    // PREVIOUS active session there. Reading it spawned the old session
+    // and left the freshly selected one cold ("daemon offline" zombie:
+    // create_session never sent, models never fetched).
+    const s = _sessionObjs[activeSessionId] || null;
     if (s && _panelOpen && !s.streaming) {
       s.spawn();
       s.listModels();

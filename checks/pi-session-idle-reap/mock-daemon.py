@@ -119,7 +119,15 @@ async def handler(ws, *_):
             _created += 1
             sid = f"sess-{EXEC_ID}-{_created}"
             sessions[sid] = {"name": msg.get("name") or "", "updated": now_ms()}
-            await send({"v": 1, "kind": "attached", "sessionId": sid, "seq": 0})
+            await send(
+                {
+                    "v": 1,
+                    "kind": "attached",
+                    "sessionId": sid,
+                    "seq": 0,
+                    "created": True,
+                }
+            )
             await broadcast_sessions()
 
         elif kind == "attach":

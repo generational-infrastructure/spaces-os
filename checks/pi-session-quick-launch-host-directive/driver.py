@@ -142,8 +142,10 @@ def main() -> None:
         seeded = json.loads(call("seedExecutors"))
         if seeded != ["kiwi", "traube"]:
             die(f"executor seed failed: {seeded!r}")
-        # Two executors, no explicit default → default is local "".
-        if call("defaultExecutorId") != "":
+        # Two executors, no explicit default → the first configured
+        # executor is the default. ("" is only the transient marker for
+        # an unloaded/empty inventory; it no longer means "local pi".)
+        if call("defaultExecutorId") != "kiwi":
             die(f"unexpected defaultExecutorId {call('defaultExecutorId')!r}")
 
         # (a) valid id pins the session.
@@ -173,13 +175,14 @@ def main() -> None:
         if executor_of(sid2) != "traube":
             die(f"second session executor {executor_of(sid2)!r}, want 'traube'")
 
-        # (d) omitting the executor preserves today's default behaviour.
+        # (d) omitting the executor pins the session to the default
+        # executor (the first configured one) at mint time.
         before = int(call("sessionCount"))
         sid3 = call("launchPlain", "no host here")
         if not wait_until(lambda: int(call("sessionCount")) == before + 1, timeout_s=5):
             die("plain launch created no session")
-        if executor_of(sid3) != "":
-            die(f"plain session executor {executor_of(sid3)!r}, want '' (default)")
+        if executor_of(sid3) != "kiwi":
+            die(f"plain session executor {executor_of(sid3)!r}, want 'kiwi' (default)")
 
         print("PASS")
     finally:

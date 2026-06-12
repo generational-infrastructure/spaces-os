@@ -103,7 +103,15 @@ async def handler(ws, *_):
         elif kind == "create_session":
             SESSIONS["s1"] = {"seq": 0, "buffer": []}
             await ws.send(
-                json.dumps({"v": 1, "kind": "attached", "sessionId": "s1", "seq": 0})
+                json.dumps(
+                    {
+                        "v": 1,
+                        "kind": "attached",
+                        "sessionId": "s1",
+                        "seq": 0,
+                        "created": True,
+                    }
+                )
             )
 
         elif kind == "attach":

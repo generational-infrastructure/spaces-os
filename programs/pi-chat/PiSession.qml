@@ -467,6 +467,38 @@ QtObject {
     _wsFlush();
   }
 
+  // WS mode: the daemon reported a session-scoped failure (routed here
+  // by PiExecutor via the error envelope's sessionId). "no such session"
+  // for a session we believed attached means our persisted daemon id is
+  // stale — the daemon lost it (deleted by another client, state wiped).
+  // Recover by dropping the mapping and minting a fresh daemon session;
+  // without this the session wedges attached-but-dead and every command
+  // (models, history, prompts) bounces forever.
+  function _onSessionError(error) {
+    if (error !== "no such session") return;
+    if (!executor || !_daemonSessionId) return;
+    Logger.w("PiSession", sessionId, "daemon lost session", _daemonSessionId, "- recreating");
+    executor.unsubscribe(_daemonSessionId);
+    _daemonSessionId = "";
+    initialDaemonSessionId = "";
+    _wsAttached = false;
+    // Clear the persisted mapping so a panel restart doesn't chase the
+    // dead id again.
+    if (backend && backend._onDaemonSessionAssigned)
+      backend._onDaemonSessionAssigned(sessionId, "");
+    if (!_shouldRun) return;
+    // Replay the attach-time bootstrap; these buffer in _wsPending and
+    // flush once the fresh session acks (the originals bounced).
+    _syncMemory();
+    _send({ type: "get_available_models" });
+    _send({ type: "get_state" });
+    _send({ type: "get_messages" });
+    if (!_wsCreating) {
+      _wsCreating = true;
+      _wsCreate();
+    }
+  }
+
   function _handleEvent(ev) {
     switch (ev.type) {
     case "agent_start":

@@ -60,6 +60,12 @@ QtObject {
   // one of "cold" / "live-idle" / "live-busy" / "parked"; `updated` is the
   // daemon's last-activity ms-since-epoch.
   property var remoteSessions: []
+  // Daemon session ids ever observed in THIS connection's `sessions`
+  // pushes. Lets the backend tell "deleted upstream" (id seen earlier,
+  // gone from the current view) apart from "stale persisted id the
+  // daemon never knew" (never seen) — the latter must recover via the
+  // attach-bounce path instead of silently dropping the tab.
+  property var _remoteEverSeen: ({})
 
   onActiveChanged: _live = active
   Component.onCompleted: _live = active
@@ -119,6 +125,10 @@ QtObject {
     case "welcome": {
       _welcomed = true;
       executorId = (msg.caps && msg.caps.executor) || "";
+      // New connection epoch: the seen-set restarts so judgments about
+      // "deleted upstream" are only ever made against ids this very
+      // connection observed (see hasSeenRemote).
+      _remoteEverSeen = ({});
       const waiters = _connectWaiters;
       _connectWaiters = [];
       for (const cb of waiters) cb();
@@ -143,12 +153,16 @@ QtObject {
       // water mark the session was resurrected (seq reset) — drop the stale
       // mark so replayed/new events aren't suppressed.
       if ((sid in _subscribers) && (msg.seq < (_lastSeq[sid] ?? 0))) _lastSeq[sid] = msg.seq;
-      // create_session ack (FIFO). attach acks for existing sessions have no
-      // pending create and are simply ignored — the caller knows its id.
-      const p = _pendingCreates.shift();
-      if (p) {
-        _pendingCreatedIds[sid] = true;
-        p.resolve(sid);
+      // create_session ack (FIFO), marked `created` by the daemon. Plain
+      // attach acks must NOT pop the queue: a re-attach ack racing an
+      // in-flight create would otherwise consume the create's resolver and
+      // stamp the wrong daemon id onto the creating session's entry.
+      if (msg.created) {
+        const p = _pendingCreates.shift();
+        if (p) {
+          _pendingCreatedIds[sid] = true;
+          p.resolve(sid);
+        }
       }
       break;
     }
@@ -168,8 +182,10 @@ QtObject {
       // arrive as the same shape; the merge is idempotent.
       const list = msg.sessions || [];
       const next = new Array(list.length);
+      const seen = Object.assign({}, _remoteEverSeen);
       for (let i = 0; i < list.length; i += 1) {
         const s = list[i];
+        seen[s.id] = true;
         next[i] = {
           id: s.id,
           name: s.name || "",
@@ -181,11 +197,16 @@ QtObject {
           updated: s.updated || 0,
         };
       }
+      _remoteEverSeen = seen;
       remoteSessions = next;
       break;
     }
     case "error":
       Logger.w("PiExecutor", "server error", JSON.stringify(msg));
+      // Session-scoped failures (the daemon echoes the offending
+      // sessionId) are routed to the owning session so it can recover —
+      // e.g. drop a stale persisted daemon id and mint a fresh session.
+      if (msg.sessionId) _subscribers[msg.sessionId]?._onSessionError?.(msg.error);
       break;
     default:
       break;
@@ -256,4 +277,7 @@ QtObject {
   // Claim bookkeeping for freshly created sessions (see _pendingCreatedIds).
   function isPendingCreated(sid) { return !!_pendingCreatedIds[sid]; }
   function releaseCreated(sid) { delete _pendingCreatedIds[sid]; }
+
+  // True when this connection has observed `sid` in a `sessions` push.
+  function hasSeenRemote(sid) { return !!_remoteEverSeen[sid]; }
 }

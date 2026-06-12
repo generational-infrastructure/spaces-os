@@ -116,7 +116,15 @@ async def handler(ws, *_):
             sessions[sid] = {"name": msg.get("name") or "", "updated": now_ms()}
             # Create ack, then the list broadcast — back-to-back, mirroring
             # main.ts's create_session handler.
-            await send({"v": 1, "kind": "attached", "sessionId": sid, "seq": 0})
+            await send(
+                {
+                    "v": 1,
+                    "kind": "attached",
+                    "sessionId": sid,
+                    "seq": 0,
+                    "created": True,
+                }
+            )
             await broadcast_sessions()
 
         elif kind == "attach":

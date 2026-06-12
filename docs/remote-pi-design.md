@@ -399,12 +399,12 @@ the envelope only adds addressing + the control verbs the pipe model lacked.
 // server → client
 { "v":1, "kind":"welcome", "connectionId":"…", "caps":{...} }
 { "v":1, "kind":"sessions", "sessions":[ {id,name,executor,state,updated,…} ] }
-{ "v":1, "kind":"attached", "sessionId":"…", "seq":1234 }
+{ "v":1, "kind":"attached", "sessionId":"…", "seq":1234, "created?":true }   // created: create_session ack (clients resolve pending creates only on it)
 { "v":1, "kind":"snapshot", "sessionId":"…", "messages":[...], "seq":1234, "parked":[...] }
 { "v":1, "kind":"event", "sessionId":"…", "seq":1235, "payload":{ /* pi event */ } }
 { "v":1, "kind":"sidechannel", "sessionId":"…", "id":"…", "method":"confirm|input|open_url|notify", ... }
 { "v":1, "kind":"sidechannel_resolved", "sessionId":"…", "id":"…", "by":"<connectionId>" }
-{ "v":1, "kind":"error", ... }
+{ "v":1, "kind":"error", "error":"…", "sessionId?":"…" }   // sessionId echoed for session-scoped failures so clients can route them
 ```
 
 ---

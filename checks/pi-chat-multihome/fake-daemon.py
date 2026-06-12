@@ -72,6 +72,7 @@ async def handler(ws, *_):
                         "kind": "attached",
                         "sessionId": f"sess-{PORT}-{created}",
                         "seq": 0,
+                        "created": True,
                     }
                 )
             )

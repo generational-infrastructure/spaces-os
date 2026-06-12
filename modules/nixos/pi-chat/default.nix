@@ -379,8 +379,10 @@ in
       type = lib.types.str;
       default = "";
       description = ''
-        Executor id new (and legacy, un-pinned) sessions are created on. Empty
-        falls back to the lone configured executor, else the local in-process pi.
+        Executor id new (and legacy, un-pinned) sessions are created on.
+        Empty falls back to the first configured executor. (Local execution
+        is itself an executor — the loopback pi-sessiond-local; there is no
+        in-process spawn.)
       '';
     };
 
@@ -643,7 +645,10 @@ in
     ];
 
     # The loopback executor becomes the default target for new sessions.
-    # mkDefault keeps it overridable; an explicit "" restores local spawn.
+    # mkDefault keeps it overridable to another configured executor id.
+    # (There is no local in-process spawn anymore: a session pinned to ""
+    # has no transport — the panel falls back to the first configured
+    # executor instead.)
     services.pi-chat.defaultExecutor = lib.mkIf cfg.localExecutor.enable (
       lib.mkDefault cfg.localExecutor.id
     );
