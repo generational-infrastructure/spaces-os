@@ -1,11 +1,12 @@
 {
-  "name": "pi",
+  "name": "pi · Spaces OS",
   "short_name": "pi",
+  "description": "Spaces OS chat client — connect to a pi-sessiond executor over WebSocket.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#15151b",
-  "theme_color": "#15151b",
+  "background_color": "#070722",
+  "theme_color": "#070722",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]

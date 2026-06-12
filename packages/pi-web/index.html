@@ -2,59 +2,696 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#15151b" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#070722" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <title>pi</title>
+    <link rel="stylesheet" href="/design/styles.css" />
+    <title>pi · loading…</title>
     <style>
-      :root { color-scheme: dark; --bg: #15151b; --panel: #1e1e27; --line: #2c2c38; --me: #2f6df0; --on-me: #fff; --peer: #262633; --on: #e7e7ee; --muted: #8a8a99; }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--on); font: 15px/1.45 system-ui, sans-serif; }
-      #gate { display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; }
-      #gate h1 { font-size: 20px; margin: 0 0 8px; }
-      #gate input, #input { background: var(--panel); color: var(--on); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; }
-      #gate input { width: min(360px, 90vw); }
-      button { background: var(--me); color: var(--on-me); border: 0; border-radius: 10px; padding: 10px 16px; font: inherit; cursor: pointer; }
-      button.deny { background: var(--peer); color: var(--on); }
-      #app { display: none; height: 100%; flex-direction: column; }
-      header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-      header b { font-weight: 600; }
-      #status { color: var(--muted); font-size: 13px; }
-      #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-      .msg { max-width: 80%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
-      .msg.user { align-self: flex-end; background: var(--me); color: var(--on-me); }
-      .msg.assistant { align-self: flex-start; background: var(--peer); }
-      .confirm { align-self: stretch; background: var(--panel); border: 1px solid var(--me); border-radius: 12px; padding: 12px; }
-      .confirm.allowed { border-color: #3ba55d; } .confirm.denied, .confirm.resolved { border-color: var(--line); }
-      .confirm .title { font-weight: 600; margin-bottom: 8px; }
-      .confirm .actions { display: flex; gap: 8px; justify-content: flex-end; }
-      .confirm .outcome { text-align: right; color: var(--muted); font-size: 13px; }
-      .typing { color: var(--muted); align-self: flex-start; padding: 0 12px; }
-      footer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
-      #input { flex: 1; }
-      #tabs { display: flex; gap: 6px; padding: 8px 14px; overflow-x: auto; border-bottom: 1px solid var(--line); }
-      .tab { background: var(--peer); color: var(--on); border: 1px solid var(--line); border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 13px; white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
-      .tab.active { background: var(--me); color: var(--on-me); border-color: var(--me); }
-      .tab.new { font-weight: 700; padding: 4px 12px; }
-      .tab-close { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; font-size: 14px; line-height: 1; opacity: 0.55; }
-      .tab-close:hover { opacity: 1; background: rgba(255,255,255,0.18); }
-      .tab.active .tab-close:hover { background: rgba(0,0,0,0.18); }
+      /* ============================================================
+         pi-web — application layout.
+         Foundations (colour, type, spacing, radii, motion) come from
+         /design/styles.css; this stylesheet is the app-specific
+         compose-from-tokens layer (PWA UI kit recreation, vanilla TS
+         translation of docs/design-system/source/ui_kits/pwa/pwa.jsx).
+         ============================================================ */
+
+      /* Make `hidden` reliable: any `display:` rule with non-zero specificity
+         beats the UA's `[hidden] { display: none }`, which silently re-shows
+         the element. Forced `!important` here means JS can toggle `.hidden`
+         on any element regardless of how its visible-state rule is written. */
+      [hidden] {
+        display: none !important;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--m-surface);
+        color: var(--m-on-surface);
+        font:
+          var(--weight-medium) var(--text-m) / var(--leading-snug)
+          var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+        color: inherit;
+      }
+      input {
+        font: inherit;
+        color: inherit;
+      }
+
+      /* ---------- icons (CSS-mask system — recolour by `color`) ---------- */
+      .i {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+        background: currentColor;
+        -webkit-mask-position: center;
+        -webkit-mask-repeat: no-repeat;
+        -webkit-mask-size: contain;
+        mask-position: center;
+        mask-repeat: no-repeat;
+        mask-size: contain;
+      }
+      .i-plus            { -webkit-mask-image: url(/design/icons/plus.svg);            mask-image: url(/design/icons/plus.svg); }
+      .i-send            { -webkit-mask-image: url(/design/icons/send.svg);            mask-image: url(/design/icons/send.svg); }
+      .i-paperclip       { -webkit-mask-image: url(/design/icons/paperclip.svg);       mask-image: url(/design/icons/paperclip.svg); }
+      .i-microphone      { -webkit-mask-image: url(/design/icons/microphone.svg);      mask-image: url(/design/icons/microphone.svg); }
+      .i-chevron-up      { -webkit-mask-image: url(/design/icons/chevron-up.svg);      mask-image: url(/design/icons/chevron-up.svg); }
+      .i-dots-vertical   { -webkit-mask-image: url(/design/icons/dots-vertical.svg);   mask-image: url(/design/icons/dots-vertical.svg); }
+      .i-x               { -webkit-mask-image: url(/design/icons/x.svg);               mask-image: url(/design/icons/x.svg); }
+      .i-check           { -webkit-mask-image: url(/design/icons/check.svg);           mask-image: url(/design/icons/check.svg); }
+      .i-database-off    { -webkit-mask-image: url(/design/icons/database-off.svg);    mask-image: url(/design/icons/database-off.svg); }
+      .i-key             { -webkit-mask-image: url(/design/icons/key.svg);             mask-image: url(/design/icons/key.svg); }
+      .i-message-chatbot { -webkit-mask-image: url(/design/icons/message-chatbot.svg); mask-image: url(/design/icons/message-chatbot.svg); }
+      .i-rotate          { -webkit-mask-image: url(/design/icons/rotate.svg);          mask-image: url(/design/icons/rotate.svg); }
+      .i-eraser          { -webkit-mask-image: url(/design/icons/eraser.svg);          mask-image: url(/design/icons/eraser.svg); }
+      .i.rot-back {
+        transform: rotate(-90deg);
+      }
+
+      /* ---------- generic controls ---------- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-xs);
+        height: var(--control-size);
+        padding: 0 var(--space-l);
+        background: var(--m-surface-variant);
+        color: var(--m-on-surface);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        transition:
+          background var(--duration-fast) var(--ease-standard),
+          color var(--duration-fast) var(--ease-standard),
+          border-color var(--duration-fast) var(--ease-standard);
+      }
+      .btn:hover:not(:disabled) {
+        background: var(--m-hover);
+        color: var(--m-on-hover);
+        border-color: transparent;
+      }
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .btn.primary {
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+        border-color: transparent;
+      }
+      .btn.primary:hover:not(:disabled) {
+        filter: brightness(1.08);
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+      }
+
+      .icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--control-size);
+        height: var(--control-size);
+        background: transparent;
+        color: var(--m-on-surface);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        transition:
+          background var(--duration-fast) var(--ease-standard),
+          color var(--duration-fast) var(--ease-standard),
+          border-color var(--duration-fast) var(--ease-standard);
+      }
+      .icon-btn:hover:not(:disabled) {
+        background: var(--m-hover);
+        color: var(--m-on-hover);
+        border-color: transparent;
+      }
+      .icon-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .icon-btn.ghost {
+        border-color: transparent;
+      }
+      .icon-btn.lg {
+        width: var(--control-size-lg);
+        height: var(--control-size-lg);
+      }
+      .icon-btn.primary {
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+        border-color: transparent;
+      }
+      .icon-btn.primary:disabled {
+        background: var(--m-surface-variant);
+        color: var(--m-on-surface-variant);
+      }
+      /* Cosmetic empty-input fade — we deliberately avoid `disabled` here
+         (see app.ts: refreshReachability owns `disabled`; empty-input is a
+         visual hint only so e2e .click() still fires). */
+      .icon-btn.primary.empty {
+        background: var(--m-surface-variant);
+        color: var(--m-on-surface-variant);
+      }
+
+      /* ---------- gate ---------- */
+      #gate {
+        display: flex;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2xl);
+      }
+      .gate-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-m);
+        width: min(360px, 100%);
+      }
+      .gate-logo {
+        font:
+          var(--weight-bold) var(--text-3xl) / 1 var(--font-sans);
+        letter-spacing: var(--tracking-tight);
+        color: var(--m-on-surface);
+      }
+      .gate-sub {
+        margin: 0;
+        font:
+          var(--weight-medium) var(--text-s) / 1.4 var(--font-sans);
+        color: var(--m-on-surface-variant);
+      }
+      .gate-card input {
+        width: 100%;
+        background: var(--m-surface-variant);
+        color: var(--m-on-surface);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        padding: var(--space-m) var(--space-l);
+        outline: none;
+        transition: border-color var(--duration-fast) var(--ease-standard);
+      }
+      .gate-card input:focus {
+        border-color: var(--m-secondary);
+      }
+
+      /* ---------- app shell ---------- */
+      #app {
+        display: none;
+        height: 100%;
+        flex-direction: column;
+      }
+      .view {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+      }
+      /* (no per-class [hidden] override needed — global [hidden] above wins.) */
+
+      /* ---------- list view ---------- */
+      .page-head {
+        display: flex;
+        align-items: center;
+        gap: var(--space-m);
+        padding: var(--space-xl) var(--space-l) var(--space-m);
+      }
+      .page-title {
+        flex: 1;
+        margin: 0;
+        font:
+          var(--weight-bold) var(--text-3xl) / 1 var(--font-sans);
+        letter-spacing: var(--tracking-tight);
+        color: var(--m-on-surface);
+      }
+      .status-pill {
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+        color: var(--m-on-surface-variant);
+        white-space: nowrap;
+      }
+      .status-pill.connected {
+        color: var(--m-tertiary);
+      }
+      .status-pill.error {
+        color: var(--m-error);
+      }
+
+      .chat-list {
+        flex: 1;
+        overflow-y: auto;
+        margin: 0;
+        padding: var(--space-xs) var(--space-m) var(--space-2xl);
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+      }
+      .chat-empty {
+        margin: var(--space-2xl) auto;
+        max-width: 320px;
+        text-align: center;
+        font:
+          var(--weight-medium) var(--text-s) / 1.5 var(--font-sans);
+        color: var(--m-on-surface-variant);
+      }
+      .tab {
+        display: flex;
+        align-items: stretch;
+        gap: var(--space-m);
+        width: 100%;
+        padding: var(--space-l) var(--space-s);
+        background: transparent;
+        border: none;
+        border-bottom: var(--border);
+        cursor: pointer;
+        text-align: left;
+        color: inherit;
+        transition: background var(--duration-fast) var(--ease-standard);
+      }
+      .tab:hover {
+        background: var(--overlay-on-surface-08);
+      }
+      .tab.active {
+        background: var(--overlay-on-surface-08);
+      }
+      .tab.active .chat-name,
+      .tab:hover .chat-name {
+        color: var(--m-primary);
+      }
+      .machine-rail {
+        width: 3px;
+        align-self: stretch;
+        background: var(--m-primary);
+        border-radius: var(--radius-xs);
+        flex-shrink: 0;
+      }
+      .chat-row {
+        flex: 1;
+        min-width: 0;
+      }
+      .chat-row-top {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-m);
+      }
+      .chat-name {
+        flex: 1;
+        min-width: 0;
+        font:
+          var(--weight-bold) var(--text-m) / 1.2 var(--font-sans);
+        color: var(--m-on-surface);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: color var(--duration-fast) var(--ease-standard);
+      }
+      .chat-machine {
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+        color: var(--m-primary);
+        flex-shrink: 0;
+      }
+      .chat-time {
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-sans);
+        color: var(--m-on-surface-variant);
+        flex-shrink: 0;
+      }
+      .chat-row-bottom {
+        display: flex;
+        align-items: center;
+        gap: var(--space-m);
+        margin-top: var(--space-xs);
+      }
+      .chat-preview {
+        flex: 1;
+        min-width: 0;
+        font:
+          var(--weight-medium) var(--text-s) / 1.3 var(--font-sans);
+        color: var(--m-on-surface-variant);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chat-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-sans);
+        flex-shrink: 0;
+      }
+      .chat-badge.working {
+        color: var(--m-primary);
+      }
+      .chat-badge.needs-you {
+        height: 19px;
+        padding: 0 var(--space-s);
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+        border-radius: var(--radius-xs);
+        font-weight: var(--weight-bold);
+      }
+
+      /* ---------- chat view ---------- */
+      .chat-head {
+        display: flex;
+        align-items: center;
+        gap: var(--space-s);
+        padding: var(--space-m) var(--space-s);
+      }
+      .chat-title {
+        flex: 1;
+        min-width: 0;
+        margin: 0;
+        font:
+          var(--weight-bold) var(--text-l) / 1.15 var(--font-sans);
+        color: var(--m-on-surface);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .runtime {
+        display: flex;
+        align-items: center;
+        gap: var(--space-s);
+        width: calc(100% - var(--space-m) * 2);
+        margin: var(--space-xs) var(--space-m) var(--space-s);
+        padding: var(--space-s) var(--space-m);
+        background: var(--m-surface-variant);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        color: var(--m-on-surface);
+        text-align: left;
+      }
+      .runtime:disabled {
+        cursor: default;
+      }
+      .runtime-mach {
+        font:
+          var(--weight-bold) var(--text-s) / 1 var(--font-mono);
+        color: var(--m-primary);
+        flex-shrink: 0;
+      }
+      .runtime-sep {
+        color: var(--m-on-surface-variant);
+        flex-shrink: 0;
+      }
+      .runtime-model {
+        flex: 1;
+        min-width: 0;
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+        color: var(--m-on-surface-variant);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .runtime-model:empty::before {
+        content: "·";
+        opacity: 0;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--m-on-surface-variant);
+        flex-shrink: 0;
+      }
+      .dot.online {
+        background: var(--m-tertiary);
+      }
+      .dot.offline {
+        background: var(--m-error);
+      }
+      .dot.working {
+        background: var(--m-primary);
+        animation: sos-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes sos-pulse {
+        0%, 100% { opacity: 0.45; }
+        50%      { opacity: 1; }
+      }
+
+      #log {
+        flex: 1;
+        overflow-y: auto;
+        margin: 0;
+        padding: var(--space-m);
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-m);
+      }
+
+      /* ---------- bubbles ---------- */
+      .msg {
+        max-width: 80%;
+        padding: var(--space-m);
+        border-radius: var(--radius-s);
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font:
+          var(--weight-medium) var(--text-m) / var(--leading-snug)
+          var(--font-sans);
+      }
+      .msg.user {
+        align-self: flex-end;
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+      }
+      .msg.assistant {
+        align-self: flex-start;
+        background: var(--m-surface-variant);
+        color: var(--m-on-surface);
+        border: var(--border);
+      }
+      .msg.streaming::after {
+        content: "▍";
+        display: inline-block;
+        margin-left: 2px;
+        opacity: 0.85;
+        animation: sos-pulse 1s ease-in-out infinite;
+      }
+      .typing {
+        align-self: flex-start;
+        padding: 0 var(--space-m);
+        font:
+          var(--weight-medium) var(--text-xs) / 1.2 var(--font-sans);
+        font-style: italic;
+        color: var(--m-on-surface-variant);
+      }
+
+      /* ---------- confirm cards ---------- */
+      .confirm {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-m);
+        padding: var(--space-m);
+        background: var(--m-surface-variant);
+        border: var(--border-width) solid var(--m-primary);
+        border-radius: var(--radius-s);
+      }
+      .confirm.allowed {
+        border-color: var(--m-tertiary);
+      }
+      .confirm.denied,
+      .confirm.resolved {
+        border-color: var(--m-outline);
+      }
+      .confirm .title {
+        font:
+          var(--weight-bold) var(--text-s) / 1.35 var(--font-sans);
+        color: var(--m-on-surface);
+        word-break: break-word;
+      }
+      .confirm .actions {
+        display: flex;
+        gap: var(--space-s);
+        justify-content: flex-end;
+      }
+      .confirm .outcome {
+        display: inline-flex;
+        align-self: flex-end;
+        align-items: center;
+        gap: var(--space-xs);
+        font:
+          var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+        color: var(--m-on-surface-variant);
+        text-transform: lowercase;
+      }
+      .confirm.allowed .outcome {
+        color: var(--m-tertiary);
+      }
+      .confirm.denied .outcome {
+        color: var(--m-error);
+      }
+      .confirm .allow {
+        height: var(--control-size-sm);
+        padding: 0 var(--space-l);
+        background: var(--m-primary);
+        color: var(--m-on-primary);
+        border: none;
+        border-radius: var(--radius-input);
+        font:
+          var(--weight-semibold) var(--text-s) / 1 var(--font-sans);
+      }
+      .confirm .allow:hover {
+        filter: brightness(1.08);
+      }
+      .confirm .deny {
+        height: var(--control-size-sm);
+        padding: 0 var(--space-l);
+        background: var(--m-surface);
+        color: var(--m-on-surface);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        font:
+          var(--weight-semibold) var(--text-s) / 1 var(--font-sans);
+      }
+      .confirm .deny:hover {
+        background: var(--m-hover);
+        color: var(--m-on-hover);
+        border-color: transparent;
+      }
+
+      /* ---------- compose ---------- */
+      .compose {
+        display: flex;
+        align-items: center;
+        gap: var(--space-s);
+        padding: var(--space-s) var(--space-m) var(--space-l);
+      }
+      .compose-input {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        background: var(--m-surface-variant);
+        border: var(--border);
+        border-radius: var(--radius-input);
+        padding: 0 var(--space-xs) 0 var(--space-m);
+        transition: border-color var(--duration-fast) var(--ease-standard);
+      }
+      .compose-input:focus-within {
+        border-color: var(--m-secondary);
+      }
+      .compose-input input {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: var(--space-m) 0;
+      }
+      .compose-input input::placeholder {
+        color: var(--m-on-surface-variant);
+      }
+
+      /* ---------- offline banner ---------- */
+      .offline-banner {
+        display: flex;
+        align-items: center;
+        gap: var(--space-s);
+        margin: 0 var(--space-m) var(--space-l);
+        padding: var(--space-m);
+        background: var(--m-surface-variant);
+        border: var(--border-width) solid var(--m-error);
+        border-radius: var(--radius-s);
+        color: var(--m-on-surface);
+        font:
+          var(--weight-medium) var(--text-s) / 1.4 var(--font-sans);
+      }
+      .offline-banner .i {
+        color: var(--m-error);
+      }
+      .offline-banner b {
+        font-family: var(--font-mono);
+        color: var(--m-error);
+        font-weight: var(--weight-bold);
+      }
     </style>
   </head>
   <body>
-    <div id="gate">
-      <h1>pi</h1>
-      <input id="token" type="password" placeholder="executor token" autocomplete="off" />
-      <button id="connect">Connect</button>
-    </div>
+    <main id="gate">
+      <div class="gate-card">
+        <div class="gate-logo">pi</div>
+        <p class="gate-sub">connect to pi-sessiond</p>
+        <input
+          id="token"
+          type="password"
+          placeholder="executor token"
+          autocomplete="off"
+        />
+        <button id="connect" class="btn primary">Connect</button>
+      </div>
+    </main>
+
     <div id="app">
-      <header><b>pi</b><span id="status">disconnected</span></header>
-      <div id="tabs"></div>
-      <div id="log"></div>
-      <footer>
-        <input id="input" placeholder="Message…" autocomplete="off" />
-        <button id="send">Send</button>
-      </footer>
+      <!-- list view -->
+      <section id="view-list" class="view">
+        <header class="page-head">
+          <h1 class="page-title">Chats</h1>
+          <span id="status" class="status-pill">disconnected</span>
+          <button id="new-chat" class="icon-btn lg" title="New chat">
+            <span class="i i-plus"></span>
+          </button>
+        </header>
+        <ul id="tabs" class="chat-list"></ul>
+      </section>
+
+      <!-- chat view -->
+      <section id="view-chat" class="view" hidden>
+        <header class="chat-head">
+          <button id="back" class="icon-btn" title="Back">
+            <span class="i i-chevron-up rot-back"></span>
+          </button>
+          <h2 class="chat-title" id="chat-title">…</h2>
+          <button id="chat-menu" class="icon-btn ghost" title="Delete chat">
+            <span class="i i-dots-vertical"></span>
+          </button>
+        </header>
+        <button id="runtime" class="runtime" type="button" disabled
+          title="A chat is a process on a machine — where this runs is set per chat (single-machine for now)">
+          <span id="runtime-dot" class="dot offline"></span>
+          <span id="runtime-mach" class="runtime-mach">—</span>
+          <span class="runtime-sep">·</span>
+          <span id="runtime-model" class="runtime-model"></span>
+        </button>
+        <ol id="log"></ol>
+        <div id="offline-banner" class="offline-banner" hidden>
+          <span class="i i-database-off"></span>
+          <span>Can't reach <b id="offline-machine">—</b> — cached, read-only.</span>
+        </div>
+        <footer class="compose">
+          <div class="compose-input">
+            <input id="input" placeholder="Message…" autocomplete="off" />
+            <button class="icon-btn ghost" id="attach" title="Attach" type="button">
+              <span class="i i-paperclip"></span>
+            </button>
+            <button class="icon-btn ghost" id="mic" title="Voice" type="button">
+              <span class="i i-microphone"></span>
+            </button>
+          </div>
+          <button id="send" class="icon-btn lg primary" title="Send">
+            <span class="i i-send"></span>
+          </button>
+        </footer>
+      </section>
     </div>
     <script type="module" src="/app.js"></script>
   </body>

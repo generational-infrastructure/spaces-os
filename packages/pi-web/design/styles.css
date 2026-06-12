@@ -1,0 +1,19 @@
+/* ============================================================
+   Spaces OS design system — pi-web entry point.
+   Vendored from the Spaces OS design system (the original handoff
+   bundle lives at docs/design-system/source/ for design rationale).
+
+   No fonts.css here on purpose: the source bundle pulls Inter +
+   JetBrains Mono from Google Fonts at runtime, which the offline
+   pi-web e2e nix sandbox cannot reach. The typography token
+   stack already falls back to `system-ui` / `ui-monospace`, so
+   shipping without webfonts is a clean degrade — the panel still
+   gets the real families because they're installed system fonts
+   on the target. To self-host webfonts for the PWA, drop the
+   .woff2 binaries in packages/pi-web/design/fonts/ and add the
+   corresponding `@font-face` rules in a new fonts.css below.
+   ============================================================ */
+
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";

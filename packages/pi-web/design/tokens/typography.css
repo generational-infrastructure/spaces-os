@@ -1,0 +1,43 @@
+/* ============================================================
+   Spaces OS — Typography tokens
+   Fonts: Inter (UI) + JetBrains Mono (code / shell commands).
+   Both are the exact families named in Commons/Settings.qml
+   (ui.fontDefault = "Inter", ui.fontFixed = "JetBrains Mono").
+
+   The native panel sizes in *points* (it is a desktop surface):
+   XS 9 · S 10 · M 11 · L 13 · XL 16, single weight (Medium 500).
+   Re-expressed below as px for web use (1pt ≈ 1.333px), preserving
+   the same visual rhythm. Only Medium (500) and Bold are used.
+   ============================================================ */
+
+:root {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+
+  /* Type scale (px equivalents of the panel's pt sizes) */
+  --text-xs:  12px;  /* 9pt  — quotes, timestamps, thinking trace */
+  --text-s:   13px;  /* 10pt — secondary labels, combo items, hints */
+  --text-m:   15px;  /* 11pt — body copy, message text */
+  --text-l:   17px;  /* 13pt — peer name / section headings */
+  --text-xl:  21px;  /* 16pt — header glyph / launcher prompt */
+
+  /* Display sizes (web surfaces only — not present in the panel) */
+  --text-2xl: 28px;
+  --text-3xl: 40px;
+  --text-4xl: 56px;
+
+  /* Weights — the panel uses Medium throughout; Bold for emphasis */
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Line heights */
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+
+  /* Letter spacing */
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+}

@@ -17,8 +17,11 @@ async function get(path: string): Promise<string> {
   }
 }
 
+// The static <title> is the "loading" placeholder app.ts replaces once it
+// knows the executor host (see app.ts: main() / viewList() / renderChatHead()).
+// We just assert the shell was served — the literal text isn't load-bearing.
 const index = await get("/");
-if (!index.includes("<title>pi</title>"))
+if (!index.includes("<title>pi · loading…</title>"))
   throw new Error("index.html missing the app shell");
 
 const appjs = await get("/app.js");
@@ -30,7 +33,7 @@ for (const asset of ["/manifest.webmanifest", "/sw.js", "/icon.svg"])
 
 // Client-side routing: an unknown path serves index.html, not a 404.
 const fallback = await get("/no/such/route");
-if (!fallback.includes("<title>pi</title>"))
+if (!fallback.includes("<title>pi · loading…</title>"))
   throw new Error("SPA fallback did not serve index.html");
 
 console.log("OK: PWA served (index, app.js, manifest, sw, icon, SPA fallback)");

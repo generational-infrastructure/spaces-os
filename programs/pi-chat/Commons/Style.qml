@@ -13,11 +13,16 @@
 //
 // We read the same file noctalia writes (honouring $NOCTALIA_CONFIG_DIR
 // exactly as noctalia does) and watch it, so the panel's corner radius
-// tracks the bar — e.g. a sharp-cornered scheme (radiusRatio 0) makes
-// the chat window sharp too. When settings.json is absent — noctalia not
-// installed, or not yet configured — the JsonAdapter defaults below
-// (all ratios 1.0) reproduce the original constants (8/12/16, border 1,
-// the unscaled margins), so a non-noctalia setup looks exactly as before.
+// tracks the bar — a sharper-cornered scheme makes the chat window
+// sharper too. When settings.json is absent — noctalia not installed,
+// or not yet configured — the JsonAdapter defaults below (all ratios
+// 1.0) reproduce the sharpened base constants (2/4/6, border 1, the
+// unscaled margins). The base radii were tightened from noctalia's
+// 8/12/16 to **2/4/6** to match the Spaces OS design system's crisper,
+// more terminal-adjacent look (see `docs/design-system/source/readme.md` →
+// "Visual foundations / Spacing, radii, borders"). A noctalia scheme
+// that bumps `radiusRatio` above 1.0 can still bring softer corners
+// back in.
 pragma Singleton
 
 import QtQuick
@@ -37,12 +42,14 @@ QtObject {
   // Font weight (only Medium is used)
   readonly property int fontWeightMedium: 500
 
-  // Container radii (noctalia: round(base * general.radiusRatio))
-  readonly property int radiusXS: Math.round(8 * general.radiusRatio)
-  readonly property int radiusS: Math.round(12 * general.radiusRatio)
+  // Container radii (noctalia: round(base * general.radiusRatio)).
+  // Bases tightened from 8/12 to 2/4 per the design system.
+  readonly property int radiusXS: Math.round(2 * general.radiusRatio)
+  readonly property int radiusS: Math.round(4 * general.radiusRatio)
 
-  // Input radius (NIconButton/NButton — noctalia scales these by iRadiusRatio)
-  readonly property int iRadiusM: Math.round(16 * general.iRadiusRatio)
+  // Input radius (NIconButton/NButton — noctalia scales these by iRadiusRatio).
+  // Base tightened from 16 to 6 per the design system.
+  readonly property int iRadiusM: Math.round(6 * general.iRadiusRatio)
 
   // Border width (noctalia: max(1, round(1 * scaleRatio)))
   readonly property int borderS: Math.max(1, Math.round(1 * uiScaleRatio))
