@@ -19,7 +19,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -50,6 +49,7 @@ import {
   buildBashSandboxArgv,
   type SandboxBind,
 } from "./sandbox";
+import { stageFile } from "./staging";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -193,10 +193,10 @@ const AGENT_DIR = `${STATE_DIR}/pi-agent`;
 mkdirSync(AGENT_DIR, { recursive: true });
 mkdirSync(`${STATE_DIR}/sessions`, { recursive: true });
 if (SETTINGS_TEMPLATE) {
-  copyFileSync(SETTINGS_TEMPLATE, `${AGENT_DIR}/settings.json`);
+  stageFile(SETTINGS_TEMPLATE, `${AGENT_DIR}/settings.json`);
 }
 if (BASH_CONFIRM_TEMPLATE) {
-  copyFileSync(BASH_CONFIRM_TEMPLATE, `${AGENT_DIR}/bash-confirm.json`);
+  stageFile(BASH_CONFIRM_TEMPLATE, `${AGENT_DIR}/bash-confirm.json`);
 }
 // The SDK resolves its agent dir from this env (auth.json, sessions/, …).
 process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
