@@ -1,0 +1,24 @@
+<!-- @dsCard group="Spacing" viewport="700x210" name="Spacing scale" subtitle="Tight, dense steps from Style.qml margins — 2 · 4 · 6 · 9 · 13, extended for web" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; background: var(--m-surface); padding: 22px; font-family: var(--font-sans); color: var(--m-on-surface); }
+  .row { display: flex; align-items: center; gap: 14px; padding: 3px 0; }
+  .tag { flex: none; width: 120px; font: var(--weight-medium) var(--text-xs)/1 var(--font-mono); color: var(--m-on-surface-variant); }
+  .bar { height: 14px; background: var(--m-primary); border-radius: 3px; }
+</style>
+</head>
+<body>
+  <div class="row"><span class="tag">xxs · 2</span><span class="bar" style="width: 2px;"></span></div>
+  <div class="row"><span class="tag">xs · 4</span><span class="bar" style="width: 4px;"></span></div>
+  <div class="row"><span class="tag">s · 6</span><span class="bar" style="width: 6px;"></span></div>
+  <div class="row"><span class="tag">m · 9</span><span class="bar" style="width: 9px;"></span></div>
+  <div class="row"><span class="tag">l · 13</span><span class="bar" style="width: 13px;"></span></div>
+  <div class="row"><span class="tag">xl · 18</span><span class="bar" style="width: 18px;"></span></div>
+  <div class="row"><span class="tag">2xl · 26</span><span class="bar" style="width: 26px;"></span></div>
+  <div class="row"><span class="tag">3xl · 40</span><span class="bar" style="width: 40px;"></span></div>
+</body>
+</html>

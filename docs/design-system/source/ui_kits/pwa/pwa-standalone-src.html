@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-chat — PWA</title>
+<meta name="ext-resource-dependency" content="../../assets/icons/brain.svg" data-resource-id="brain" />
+<meta name="ext-resource-dependency" content="../../assets/icons/check.svg" data-resource-id="check" />
+<meta name="ext-resource-dependency" content="../../assets/icons/chevron-down.svg" data-resource-id="chevron-down" />
+<meta name="ext-resource-dependency" content="../../assets/icons/chevron-up.svg" data-resource-id="chevron-up" />
+<meta name="ext-resource-dependency" content="../../assets/icons/corner-down-right.svg" data-resource-id="corner-down-right" />
+<meta name="ext-resource-dependency" content="../../assets/icons/database-off.svg" data-resource-id="database-off" />
+<meta name="ext-resource-dependency" content="../../assets/icons/dots-vertical.svg" data-resource-id="dots-vertical" />
+<meta name="ext-resource-dependency" content="../../assets/icons/edit.svg" data-resource-id="edit" />
+<meta name="ext-resource-dependency" content="../../assets/icons/eraser.svg" data-resource-id="eraser" />
+<meta name="ext-resource-dependency" content="../../assets/icons/eye-off.svg" data-resource-id="eye-off" />
+<meta name="ext-resource-dependency" content="../../assets/icons/eye.svg" data-resource-id="eye" />
+<meta name="ext-resource-dependency" content="../../assets/icons/gauge.svg" data-resource-id="gauge" />
+<meta name="ext-resource-dependency" content="../../assets/icons/key.svg" data-resource-id="key" />
+<meta name="ext-resource-dependency" content="../../assets/icons/message-chatbot.svg" data-resource-id="message-chatbot" />
+<meta name="ext-resource-dependency" content="../../assets/icons/message-circle-off.svg" data-resource-id="message-circle-off" />
+<meta name="ext-resource-dependency" content="../../assets/icons/message-circle.svg" data-resource-id="message-circle" />
+<meta name="ext-resource-dependency" content="../../assets/icons/microphone-off.svg" data-resource-id="microphone-off" />
+<meta name="ext-resource-dependency" content="../../assets/icons/microphone.svg" data-resource-id="microphone" />
+<meta name="ext-resource-dependency" content="../../assets/icons/paperclip.svg" data-resource-id="paperclip" />
+<meta name="ext-resource-dependency" content="../../assets/icons/plus.svg" data-resource-id="plus" />
+<meta name="ext-resource-dependency" content="../../assets/icons/rotate.svg" data-resource-id="rotate" />
+<meta name="ext-resource-dependency" content="../../assets/icons/search.svg" data-resource-id="search" />
+<meta name="ext-resource-dependency" content="../../assets/icons/send.svg" data-resource-id="send" />
+<meta name="ext-resource-dependency" content="../../assets/icons/settings.svg" data-resource-id="settings" />
+<meta name="ext-resource-dependency" content="../../assets/icons/sparkles.svg" data-resource-id="sparkles" />
+<meta name="ext-resource-dependency" content="../../assets/icons/x.svg" data-resource-id="x" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--font-sans);
+    background: #04040f;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 16px;
+  }
+  ::-webkit-scrollbar { width: 0; height: 0; }
+</style>
+<template id="__bundler_thumbnail" data-bg-color="#04040f">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#04040f"/>
+    <rect x="470" y="250" width="260" height="300" rx="20" fill="#11112d" stroke="#21215f" stroke-width="3"/>
+    <rect x="500" y="300" width="150" height="22" rx="5" fill="#fff59b"/>
+    <rect x="500" y="345" width="200" height="14" rx="5" fill="#7c80b4"/>
+    <rect x="500" y="380" width="120" height="14" rx="5" fill="#7c80b4"/>
+    <circle cx="690" cy="470" r="34" fill="#fff59b"/>
+    <path d="M676 470 l10 10 l20 -22" stroke="#0e0e43" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</template>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="kit.standalone.jsx"></script>
+<script type="text/babel" src="pwa.jsx"></script>
+</body>
+</html>

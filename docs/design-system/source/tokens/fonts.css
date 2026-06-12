@@ -1,0 +1,15 @@
+/* ============================================================
+   Spaces OS — Webfonts
+   Inter + JetBrains Mono are the exact families used by the pi-chat
+   panel (Settings.qml: fontDefault / fontFixed). On the NixOS target
+   they are installed system fonts; for web/PWA surfaces we load them
+   from Google Fonts (the upstream source for both families).
+
+   NOTE: this @import pulls @font-face rules from Google's CDN, so the
+   webfont binaries are served by Google rather than vendored in-repo.
+   If you need a fully offline / self-hosted bundle, drop the .woff2
+   files into assets/fonts/ and replace this import with local
+   @font-face rules pointing at them.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");

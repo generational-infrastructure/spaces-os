@@ -1,0 +1,54 @@
+<!-- @dsCard group="Components" viewport="700x540" name="Chat" subtitle="Bubble (own / peer / thinking / notification) · ConfirmCard" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; background: var(--m-surface); padding: 22px; font-family: var(--font-sans); color: var(--m-on-surface); }
+  .col { display: flex; flex-direction: column; gap: 9px; max-width: 470px; margin: 0 auto; }
+  .row { display: flex; }
+  .row.me { justify-content: flex-end; }
+  .bub { max-width: 85%; border-radius: var(--radius-s); padding: 9px; display: flex; flex-direction: column; gap: 3px; }
+  .bub.me { background: var(--m-primary); color: var(--m-on-primary); }
+  .bub.peer { background: var(--m-surface-variant); border: 1px solid var(--m-outline); color: var(--m-on-surface); }
+  .txt { font: var(--weight-medium) var(--text-m)/1.5 var(--font-sans); white-space: pre-wrap; }
+  .meta { display: flex; gap: 6px; font: var(--weight-medium) var(--text-xs)/1 var(--font-sans); }
+  .me .meta { justify-content: flex-end; color: var(--overlay-on-primary-60); }
+  .peer .meta { color: var(--m-on-surface-variant); }
+  .quote { background: var(--overlay-on-primary-15); color: var(--overlay-on-primary-60); border-radius: var(--radius-xs); padding: 4px 8px; font: var(--weight-medium) var(--text-xs)/1.4 var(--font-sans); }
+  .notif { text-align: center; color: var(--overlay-on-surface-45); font: var(--weight-medium) var(--text-s)/1.4 var(--font-sans); }
+  .think { color: var(--overlay-on-surface-45); font: italic var(--weight-medium) var(--text-s)/1.5 var(--font-sans); }
+  .card { background: var(--m-surface-variant); border-radius: var(--radius-s); padding: 9px; display: flex; flex-direction: column; gap: 6px; }
+  .card.pending { border: 1px solid var(--m-primary); }
+  .card.allowed { border: 1px solid var(--m-tertiary); }
+  .card .hd { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .card .ttl { font: var(--weight-bold) var(--text-m)/1.2 var(--font-sans); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: var(--radius-input); border: 1px solid var(--m-outline); background: var(--m-surface-variant); font: var(--weight-medium) var(--text-xs)/1 var(--font-mono); color: var(--m-primary); }
+  .cmd { margin: 0; background: var(--m-surface); border: 1px solid var(--m-outline); border-radius: var(--radius-xs); padding: 6px 9px; font: var(--weight-medium) var(--text-s)/1.5 var(--font-mono); color: var(--m-on-surface); white-space: pre-wrap; }
+  .acts { display: flex; justify-content: flex-end; gap: 6px; align-items: center; }
+  .b { display: inline-flex; align-items: center; height: 28px; padding: 0 13px; border-radius: var(--radius-input); border: 1px solid var(--m-outline); font: var(--weight-medium) var(--text-m)/1 var(--font-sans); }
+  .ic { width: 11px; height: 11px; display: inline-flex; }
+  .ic svg { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<div class="col">
+  <div class="notif">kiwi · new session</div>
+  <div class="row me"><div class="bub me"><div class="txt">scan the deploy script for footguns</div><div class="meta">3m ✓✓</div></div></div>
+  <div class="row"><div class="think">Reasoning about the rollback path…</div></div>
+  <div class="row"><div class="bub peer"><div class="txt">Found two: no `set -e`, and the migration runs before the health check. Patch both?</div><div class="meta">2m · 48.2 t/s</div></div></div>
+  <div class="row me"><div class="bub me"><div class="quote">↳ Patch both?</div><div class="txt">yes, patch both</div><div class="meta">1m ✓</div></div></div>
+  <div class="card pending">
+    <div class="hd"><span class="ttl">Run shell command?</span><span class="chip"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--m-tertiary);"></span>kiwi</span></div>
+    <pre class="cmd">sed -i '1i set -euo pipefail' deploy.sh</pre>
+    <div class="acts"><span class="b" style="background: var(--m-surface-variant); color: var(--m-on-surface);">Deny</span><span class="b" style="background: var(--m-primary); color: var(--m-on-primary);">Allow</span></div>
+  </div>
+  <div class="card allowed">
+    <div class="hd"><span class="ttl">Run shell command?</span></div>
+    <pre class="cmd">git push --force-with-lease</pre>
+    <div class="acts"><span style="font: var(--weight-medium) var(--text-xs)/1 var(--font-sans); color: var(--m-on-surface-variant);">answered on iPhone</span><span style="font: var(--weight-bold) var(--text-s)/1 var(--font-sans); color: var(--m-tertiary);">✓ allowed</span></div>
+  </div>
+</div>
+</body>
+</html>
