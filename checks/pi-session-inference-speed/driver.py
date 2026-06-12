@@ -12,10 +12,11 @@ Injects mock pi RPC events into PiSession via quickshell IPC and asserts:
   4. agent_end resets the tps clock so the next assistant message
      starts fresh.
 
-Elapsed time is pinned by backdating PiSession._assistantStartedAt via
-IPC right before the message_end injection, so the assertion compares
-a deterministic elapsed delta to the computed tps — not Date.now()
-itself.
+Elapsed time is pinned atomically: injectEventWithElapsed backdates
+PiSession._assistantStartedAt and injects the message_end in the same
+IPC call (one synchronous JS frame), so the assertion compares a
+deterministic elapsed delta to the computed tps — no IPC round-trip
+latency can leak into the measured window.
 
 No pi-sessiond, no executor, no LLM, no compositor — events are injected
 straight into PiSession._handleEvent. ~3s.
@@ -83,8 +84,15 @@ def inject(qs_bin, shell_qml, env, event):
     qs_ipc_call(qs_bin, shell_qml, env, "injectEvent", json.dumps(event))
 
 
-def set_elapsed(qs_bin, shell_qml, env, elapsed_ms):
-    qs_ipc_call(qs_bin, shell_qml, env, "setElapsedMs", str(elapsed_ms))
+def inject_with_elapsed(qs_bin, shell_qml, env, elapsed_ms, event):
+    qs_ipc_call(
+        qs_bin,
+        shell_qml,
+        env,
+        "injectEventWithElapsed",
+        str(elapsed_ms),
+        json.dumps(event),
+    )
 
 
 def get_started_at(qs_bin, shell_qml, env):
@@ -228,11 +236,11 @@ def main():
             },
         )
 
-        set_elapsed(qs_bin, shell_qml, env, 2_000)
-        inject(
+        inject_with_elapsed(
             qs_bin,
             shell_qml,
             env,
+            2_000,
             {
                 "type": "message_end",
                 "message": assistant_message(100),
@@ -245,11 +253,11 @@ def main():
             cleanup()
             fail(f"no text bubble after text_start/end: {msgs}")
         tps = text_bubble.get("tps", 0)
-        # Tolerance covers IPC round-trip jitter between setElapsedMs and
-        # the message_end injection (~10-50 ms typically).
-        if abs(tps - 50.0) > 2.0:
+        # Backdate and injection share one JS frame; only a ~1 ms clock
+        # tick can drift the window.
+        if abs(tps - 50.0) > 0.5:
             cleanup()
-            fail(f"expected tps≈50.0 (±2.0), got {tps!r} in {text_bubble}")
+            fail(f"expected tps≈50.0 (±0.5), got {tps!r} in {text_bubble}")
         if text_bubble.get("outputTokens") != 100:
             cleanup()
             fail(f"expected outputTokens=100, got {text_bubble.get('outputTokens')!r}")
@@ -298,11 +306,11 @@ def main():
                 },
             },
         )
-        set_elapsed(qs_bin, shell_qml, env, 1_000)
-        inject(
+        inject_with_elapsed(
             qs_bin,
             shell_qml,
             env,
+            1_000,
             {
                 "type": "message_end",
                 "message": assistant_message(0),

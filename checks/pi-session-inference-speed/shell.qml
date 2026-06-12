@@ -3,10 +3,10 @@
 // tps is computed from `message_end.message.usage.output` over the
 // wall clock since the first text_start of the assistant message.
 //
-// Tests pin elapsed time by writing PiSession's internal
-// `_assistantStartedAt` to (now - elapsedMs) right before the
-// message_end injection, so the deterministic part is the elapsed
-// delta — not Date.now() itself.
+// Tests pin elapsed time atomically: injectEventWithElapsed backdates
+// PiSession's internal `_assistantStartedAt` to (now - elapsedMs) and
+// injects the event in the same synchronous call, so no IPC round-trip
+// latency can leak into the measured window.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -32,12 +32,15 @@ Item {
     }
 
     // Pin elapsed time for the active assistant message by backdating
-    // _assistantStartedAt. Negative or zero elapsedMs leaves the field
-    // alone.
-    function setElapsedMs(elapsedMs: int) {
+    // _assistantStartedAt, then inject the event in the same call.
+    // Backdate and injection share one synchronous JS frame, so the
+    // elapsed delta the event sees is exact (±1 ms clock tick).
+    function injectEventWithElapsed(elapsedMs: int, jsonStr: string) {
+      const ev = JSON.parse(jsonStr);
       if (elapsedMs > 0) {
         session._assistantStartedAt = Date.now() - elapsedMs;
       }
+      session._handleEvent(ev);
     }
 
     // Read the current value so the driver can confirm reset after agent_end.
