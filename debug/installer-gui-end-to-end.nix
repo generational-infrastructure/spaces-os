@@ -247,17 +247,20 @@ let
         text = installer.get_screen_text()
         print(f"Screen after escape: {text[:500]}")
 
-        # Calamares welcome page shows sidebar with "Install", "Finish",
-        # "Release notes", "Cancel" etc.  Verify it's there via manual
-        # OCR loop for better diagnostic output.
+        # Calamares welcome page detection. Match only welcome-page-specific
+        # text: generic sidebar words fire on the boot console (systemd's
+        # "Finished ..." lines match a bare "Finish") before GNOME has even
+        # painted, desyncing every subsequent click. Dismiss the GNOME
+        # Activities overview each round, like the welcome-screenshot harness.
         calamares_found = False
-        for attempt in range(30):  # 30s
+        for attempt in range(60):  # up to ~120s
+            installer.send_key("esc")
             text = installer.get_screen_text()
             print(f"Welcome OCR attempt {attempt}: {text[:200]}")
-            if re.search(r"(Release notes|Cancel|American English|Partitions|Summary|Finish)", text):
+            if re.search(r"(American English|Release notes|Known issues|Every Space|foundation)", text):
                 calamares_found = True
                 break
-            installer.sleep(1)
+            installer.sleep(2)
         if not calamares_found:
             dump_state(installer, "welcome-not-found")
             raise Exception("Calamares welcome page not detected")
@@ -368,8 +371,15 @@ let
         # in the test output instead of staring at a black box.
         install_deadline = time.monotonic() + 1800
         last_log_size = 0
+        slideshow_shots = 0
         done_pattern = re.compile(r"(finished|Finished|complete|All done|restart|Restart|Done|Installation Failed)")
         while time.monotonic() < install_deadline:
+            # Capture the branding slideshow early in the exec phase: with
+            # its 10s slide interval and this loop's 15s cadence, three
+            # shots should land on different hero-inner frames.
+            if slideshow_shots < 3:
+                installer.screenshot(f"06b-exec-slideshow-{slideshow_shots}")
+                slideshow_shots += 1
             # Tail new bytes from calamares.log.
             status, log_path = installer.execute(
                 "ls -1t /var/log/calamares/Calamares-*.log 2>/dev/null | head -1"

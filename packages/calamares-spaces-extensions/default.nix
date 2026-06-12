@@ -73,6 +73,17 @@ base.overrideAttrs (old: {
     # iridescent knot with the mockup's dashed grid + coral accents baked in.
     cp -f ${spaces-logos}/spaces-hero.png branding/spaces-os/spaces-hero.png
 
+    # Install-step slideshow: replace the inherited NixOS show.qml (and its
+    # now-unreferenced gfx-landing-* art) with the Spaces three-frame cycle.
+    # The frames are the hero's inner panel themed per slogan, shipped via
+    # the same spaces-logos FOD as the other marks.
+    cp -f ${lib.cleanSource ./files/branding/spaces-os/show.qml} branding/spaces-os/show.qml
+    rm branding/spaces-os/gfx-landing-*.png
+    cp -f ${spaces-logos}/hero-inner-declarative.png \
+      ${spaces-logos}/hero-inner-reliable.png \
+      ${spaces-logos}/hero-inner-reproducable.png \
+      branding/spaces-os/
+
     # Custom QML sidebar (branding.desc `sidebar: qml`) and its wordmark header.
     cp -f ${lib.cleanSource ./files/branding/spaces-os/calamares-sidebar.qml} \
       branding/spaces-os/calamares-sidebar.qml

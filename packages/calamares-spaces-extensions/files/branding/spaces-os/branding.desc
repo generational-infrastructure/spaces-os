@@ -8,7 +8,8 @@
 # (installer-iso/postPatch does `cp -r branding/nixos branding/spaces-os`).
 # The logos are the real Spaces OS marks (spaces-logo.svg, and
 # spaces-logo-white.svg for the blue sidebar), copied in by default.nix.
-# The slideshow `gfx-*` art is still upstream NixOS — swap that later.
+# The install-step slideshow (show.qml + hero-inner-* frames) is Spaces
+# art too, replacing the upstream gfx-landing-* slides.
 ---
 componentName:  spaces-os
 
