@@ -7,8 +7,8 @@
 # whose tokenPath is $XDG_RUNTIME_DIR/pi-sessiond-local/token, then
 # authenticates against a fake pi-sessiond with the token-file content
 # (hello -> welcome) — and, without `localExecutor`, keeps the executors
-# list empty so local spawn stays the default. No compositor, pi, LLM,
-# or VM. ~10s.
+# list empty (the transient no-executor state; spawns defer until an
+# executor is configured). No compositor, pi, LLM, or VM. ~10s.
 { pkgs, ... }:
 let
   py = pkgs.python3.withPackages (ps: [ ps.websockets ]);

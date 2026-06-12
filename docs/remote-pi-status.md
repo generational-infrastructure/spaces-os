@@ -108,7 +108,9 @@ Verified GREEN (formatted sources): `pi-sessiond-sandbox`,
 jsonl-persist / 2-client mirror / list_sessions / daemon-restart cold-resume /
 get_state), `pi-web-e2e` (connect / streamed reply / confirm+Allow), and — the
 real quickshell panel against the migrated daemon — `pi-chat-remote` (panel →
-remote executor) + `pi-chat-local-executor` (panel → loopback executor), plus
+remote executor) + `pi-chat-local-executor` (panel → loopback executor; since
+removed as redundant — `test-machine` boots the shipping self-hosted topology
+and `pi-chat-remote` covers panel → system `pi-sessiond`), plus
 the unaffected `pi-web-serve` / `pi-web-reducer` / `pi-session-ws`.
 
 Running the panel↔daemon VM tests caught a migration regression the daemon-only
@@ -192,18 +194,19 @@ path** only.
 
 ## Missing — by stage
 
-- [~] **Stage 1 deploy — validated.** `checks/pi-chat-local-executor` boots a
-  full desktop that self-hosts `pi-sessiond` on `127.0.0.1` with the panel at
-  `ws://127.0.0.1:8770`, and drives a sandboxed session end-to-end (daemon +
-  panel coexisting on one machine). Decision: **keep dual-transport** — the WS
-  path doesn't yet carry skill-config / side-channels, so cutting the local
-  Process path would regress the desktop. The **client-side `tokenFile` is now
-  done** — `services.pi-chat.wsTokenFile` (+ a per-executor `tokenFile`) stages
-  the `hello` token into `/run/spaces-secrets` (root:users 0640), read by the
-  panel at connect time instead of from the world-readable config; verified by
-  `checks/pi-session-ws` (token-from-file auth) + `checks/pi-chat-tokenfile-nix-eval`.
-  Remaining: a one-flag bundle toggle to default the WS path on, once it reaches
-  skill-config / side-channel parity.
+- [x] **Stage 1 deploy — done and superseded.** The loopback-executor topology
+  was first validated by `checks/pi-chat-local-executor` (full desktop
+  self-hosting `services.pi-sessiond` on `127.0.0.1`, panel attached over WS).
+  The migration has since landed: the panel's local Process path is deleted,
+  every desktop self-hosts the per-user `pi-sessiond-local` executor by default
+  (`services.pi-chat.localExecutor`, default-on), and `checks/test-machine.nix`
+  boots that shipping topology end-to-end — so the stage-1 check was removed as
+  redundant (`pi-chat-remote` keeps covering panel → system `pi-sessiond`).
+  The **client-side `tokenFile` is done** — `services.pi-chat.wsTokenFile`
+  (+ a per-executor `tokenFile`) stages the `hello` token into
+  `/run/spaces-secrets` (root:users 0640), read by the panel at connect time
+  instead of from the world-readable config; verified by `checks/pi-session-ws`
+  (token-from-file auth) + `checks/pi-chat-tokenfile-nix-eval`.
 - [x] **Stage 2 — registry/n:m — done (daemon side).** `list_sessions` verb +
   `sessions` envelope merge live + cold sessions ({id, name, executor, state,
   updated}); `create_session.name` persisted in the meta sidecar. Multi-client

@@ -10,11 +10,12 @@ $SPACES_PI_CHAT_CONFIG seam at a fixture config, and asserts:
   (b) the executor authenticates against a fake pi-sessiond whose expected
       token is the token FILE's content (hello -> welcome), proving the
       tokenPath plumbing end-to-end;
-  (c) regression: without localExecutor the executors list stays empty, so
-      "" / local spawn remains the default.
+  (c) regression: without localExecutor the executors list stays empty —
+      the transient no-executor state (spawns defer until configured).
 
-This is the cheap per-feature counterpart to the full VM test: no
-compositor, no pi, no LLM, no VM. ~10s.
+This is the cheap per-feature counterpart to the full test-machine VM
+test (which boots the shipping self-hosted topology): no compositor, no
+pi, no LLM, no VM. ~10s.
 
 Usage: driver.py <quickshell_bin> <test_dir> <plugin_dir> <work_dir> <fake_daemon>
 """
