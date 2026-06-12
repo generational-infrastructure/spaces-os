@@ -253,9 +253,16 @@ Item {
   }
 
   function _loadFromAdapter() {
-    const raw = root._sessions.sessions || [];
-    if (Array.isArray(raw) && raw.length > 0) {
-      sessionsList = raw.slice();
+    // JsonAdapter `var` properties surface as V4 sequence references
+    // (QVariantList wrappers), NOT JS Arrays: Array.isArray() is false
+    // even when entries exist. Guarding on it sent every panel restart
+    // down the bootstrap branch below, which then _persist()ed the
+    // fresh "Chat 1" over the loaded file — wiping the session index
+    // on disk and orphaning the daemon sessions it pointed at.
+    // slice.call normalizes any indexable sequence into a real Array.
+    const raw = Array.prototype.slice.call(root._sessions.sessions || []);
+    if (raw.length > 0) {
+      sessionsList = raw;
       activeSessionId = root._sessions.activeSessionId || raw[0].id;
     } else {
       // Bootstrap: auto-create one default session so the panel has

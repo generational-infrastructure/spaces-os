@@ -54,6 +54,20 @@ let
     { networking.hostName = "loopback-off"; }
   ];
 
+  # A system importing ONLY the pi-chat module: enabling the panel must
+  # bring the loopback executor with it (localExecutor.enable defaults
+  # true) — the panel has no other execution path. Guards against the
+  # default regressing to opt-in, which would ship a panel that can
+  # never run a session unless a bundle (spaces.nix) re-enables it.
+  panelOnlySystem = mkSystem [
+    inputs.self.nixosModules.pi-chat
+    {
+      networking.hostName = "panel-only";
+      services.pi-chat.enable = true;
+    }
+  ];
+  panelDaemon = panelOnlySystem.config.systemd.user.services.pi-sessiond-local or null;
+
   daemon = enabledSystem.config.systemd.user.services.pi-sessiond-local;
   tokenUnit = enabledSystem.config.systemd.user.services.pi-sessiond-local-token;
 
@@ -79,6 +93,15 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     disabledHasDaemon = if (disabledServices.pi-sessiond-local or null) == null then "no" else "yes";
     disabledHasToken =
       if (disabledServices.pi-sessiond-local-token or null) == null then "no" else "yes";
+    panelOnlyDaemonEnabled =
+      if panelOnlySystem.config.services.pi-sessiond-local.enable then "yes" else "no";
+    panelOnlyHasDaemonUnit = if panelDaemon == null then "no" else "yes";
+    # The forwarding contract is engaged, not just the enable bit: the
+    # daemon's per-bash env carries the skill-config socket only when
+    # pi-chat's localExecutor wiring populated bashEnv.
+    panelOnlyBashEnv =
+      if panelDaemon == null then "{}" else panelDaemon.environment.SPACES_SESSIOND_BASH_ENV;
+    panelOnlyDefaultExecutor = panelOnlySystem.config.services.pi-chat.defaultExecutor;
   }
   ''
     set -euo pipefail
@@ -128,6 +151,16 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     # ── 4. enable = false generates neither unit ────────────────────
     [ "$disabledHasDaemon" = "no" ] || fail "disabled module still declares the daemon unit"
     [ "$disabledHasToken"  = "no" ] || fail "disabled module still declares the token unit"
+
+    # ── 5. pi-chat alone brings the loopback executor (default-on) ──
+    [ "$panelOnlyDaemonEnabled" = "yes" ] \
+      || fail "pi-chat-only import left services.pi-sessiond-local.enable false"
+    [ "$panelOnlyHasDaemonUnit" = "yes" ] \
+      || fail "pi-chat-only import generated no pi-sessiond-local unit"
+    jq -e '.SKILL_CONFIG_SOCKET == "%t/spaces-skill-config.sock"' <<<"$panelOnlyBashEnv" >/dev/null \
+      || fail "pi-chat-only import did not forward the skill env into the daemon"
+    [ "$panelOnlyDefaultExecutor" = "host" ] \
+      || fail "pi-chat-only import did not default-pin sessions at the loopback executor"
 
     touch "$out"
   ''
