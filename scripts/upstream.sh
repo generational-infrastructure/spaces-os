@@ -27,9 +27,12 @@ fi
 jj git fetch
 jj rebase -o "trunk()"
 nix fmt
+# Snapshot the tip to publish *before* the long-running checks. Tests
+# can take minutes; if new commits land while they run they haven't been
+# verified, so capture the latest non-empty commit now and publish
+# exactly that revision — `jj new` may also have left @ as an empty
+# working-copy commit, which would publish a no-op.
+target=$(jj log --no-graph -r 'heads(::@ ~ empty())' -T 'commit_id')
 nix flake check
-# `jj new` may have left @ as an empty working-copy commit; setting
-# the bookmark there would publish a no-op. Walk back to the latest
-# non-empty ancestor so the published tip is the actual work.
-jj bookmark set main -r 'heads(::@ ~ empty())'
+jj bookmark set main -r "$target"
 jj git push

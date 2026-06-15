@@ -1174,6 +1174,81 @@ class TestClassifyAndSelf(unittest.TestCase):
             )
         )
 
+    def test_envelope_to_message_sync_note_to_self(self) -> None:
+        # A Note-to-Self typed on the primary phone reaches this linked
+        # device as syncMessage.sentMessage (NOT dataMessage), with the
+        # destination pointing back at our own account.
+        out = bridge_mod.envelope_to_message(
+            {
+                "envelope": {
+                    "sourceUuid": "acct-uuid",
+                    "sourceName": "Me",
+                    "timestamp": 1700000000000,
+                    "syncMessage": {
+                        "sentMessage": {
+                            "destination": "+1",
+                            "destinationUuid": "acct-uuid",
+                            "timestamp": 1700000000000,
+                            "message": "remember the milk",
+                        }
+                    },
+                }
+            },
+            account={"uuid": "acct-uuid", "number": "+1"},
+        )
+        self.assertIsNotNone(out)
+        self.assertEqual(out["thread_kind"], "self")
+        self.assertEqual(out["thread_id"], "acct-uuid")
+        self.assertEqual(out["body"], "remember the milk")
+
+    def test_envelope_to_message_sync_sent_to_contact(self) -> None:
+        # A message sent from another linked device to a real contact
+        # also arrives as syncMessage.sentMessage; it must route to that
+        # contact's DM thread, not note-to-self.
+        out = bridge_mod.envelope_to_message(
+            {
+                "envelope": {
+                    "sourceUuid": "acct-uuid",
+                    "timestamp": 1700000000000,
+                    "syncMessage": {
+                        "sentMessage": {
+                            "destinationUuid": "uuid-bob",
+                            "timestamp": 1700000000000,
+                            "message": "hi bob",
+                        }
+                    },
+                }
+            },
+            account={"uuid": "acct-uuid", "number": "+1"},
+        )
+        self.assertIsNotNone(out)
+        self.assertEqual(out["thread_kind"], "dm")
+        self.assertEqual(out["thread_id"], "uuid-bob")
+        self.assertEqual(out["body"], "hi bob")
+
+    def test_envelope_to_message_sync_to_group(self) -> None:
+        # Group sends from another linked device carry groupInfo inside
+        # the sentMessage; route by group id.
+        out = bridge_mod.envelope_to_message(
+            {
+                "envelope": {
+                    "sourceUuid": "acct-uuid",
+                    "timestamp": 1700000000000,
+                    "syncMessage": {
+                        "sentMessage": {
+                            "timestamp": 1700000000000,
+                            "message": "hi crew",
+                            "groupInfo": {"groupId": "GROUP=1"},
+                        }
+                    },
+                }
+            },
+            account={"uuid": "acct-uuid", "number": "+1"},
+        )
+        self.assertIsNotNone(out)
+        self.assertEqual(out["thread_kind"], "group")
+        self.assertEqual(out["thread_id"], "GROUP=1")
+
 
 class TestStartupSync(BridgeHarness):
     def test_sendSyncRequest_issued_for_each_account_at_startup(self) -> None:

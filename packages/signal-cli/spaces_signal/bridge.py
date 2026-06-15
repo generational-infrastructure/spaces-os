@@ -158,6 +158,13 @@ def envelope_to_message(envelope: dict, account: dict | None = None) -> dict | N
     """
     env = envelope.get("envelope") or envelope
     data = env.get("dataMessage") or {}
+    if not data.get("message") and not data.get("attachments"):
+        # No inbound dataMessage: this may be a sent transcript synced
+        # from another linked device of *this* account (incl. note-to-
+        # self typed on the primary phone). signal-cli surfaces those as
+        # syncMessage.sentMessage, never dataMessage — treat the sent
+        # message as the content source.
+        data = (env.get("syncMessage") or {}).get("sentMessage") or {}
     body = data.get("message")
     if body is None and not data.get("attachments"):
         # Typing/receipt-only envelopes: nothing the agent can read.
@@ -173,17 +180,25 @@ def envelope_to_message(envelope: dict, account: dict | None = None) -> dict | N
     if group_id:
         thread_id = group_id
         thread_kind = "group"
-    else:
-        # DM: thread_id is the other side. For sync messages (sent from
-        # another linked device of *this* account), `destination` carries
-        # the conversation partner.
-        destination = data.get("destination") or env.get("destinationUuid")
-        if account and source_uuid == account.get("uuid"):
-            thread_id = destination or source_uuid or "self"
-            thread_kind = "self" if thread_id == source_uuid else "dm"
+    elif account and source_uuid == account.get("uuid"):
+        # Outbound transcript from one of our own linked devices. The
+        # sentMessage's destination is the conversation partner; a
+        # missing or own-identity destination means note-to-self.
+        destination = (
+            data.get("destinationUuid")
+            or data.get("destination")
+            or env.get("destinationUuid")
+        )
+        own = {account.get("uuid"), account.get("number")} - {None}
+        if not destination or destination in own:
+            thread_id = account.get("uuid") or destination or "self"
+            thread_kind = "self"
         else:
-            thread_id = source_uuid or env.get("source") or "unknown"
+            thread_id = destination
             thread_kind = "dm"
+    else:
+        thread_id = source_uuid or env.get("source") or "unknown"
+        thread_kind = "dm"
 
     expires_at_ms = None
     expires_in_seconds = data.get("expiresInSeconds") or 0
