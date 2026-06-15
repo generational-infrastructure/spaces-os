@@ -50,7 +50,7 @@ def _enqueue_socket_path() -> str:
 
 _ONBOARDING_HINT = (
     "if signal-cli has never been linked on this host, run on your "
-    'host shell:\n  signal-cli link -n "$(hostname)-pi"\n'
+    'host shell:\n  signal-cli link -n "spaces-$(hostname)"\n'
     "and scan the printed tsdevice: URL with your phone's Signal app."
 )
 

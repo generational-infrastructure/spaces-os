@@ -26,7 +26,7 @@
 #
 # Linking flow (one-time, must be done by the human; the agent never
 # runs this):
-#   $ signal-cli link -n "$(hostname)-pi"
+#   $ signal-cli link -n "spaces-$(hostname)"
 #   <scan the printed tsdevice:/?... URL with primary Signal device>
 #   $ systemctl --user restart spaces-signal-cli
 #

@@ -245,7 +245,7 @@ have both.
 
 * `error: signal infrastructure not running` →
   the user hasn't linked yet. Tell them to run `signal-cli link -n
-  "$(hostname)-pi"` on their host terminal and scan the QR. Don't
+  "spaces-$(hostname)"` on their host terminal and scan the QR. Don't
   try yourself.
 
 * `error: no linked Signal account` → daemon is up but no identity.
