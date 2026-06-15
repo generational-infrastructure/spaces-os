@@ -34,9 +34,9 @@ same conversation. The same agent. Still running.
 
 <table>
   <tr>
-    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-chats.png" alt="All your chats, across every machine" /></td>
-    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-conversation.png" alt="A conversation with a shell-command confirmation" /></td>
-    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-machines.png" alt="The machines your agents run on" /></td>
+    <td width="33%" valign="top"><img src="https://gist.githubusercontent.com/pinpox/a4d21df750d805007f948158ac3709f0/raw/pwa-chats.png" alt="All your chats, across every machine" /></td>
+    <td width="33%" valign="top"><img src="https://gist.githubusercontent.com/pinpox/a4d21df750d805007f948158ac3709f0/raw/pwa-conversation.png" alt="A conversation with a shell-command confirmation" /></td>
+    <td width="33%" valign="top"><img src="https://gist.githubusercontent.com/pinpox/a4d21df750d805007f948158ac3709f0/raw/pwa-machines.png" alt="The machines your agents run on" /></td>
   </tr>
   <tr>
     <td align="center"><sub><strong>Every chat in one place.</strong> Conversations from all your machines, with live status — <em>working</em>, <em>offline</em>, or <em>needs you</em>.</sub></td>
