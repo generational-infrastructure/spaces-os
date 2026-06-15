@@ -1,244 +1,175 @@
-# Spaces OS
+<p align="center">
+  <img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/e7cd790a84979ea626e241071c49c4c0834e2f59/spaces-hero.png" alt="SpacesOS" width="820" />
+</p>
 
-AI agent desktop integration for NixOS. Chat with a local AI agent
-from a layer-shell panel summoned by a global keybind, with full
-sandboxing and an extensible skill system.
+<h1 align="center">SpacesOS</h1>
 
-The stack: [niri](https://github.com/YaLTeR/niri) (Wayland compositor,
-optional) + [Quickshell](https://quickshell.org) (panel surface) +
-[pi](https://github.com/mariozechner/pi-mono) (coding agent) +
-[llama-swap](https://github.com/mostlygeek/llama-swap) (local LLM
-server) + voice-to-text.
+<p align="center">
+  <strong>A complete operating system with your own AI agent at its heart —
+  self-hosted, sovereign, and built for you.</strong>
+</p>
 
-## Supported compositors
+---
 
-The chat panel uses [`wlr-layer-shell`](https://wayland.app/protocols/wlr-layer-shell-unstable-v1)
-so the surface is anchored to the screen edge and **does not appear in
-alt-tab**. That rules out GNOME (Mutter has no `wlr-layer-shell`).
-Tested compositors: **niri, sway, Hyprland, river, KDE Plasma 6
-(Wayland)**.
+Most people live across a collection of digital products. SpacesOS brings
+them together — a digital environment where your services, data, tools, and
+AI work as one system. Your own AI agent runs on hardware you control, works
+with data you own, and stays with you across all your devices.
 
-The panel coexists with any Wayland desktop shell — including noctalia
-if you happen to run one — because it ships as its own `quickshell -c
-pi-chat` instance with its own IPC namespace.
+**Not another app. A place of your own.**
 
-## Two ways to use it
+It belongs to **you**: no account to sign up for, no company reading your
+conversations, nothing leaving your machines unless you send it. The model
+runs locally, so it works offline and answers to no one but you.
 
-| Integration | What you get | You provide |
-|---|---|---|
-| **Full desktop** | Niri compositor + pi-chat panel + AI agent + local LLM | A NixOS machine |
-| **Panel only** | pi-chat panel + AI agent + local LLM | Your own Wayland compositor (sway/Hyprland/KDE/…) |
+And the agent isn't a chat box bolted on the side — it's woven through the
+system. One shortcut summons it over whatever you're doing, and it can reach
+into your real life — your calendar, your mail, your messages, your files —
+but only ever acts when you say so.
 
-## Binary Cache
+Start a task on your laptop, walk away, and pick it up on your phone. The
+same conversation. The same agent. Still running.
 
-Configure the [numtide binary cache](https://cache.numtide.com/index.html) to
-avoid building dependencies from source.
+## What it feels like
 
-## Setup
+<table>
+  <tr>
+    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-chats.png" alt="All your chats, across every machine" /></td>
+    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-conversation.png" alt="A conversation with a shell-command confirmation" /></td>
+    <td width="33%" valign="top"><img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/HEAD/pwa-machines.png" alt="The machines your agents run on" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>Every chat in one place.</strong> Conversations from all your machines, with live status — <em>working</em>, <em>offline</em>, or <em>needs you</em>.</sub></td>
+    <td align="center"><sub><strong>You hold the keys.</strong> The agent proposes; nothing touches your system until you tap <em>Allow</em>.</sub></td>
+    <td align="center"><sub><strong>Your machines, your models.</strong> See where each agent runs and which local model it's using.</sub></td>
+  </tr>
+</table>
 
-### 1. Full desktop
+> The phone view is a Progressive Web App — add it to your home screen and
+> it behaves like a native app. On the desktop, the very same agent lives
+> in a panel that slides in over your work with **Super + A**.
 
-Import `nixosModules.spaces` for the complete experience: niri compositor, noctalia bar, pi-chat Quickshell panel, AI agent, local LLM server. The module enables the AI agent and greetd auto-login into niri by default.
+## What you can do with it
+
+**Just ask.** Summon the panel, type (or speak) a request, and the agent
+takes it from there.
+
+- 📅 **Calendar & contacts** — "What's on for Thursday?" · "Add lunch with
+  Sam at 1pm" — over your own CalDAV / CardDAV (Nextcloud, Fastmail,
+  Radicale, iCloud…).
+- ✉️ **Email** — read, search, summarise and draft over plain IMAP/SMTP,
+  or your Gmail and Google Calendar.
+- 💬 **Signal** — catch up on messages and reply. Messages to other people
+  only leave once you tap **Send** in the panel.
+- 🗺️ **Maps & places** — find what's nearby and get directions, with your
+  current location available when you allow it.
+- 📚 **Knowledge** — quick, sourced answers from Wikipedia and Wikidata.
+- 🔔 **Your desktop** — glance back over recent notifications, ask what you
+  missed.
+- 🖥️ **Real work** — it's a genuine coding agent underneath, so it can read
+  and edit files and run commands — every shell command gated behind a
+  one-tap confirmation.
+
+New capabilities ("skills") snap in over time. Setting one up is a guided
+popup you fill in directly — **your usernames and credentials never travel
+through the chat.**
+
+## Highlights
+
+- **Yours, and private by default.** The model runs locally via
+  [llama-swap](https://github.com/mostlygeek/llama-swap) on your own GPU.
+  No account, no telemetry, works on a plane. Want a frontier model for a
+  hard question? Add an [OpenRouter](https://openrouter.ai) key and switch
+  models mid-conversation — your call, per chat.
+
+- **Always there, never in the way.** The panel is anchored to the screen
+  edge and stays out of alt-tab. **Super + A** to summon, again to dismiss.
+
+- **Fire-and-forget agents.** Hit **Super + /**, type a task, press Enter —
+  the agent runs in the background and pings you when it's done. Pick the
+  conversation back up whenever you like.
+
+- **One conversation, every device.** Kick something off on your desktop;
+  follow along — or take over — from your phone on the same home network.
+  Long jobs keep running on an always-on machine while your laptop sleeps.
+
+- **Talk to it.** **Super + S** starts voice-to-text; transcription happens
+  locally and lands straight in the chat.
+
+- **It remembers.** An optional long-term memory quietly recalls durable
+  facts across chats. One toggle turns it off for a sensitive conversation;
+  one button wipes it entirely.
+
+- **You stay in control.** Shell commands ask first. Outgoing messages ask
+  first. Secrets go through a private popup, never the chat. The agent is
+  capable on purpose — and fenced in on purpose.
+
+## Built on solid ground
+
+SpacesOS is assembled with [Nix](https://nixos.org) on top of
+[NixOS](https://nixos.org), which is where its calmness comes from:
+
+- **Declarative** — the whole system, agent and all, is described in one
+  configuration. What you read is what runs.
+- **Reliable** — upgrades are atomic, and every previous version is still in
+  the boot menu. If something misbehaves, you roll back in one reboot.
+- **Reproducible** — the same configuration produces the same machine, today
+  or next year, on your laptop or the server in the closet.
+
+## Try it yourself
+
+> Coming to the talk? It's already running on the machines in the room — go
+> play. This section is for taking it home.
+
+SpacesOS is a [Nix](https://nixos.org) flake. Add it to your NixOS
+configuration and pick a module:
 
 ```nix
-# flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    spaces.url = "github:generational-infrastructure/spaces-os";
-  };
+inputs.spaces.url = "github:generational-infrastructure/spaces-os";
 
-  outputs = { nixpkgs, spaces, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      modules = [
-        spaces.nixosModules.spaces
-        {
-          # Override the default greetd auto-login user.
-          services.greetd.settings.default_session.user = "alice";
-        }
-      ];
-    };
-  };
-}
+# …then, in your system's modules:
+modules = [ spaces.nixosModules.spaces ];    # the whole desktop
+# — or just the agent + panel, on the desktop you already run:
+modules = [ spaces.nixosModules.pi-chat ];
 ```
 
-This gives you:
-- **Mod+T** — terminal (alacritty)
-- **Mod+D** — app launcher (fuzzel)
-- **Mod+A** — toggle the pi-chat panel
-- **Mod+S** — toggle voice-to-text recording
-- **Mod+L** / **Ctrl+Alt+L** — lock the screen (swaylock)
-- **Mod+Shift+N** — restart the pi-chat panel (live-reload after rebuild)
+Starting from scratch? Grab a bootable installer image from the
+[latest release](https://github.com/generational-infrastructure/spaces-os/releases/latest),
+write it to a USB stick, and boot.
 
-See [docs/keybindings.md](docs/keybindings.md) for the full list of
-keyboard shortcuts (spaces additions plus the inherited niri defaults).
+> **Tip:** point your config at the
+> [numtide binary cache](https://cache.numtide.com) first so the heavy bits
+> download instead of building from source.
 
-#### Voice-to-text
+Everyday shortcuts:
 
-The full desktop module includes voice-to-text out of the box. Press
-**Mod+S** to start recording and **Mod+S** again to stop. Speech is
-transcribed locally and typed into the focused window.
+| Shortcut | Does |
+|---|---|
+| **Super + A** | Toggle the chat panel |
+| **Super + /** | Launch a background agent |
+| **Super + S** | Voice-to-text |
+| **Super + L** | Lock the screen |
 
-### 2. Panel only (any layer-shell Wayland compositor)
+The full list lives in [docs/keybindings.md](docs/keybindings.md).
 
-Already using sway, Hyprland, KDE Plasma 6, or another
-`wlr-layer-shell`-capable Wayland compositor? Import
-`nixosModules.pi-chat` to get just the panel + AI agent + local LLM.
-You keep your compositor.
+## Going further
 
-```nix
-# flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    spaces.url = "github:generational-infrastructure/spaces-os";
-  };
+- **An always-on agent** — run an executor on a home server so long tasks
+  survive your laptop sleeping, reachable from every device on your
+  network. The design is written up in
+  [docs/remote-pi-design.md](docs/remote-pi-design.md).
 
-  outputs = { nixpkgs, spaces, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      modules = [
-        spaces.nixosModules.pi-chat
-        ./configuration.nix
-      ];
-    };
-  };
-}
-```
+## For the curious & the contributors
 
-The panel runs as a user systemd service (`pi-chat.service`); it
-starts at login alongside `graphical-session.target` and stays
-running, hidden by default. Summon it with the bundled
-`pi-chat-toggle` CLI:
-
-```
-pi-chat-toggle           # toggle visibility
-pi-chat-toggle show      # force show
-pi-chat-toggle hide      # force hide
-```
-
-Wire `pi-chat-toggle` to whatever compositor keybind you like. Under
-the hood it calls
-`quickshell ipc -c pi-chat call pi-chat toggle`, so you can also use
-that directly if you prefer.
-
-Examples:
-
-**sway** (`~/.config/sway/config`)
-```
-bindsym $mod+a exec pi-chat-toggle
-```
-
-**Hyprland** (`~/.config/hypr/hyprland.conf`)
-```
-bind = SUPER, A, exec, pi-chat-toggle
-```
-
-**KDE Plasma 6**: System Settings → Shortcuts → Custom Shortcuts → add
-a command shortcut bound to `pi-chat-toggle`.
-
-If you also want voice-to-text, bind `voxtype record toggle` similarly.
-
-## Hacking
-
-### OpenRouter as an additional backend
-
-The chat agent (`pi-chat`) defaults to the local LLM served by
-llama-swap. You can add [OpenRouter](https://openrouter.ai) as an
-additional backend — pi's built-in `openrouter` provider exposes
-~200 curated models, switchable mid-session from the chat panel.
-
-1. Create a key file on the target host (root-owned, mode `0400`):
-
-   ```bash
-   install -m 0400 -o root -g root /dev/stdin /etc/secrets/openrouter-api-key <<< "sk-or-v1-..."
-   ```
-
-2. Enable the provider in your NixOS config:
-
-   ```nix
-   services.pi-chat.openrouter = {
-     enable = true;
-     apiKeyFile = "/etc/secrets/openrouter-api-key";
-   };
-   ```
-
-   The key is loaded as a systemd credential and resolved by pi at
-   request time via `!cat $CREDENTIALS_DIRECTORY/openrouter-api-key` —
-   it never lands in the nix store.
-
-3. (Optional) Curate or override built-in model metadata via
-   `piModels`:
-
-   ```nix
-   services.pi-chat.piModels.providers.openrouter.modelOverrides = {
-     "anthropic/claude-sonnet-4.5".contextWindow = 200000;
-   };
-   ```
-
-4. (Optional) Make an OpenRouter model the default at session start:
-
-   ```nix
-   services.pi-chat.defaultModel = "anthropic/claude-sonnet-4.5";
-   ```
-
-llama-swap stays enabled alongside; pick the provider per session
-from the chat panel's model selector.
-
-### Long-term memory (cross-session recall)
-
-A local memory store extracts durable facts from each chat turn and
-surfaces relevant ones at the start of any later prompt, across all
-your chats. **On by default for each new chat**; the icon in the
-panel header toggles capture and recall off for that chat, and the
-eraser next to it wipes the entire store after an inline
-confirmation.
-
-Anything you type can be picked up by the extractor — flip the
-toggle off before pasting secrets.
-
-Inspect or prune from the terminal:
-
-```bash
-sediment stats
-sediment list --scope all
-sediment recall "favourite colour"
-sediment forget <id>
-```
-
-### Running the test-machine VM test
-
-`checks.x86_64-linux.test-machine` is dual-mode. With
-`OPENROUTER_API_KEY` unset it exercises the local llama-swap backend.
-With the env var set it switches the in-VM pi-chat to the openrouter
-provider and runs a real round-trip against `api.openrouter.ai`.
-
-Repo-local secrets live in `.env` (gitignored). [direnv] loads it on
-directory entry via `.envrc`:
-
-```bash
-cp .env.example .env
-$EDITOR .env          # fill in OPENROUTER_API_KEY
-direnv allow
-```
-
-Then:
-
-```bash
-# Local-backend mode (default; works under `nix flake check` too):
-nix build .#checks.x86_64-linux.test-machine
-
-# OpenRouter mode (requires --impure so eval sees the env var; the
-# derivation is marked __impure so the VM gets real internet):
-nix build --impure .#checks.x86_64-linux.test-machine
-
-# Interactive VM for poking around:
-nix run --impure .#checks.x86_64-linux.test-machine.driverInteractive
-```
-
-In OpenRouter mode the key value is baked into the local `/nix/store`
-— do not push the resulting store paths to a shared cache.
-
-[direnv]: https://direnv.net
+- **How it's wired** —
+  [Quickshell](https://quickshell.org) (the panel surface) ·
+  [pi](https://github.com/mariozechner/pi-mono) (the coding agent) ·
+  [llama-swap](https://github.com/mostlygeek/llama-swap) (local models) ·
+  a small TypeScript daemon that keeps sessions alive and a web/PWA client.
+- **Hacking on it** — start with [AGENTS.md](AGENTS.md) for the development
+  workflow, the test layout, and how to drive the throwaway VMs.
+- **The design notes** — [docs/](docs/) holds the architecture and status
+  write-ups.
 
 ## License
 

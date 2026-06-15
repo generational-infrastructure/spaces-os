@@ -1,9 +1,0 @@
-/* ============================================================
-   Spaces OS Design System — global entry point
-   Consumers link THIS file. It is an @import manifest only.
-   ============================================================ */
-
-@import "tokens/fonts.css";
-@import "tokens/colors.css";
-@import "tokens/typography.css";
-@import "tokens/spacing.css";
