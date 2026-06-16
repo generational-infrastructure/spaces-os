@@ -118,9 +118,6 @@ SpacesOS is assembled with [Nix](https://nixos.org) on top of
 
 ## Try it yourself
 
-> Coming to the talk? It's already running on the machines in the room — go
-> play. This section is for taking it home.
-
 SpacesOS is a [Nix](https://nixos.org) flake. Add it to your NixOS
 configuration and pick a module:
 
@@ -143,12 +140,12 @@ write it to a USB stick, and boot.
 
 Everyday shortcuts:
 
-| Shortcut | Does |
-|---|---|
-| **Super + A** | Toggle the chat panel |
+| Shortcut      | Does                      |
+|---------------|---------------------------|
+| **Super + A** | Toggle the chat panel     |
 | **Super + /** | Launch a background agent |
-| **Super + S** | Voice-to-text |
-| **Super + L** | Lock the screen |
+| **Super + S** | Voice-to-text             |
+| **Super + L** | Lock the screen           |
 
 The full list lives in [docs/keybindings.md](docs/keybindings.md).
 
