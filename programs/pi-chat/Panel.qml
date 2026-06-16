@@ -274,7 +274,7 @@ Item {
       property var hits: []      // [id, id, …] newest-first
       property string current: ""
       readonly property string query: searchField.text.toLowerCase()
-      onVisibleChanged: if (!visible) { searchField.text = ""; history.contentY = 0; }
+      onVisibleChanged: if (!visible) { searchField.text = ""; history.positionViewAtBeginning(); history._follow = true; }
 
       function refresh() {
         if (!query) { hits = []; current = ""; return; }
@@ -294,7 +294,7 @@ Item {
       function jump() {
         if (!current) return;
         const i = history.model.findIndex(m => m.id === current);
-        if (i >= 0) history.positionViewAtIndex(i, ListView.Center);
+        if (i >= 0) { history.positionViewAtIndex(i, ListView.Center); history._captureFollow(); }
       }
       // Re-scan when messages arrive mid-search so the counter stays
       // honest. current is an ID so the cursor survives the refresh.
@@ -437,17 +437,20 @@ Item {
       Layout.fillHeight: true
     NListView {
       id: history
+      objectName: "chatHistory"
       anchors.fill: parent
-      // BottomToTop + reversed model: index 0 = newest = visual bottom.
-      // This makes "stay at bottom" equivalent to contentY≈0, which
-      // ListView preserves across our array-reassignment updates
-      // without any positionViewAtEnd() gymnastics. Scrolling up
-      // increases contentY into history as usual.
+      // BottomToTop + reversed model: index 0 = newest = the visual
+      // bottom, which Qt anchors to the bottom edge. In this layout
+      // originY is large-negative and contentY is never ≈0; "at the
+      // bottom" is Qt's atYEnd, and scrolling up drives contentY toward
+      // originY.
       verticalLayoutDirection: ListView.BottomToTop
       model: MsgFilter.visible(root.chat?.messages ?? [], root.showThinking).slice().reverse()
       clip: true
-      // "Near bottom" = within two bubble-heights of contentY 0.
-      readonly property bool atBottom: contentY < Style.baseWidgetSize * 2
+      // atYEnd is the only honest "pinned to the newest message" signal
+      // here — a `contentY < N` test reads true everywhere. Drives the
+      // unread pill below.
+      readonly property bool atBottom: atYEnd
       property int unseen: 0
       onAtBottomChanged: if (atBottom) unseen = 0
       spacing: Style.marginM
@@ -458,6 +461,34 @@ Item {
       // The gradient fade looks wrong over chat bubbles — it's meant for
       // flat lists. Bubbles already provide their own visual boundary.
       showGradientMasks: false
+
+      // ── keep scrollback while the agent streams (issue #28) ──
+      // Each streaming token reassigns `messages`, regrowing the newest
+      // bubble; the model-driven relayout then re-anchors to index 0 and
+      // snaps the view to the bottom — yanking a reader who scrolled up,
+      // on every token. Hold their position by pinning the gap from the
+      // top of content (contentY − originY) across every height change,
+      // and only let Qt's snap stand when they were already at the bottom.
+      // `_follow` records that intent on user-driven movement, captured
+      // before the snap flips atYEnd back to true.
+      property bool _follow: true
+      property real _topGap: 0
+      function _captureFollow() {
+        _follow = atYEnd;
+        if (!_follow) _topGap = contentY - originY;
+      }
+      onMovementEnded: _captureFollow()
+      onContentYChanged: if (moving) _captureFollow()
+      // The relayout that snaps to the bottom runs after this notifier,
+      // so re-pin once it has settled (Qt.callLater coalesces the burst
+      // of per-token height changes into a single correction). Never
+      // fight an active gesture — let _captureFollow track it instead.
+      onContentHeightChanged: if (!_follow && !moving) Qt.callLater(_restoreScroll)
+      function _restoreScroll() {
+        if (_follow || moving) return;
+        const y = originY + _topGap;
+        if (Math.abs(contentY - y) > 0.5) contentY = y;
+      }
 
       // ListView injects modelData into the delegate root; Bubble
       // declares that as required and aliases it to msg internally.
@@ -475,7 +506,7 @@ Item {
         }
         onJumpToQuote: {
           const i = history.model.findIndex(m => m.id === modelData.replyTo);
-          if (i >= 0) history.positionViewAtIndex(i, ListView.Center);
+          if (i >= 0) { history.positionViewAtIndex(i, ListView.Center); history._captureFollow(); }
         }
         onRetryRequested:  root.chat.retry(modelData.id)
         onCancelRequested: root.chat.cancel(modelData.id)
@@ -484,27 +515,30 @@ Item {
         onPromptCancel: root.chat.promptCancel(modelData.id)
       }
 
-      // BottomToTop keeps contentY stable on append, so the only
-      // bookkeeping left is the unread pill. Our own sends always
-      // snap — not seeing your message appear is worse than losing
-      // scrollback. The first non-empty population after open is
-      // also a snap: history replay arrives after Component.onCompleted,
-      // and landing mid-scroll on a fresh open is jarring.
+      // A streaming token reassigns the model every frame but never
+      // changes the count, so the per-append work below is skipped for it.
+      // Switching sessions (chat identity changes) or first populating one
+      // snaps to the newest message and re-engages follow. Within a chat,
+      // own sends snap to the new bubble — not seeing your own message is
+      // worse than losing scrollback — while a peer message sticks to the
+      // bottom only if the reader was already there, otherwise it feeds the
+      // unread pill with their place held by _captureFollow /
+      // onContentHeightChanged.
       property int _lastCount: 0
-      property bool _initialized: false
+      property var _lastChat: undefined
       onModelChanged: {
-        if (count === 0) return;
-        if (!_initialized) {
-          _initialized = true;
+        if (root.chat !== _lastChat) {
+          _lastChat = root.chat;
           _lastCount = count;
-          contentY = 0;
-          positionViewAtBeginning();
+          _follow = true;
+          if (count > 0) positionViewAtBeginning();
           return;
         }
+        if (count === 0) return;
         if (count <= _lastCount) { _lastCount = count; return; }
         _lastCount = count;
-        if (model[0]?.from === "me") contentY = 0;
-        else if (!atBottom) unseen++;
+        if (model[0]?.from === "me") { _follow = true; positionViewAtBeginning(); }
+        else if (!_follow) unseen++;
       }
     }
 
@@ -532,7 +566,7 @@ Item {
         }
         NIcon { icon: "chevron-down"; color: Color.mOnPrimary }
       }
-      TapHandler { onTapped: history.contentY = 0 }
+      TapHandler { onTapped: { history.positionViewAtBeginning(); history._follow = true; } }
       HoverHandler { cursorShape: Qt.PointingHandCursor }
     }
     } // history wrapper
@@ -768,7 +802,7 @@ Item {
   // open hook.
   Component.onCompleted: {
     root.chat?.listModels();
-    if (history) { history.contentY = 0; history.returnToBounds(); }
+    if (history) { history.positionViewAtBeginning(); history._follow = true; }
   }
 
   // Ctrl+F from anywhere in the panel. Shortcut rather than Keys so it
