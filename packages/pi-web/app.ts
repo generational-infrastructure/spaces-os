@@ -28,6 +28,7 @@ import {
   withConfirmAnswer,
   withPiEvent,
   withSidechannelResolved,
+  withUserImage,
   withUserPrompt,
 } from "./reducer";
 
@@ -274,6 +275,33 @@ class ExecutorConn {
     });
   }
 
+  // Attach an image: the same prompt command the desktop panel sends, with the
+  // base64 payload inlined in pi's own image RPC shape. The daemon forwards
+  // `images` verbatim to the SDK. `dataUrl` is the full `data:` URL kept for
+  // local rendering; `data`/`mimeType` are the split-out wire fields.
+  sendImage(
+    sessionId: string,
+    dataUrl: string,
+    mimeType: string,
+    data: string,
+  ): void {
+    if (!this.connected) return;
+    const cur = this.states.get(sessionId) ?? emptyState();
+    this.states.set(sessionId, withUserImage(cur, dataUrl));
+    this.onUpdate(this, "event", { sessionId, local: true });
+    this.send({
+      v: 1,
+      kind: "command",
+      sessionId,
+      payload: {
+        type: "prompt",
+        message: "",
+        images: [{ type: "image", data, mimeType }],
+        streamingBehavior: "steer",
+      },
+    });
+  }
+
   answerConfirm(sessionId: string, id: string, allowed: boolean): void {
     const cur = this.states.get(sessionId);
     if (!cur) return;
@@ -422,6 +450,13 @@ class Fleet {
     const conn = this.execs.get(this.active.executorId);
     if (!conn || !conn.connected) return;
     conn.sendPrompt(this.active.sessionId, trimmed);
+  }
+
+  sendImage(dataUrl: string, mimeType: string, data: string): void {
+    if (!this.active) return;
+    const conn = this.execs.get(this.active.executorId);
+    if (!conn || !conn.connected) return;
+    conn.sendImage(this.active.sessionId, dataUrl, mimeType, data);
   }
 
   answerConfirm(id: string, allowed: boolean): void {
@@ -612,7 +647,13 @@ class Fleet {
     const state = a.conn.states.get(this.active!.sessionId) ?? emptyState();
     for (const m of state.messages) {
       const row = el("li", `msg ${m.role}${m.streaming ? " streaming" : ""}`);
-      row.textContent = m.text;
+      if (m.image) {
+        const img = el("img", "msg-image");
+        img.src = m.image;
+        img.alt = "attachment";
+        row.append(img);
+      }
+      if (m.text) row.append(document.createTextNode(m.text));
       log.append(row);
     }
     for (const c of state.confirms) {
@@ -704,6 +745,27 @@ function start(token: string): void {
       submit();
     }
   });
+  // Paperclip → hidden file input → base64 → image prompt. FileReader yields
+  // the mime + base64 in one `data:` URL, so no shelling out (unlike the panel).
+  const attach = $("#attach") as HTMLButtonElement;
+  const fileInput = $("#file") as HTMLInputElement;
+  attach.onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // allow re-picking the same file
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) return;
+      const meta = dataUrl.slice(5, comma); // "data:" stripped → "<mime>;base64"
+      const mimeType =
+        meta.split(";")[0] || file.type || "application/octet-stream";
+      fleet.sendImage(dataUrl, mimeType, dataUrl.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  };
   $("#new-chat").onclick = () => fleet.openCreatePicker();
   $("#back").onclick = () => fleet.viewList();
   $("#chat-menu").onclick = () => fleet.deleteActive();

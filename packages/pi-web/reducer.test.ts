@@ -5,6 +5,7 @@ import {
   withConfirmAnswer,
   withPiEvent,
   withSidechannelResolved,
+  withUserImage,
   withUserPrompt,
 } from "./reducer";
 
@@ -199,4 +200,31 @@ test("message_start with role=assistant is a no-op", () => {
     message: { role: "assistant", content: [{ type: "text", text: "x" }] },
   });
   expect(s.messages).toEqual([]);
+});
+
+test("withUserImage appends a user bubble carrying the data URL", () => {
+  const url = "data:image/png;base64,AAAA";
+  const s = withUserImage(emptyState(), url);
+  expect(s.messages).toEqual([
+    { role: "user", text: "", streaming: false, image: url },
+  ]);
+});
+
+test("an image-only user echo does not double-render the optimistic bubble", () => {
+  // We optimistically render our own attachment via withUserImage; the daemon
+  // echoes a user message whose content is the image (no text part), which
+  // extractUserText reduces to "" — so withUserMessageStart must no-op.
+  const url = "data:image/png;base64,AAAA";
+  let s = withUserImage(emptyState(), url);
+  s = withPiEvent(s, {
+    type: "message_start",
+    message: {
+      role: "user",
+      content: [{ type: "image", source: { data: "AAAA" } }],
+      timestamp: Date.now(),
+    },
+  });
+  expect(s.messages).toEqual([
+    { role: "user", text: "", streaming: false, image: url },
+  ]);
 });

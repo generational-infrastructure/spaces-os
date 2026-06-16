@@ -11,6 +11,7 @@ export interface ChatMessage {
   role: Role;
   text: string;
   streaming: boolean; // assistant text still arriving (deltas)
+  image?: string; // data URL for an attached image (user messages only)
 }
 
 export type ConfirmState = "pending" | "allowed" | "denied" | "resolved";
@@ -162,6 +163,20 @@ export function withUserPrompt(state: ChatState, text: string): ChatState {
   return {
     ...state,
     messages: [...state.messages, { role: "user", text, streaming: false }],
+  };
+}
+
+// An image the user just attached (echoed locally before pi streams its reply).
+// `dataUrl` is a full `data:<mime>;base64,…` URL the renderer can use as an
+// <img> src. The daemon echoes this as a user message with image content but
+// empty text, so withUserMessageStart no-ops on it — no double render.
+export function withUserImage(state: ChatState, dataUrl: string): ChatState {
+  return {
+    ...state,
+    messages: [
+      ...state.messages,
+      { role: "user", text: "", streaming: false, image: dataUrl },
+    ],
   };
 }
 
