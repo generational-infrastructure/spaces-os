@@ -192,11 +192,13 @@ Item {
         popupHeight: 420
         baseSize: 0.85
         tooltip: root.tr("panel.models-tooltip")
+        searchable: true
+        searchPlaceholder: root.tr("panel.models-search")
         // NComboBox expects [{key, name}]. Key is the stable "<provider>/<id>";
         // name prefixes the model with its source — the executor id for that
         // executor's local provider ("[kiwi] …"), else the provider name
         // ("[openrouter] …"). Frecency sort orders most-recently/often-used first.
-        model: ModelFrecency.sortModels(root.chat?.models ?? [], m => m.provider + "/" + m.id).map(m => ({
+        sourceModel: ModelFrecency.sortModels(root.chat?.models ?? [], m => m.provider + "/" + m.id).map(m => ({
           key: m.provider + "/" + m.id,
           name: "[" + (m.provider === "local" ? (root.chat?.executor?.executorId || "local") : m.provider) + "] " + m.id + (m.reasoning ? "  ⚡" : ""),
           provider: m.provider,

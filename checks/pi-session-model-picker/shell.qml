@@ -31,7 +31,9 @@ Item {
   // ── verbatim mirror of Panel.qml's model selector ──
   NComboBox {
     id: modelCombo
-    model: ModelFrecency.sortModels(backend.chat?.models ?? [], m => m.provider + "/" + m.id).map(m => ({
+    searchable: true
+    searchPlaceholder: "Search models…"
+    sourceModel: ModelFrecency.sortModels(backend.chat?.models ?? [], m => m.provider + "/" + m.id).map(m => ({
       key: m.provider + "/" + m.id,
       name: "[" + (m.provider === "local" ? (backend.chat?.executor?.executorId || "local") : m.provider) + "] " + m.id + (m.reasoning ? "  ⚡" : ""),
       provider: m.provider,

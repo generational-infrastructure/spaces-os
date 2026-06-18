@@ -5,6 +5,7 @@
     "status-offline": "демон офлайн",
     "search-tooltip": "Поиск",
     "search-placeholder": "Поиск сообщений…",
+    "models-search": "Поиск моделей…",
     "new-messages": "{count} новых",
     "compose-placeholder": "Сообщение для {name}…",
     "compose-waiting": "Ожидание демона…",

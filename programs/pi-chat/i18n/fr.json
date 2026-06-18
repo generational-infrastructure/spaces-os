@@ -5,6 +5,7 @@
     "status-offline": "démon hors ligne",
     "search-tooltip": "Rechercher",
     "search-placeholder": "Rechercher des messages…",
+    "models-search": "Rechercher des modèles…",
     "new-messages": "{count} nouveau(x)",
     "compose-placeholder": "Message à {name}…",
     "compose-waiting": "En attente du démon…",

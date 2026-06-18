@@ -5,6 +5,7 @@
     "status-offline": "demon offline",
     "search-tooltip": "Szukaj",
     "search-placeholder": "Szukaj wiadomości…",
+    "models-search": "Szukaj modeli…",
     "new-messages": "{count} nowych",
     "compose-placeholder": "Wiadomość do {name}…",
     "compose-waiting": "Oczekiwanie na demona…",

@@ -5,6 +5,7 @@
     "status-offline": "デーモンがオフライン",
     "search-tooltip": "検索",
     "search-placeholder": "メッセージを検索…",
+    "models-search": "モデルを検索…",
     "new-messages": "{count} 件の新着",
     "compose-placeholder": "{name} にメッセージ…",
     "compose-waiting": "デーモンを待機中…",

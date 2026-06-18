@@ -26,7 +26,7 @@ FloatingWindow {
   NComboBox {
     id: combo
     width: 240
-    model: win.testModel
+    sourceModel: win.testModel
     currentKey: "prov/two"
   }
 

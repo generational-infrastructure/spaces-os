@@ -5,6 +5,7 @@
     "status-offline": "守护进程离线",
     "search-tooltip": "搜索",
     "search-placeholder": "搜索消息…",
+    "models-search": "搜索模型…",
     "new-messages": "{count} 条新消息",
     "compose-placeholder": "给 {name} 发消息…",
     "compose-waiting": "等待守护进程…",

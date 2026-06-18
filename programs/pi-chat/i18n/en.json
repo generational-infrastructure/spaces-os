@@ -5,6 +5,7 @@
     "status-offline": "daemon offline",
     "search-tooltip": "Search",
     "search-placeholder": "Search messages…",
+    "models-search": "Search models…",
     "new-messages": "{count} new",
     "compose-placeholder": "Message {name}…",
     "compose-waiting": "Waiting for daemon…",
