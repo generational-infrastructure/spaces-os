@@ -98,7 +98,10 @@ def main() -> None:
     )
 
     def dump_logs():
-        for label, name in [("qs.stdout", "qs.stdout.log"), ("qs.stderr", "qs.stderr.log")]:
+        for label, name in [
+            ("qs.stdout", "qs.stdout.log"),
+            ("qs.stderr", "qs.stderr.log"),
+        ]:
             path = os.path.join(work_dir, name)
             if os.path.isfile(path):
                 sys.stderr.write(f"\n== {label} ==\n")
@@ -197,11 +200,15 @@ def main() -> None:
         # Clearing the query restores the full source list.
         ipc("clearQuery")
         if not wait_until(lambda: ipc("count") == "4", timeout_s=5):
-            die(f"clearing the query did not restore the full list: count={ipc('count')}")
+            die(
+                f"clearing the query did not restore the full list: count={ipc('count')}"
+            )
 
         # ── 3. Accepting a filtered row selects it and restores the list ─
         ipc("setQuery", "claude")
-        if not wait_until(lambda: keys() == ["openrouter/claude-3.5-sonnet"], timeout_s=5):
+        if not wait_until(
+            lambda: keys() == ["openrouter/claude-3.5-sonnet"], timeout_s=5
+        ):
             die(f"'claude' did not narrow to the claude model: keys={keys()!r}")
         ipc("choose", "0")
         if not wait_until(
@@ -213,7 +220,9 @@ def main() -> None:
         if not wait_until(lambda: ipc("count") == "4", timeout_s=5):
             die(f"accepting did not restore the full list: count={ipc('count')}")
 
-        sys.stderr.write("PASS: NComboBox fuzzy model search filters, matches by source tag, and accepts the top match\n")
+        sys.stderr.write(
+            "PASS: NComboBox fuzzy model search filters, matches by source tag, and accepts the top match\n"
+        )
     finally:
         qs_proc.terminate()
         try:
