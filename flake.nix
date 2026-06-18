@@ -18,6 +18,11 @@
     llm-agents.inputs.systems.follows = "systems";
     voxtype.url = "github:peteonrails/voxtype";
     voxtype.inputs.nixpkgs.follows = "nixpkgs";
+    # Animated harmonograph layer-shell wallpaper used as the default
+    # Spaces session background (modules/nixos/harmonograph.nix). Not in
+    # nixpkgs; upstream ships a flake, so consume its package directly.
+    wl-harmonograph.url = "github:pinpox/wl-harmonograph";
+    wl-harmonograph.inputs.nixpkgs.follows = "nixpkgs";
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
     systems.url = "github:nix-systems/default";
