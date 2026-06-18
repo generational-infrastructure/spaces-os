@@ -57,6 +57,12 @@
   # so VM tests can detect via OCR that niri actually drew something
   # to its outputs (proves the compositor is alive end-to-end, not
   # just that niri.service started).
+  #
+  # Turn off the default wl-harmonograph background: both are
+  # wlr-layer-shell renderers competing for the same background layer,
+  # and the animated harmonograph would mask the OCR sentinel. The
+  # OCR swaybg wallpaper must own the background on the test path.
+  services.spaces.background.enable = false;
   environment.systemPackages = [ pkgs.swaybg ];
   systemd.user.services.test-wallpaper = {
     description = "Test wallpaper for OCR-based VM verification";

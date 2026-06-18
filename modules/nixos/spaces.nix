@@ -14,6 +14,8 @@
     inputs.self.nixosModules.noctalia
     # niri scrollable-tiling Wayland compositor
     inputs.self.nixosModules.niri
+    # wl-harmonograph animated session background (niri ships none)
+    inputs.self.nixosModules.harmonograph
     # QEMU display/audio/clipboard/SSH for nix build .#test-vm
     inputs.self.nixosModules.vm-debug
     # nix daemon settings (flakes, experimental features)
