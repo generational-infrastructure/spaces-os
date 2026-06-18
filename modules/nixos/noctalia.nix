@@ -28,6 +28,7 @@ let
     bar.position = config.services.noctalia.bar.position;
     bar.widgets.center = [
       { id = "Workspace"; }
+      { id = "plugin:voice-indicator"; }
       { id = "plugin:spaces-sessions"; }
     ];
   };
@@ -36,6 +37,7 @@ let
   # plugins and other `states.*` entries survive the deep merge.
   managedPlugins = (pkgs.formats.json { }).generate "noctalia-plugins.json" {
     states."spaces-sessions".enabled = true;
+    states."voice-indicator".enabled = true;
   };
 
   # Managed plugin settings — pins the absolute quickshell binary and
@@ -46,10 +48,25 @@ let
         focusCommand = "${pkgs.quickshell}/bin/quickshell ipc -c pi-chat call pi-chat";
       };
 
+  # Managed plugin settings — pins toggleCommand to the ABSOLUTE wrapper,
+  # taken from the typed command set so it can't drift from what's
+  # installed. The voice indicator shells out to it on click; voxtype /
+  # notify-send resolve from the noctalia service PATH when it runs.
+  managedVoiceIndicatorSettings =
+    (pkgs.formats.json { }).generate "noctalia-voice-indicator-settings.json"
+      {
+        toggleCommand = "${config.services.spaces.commands.voice-record-toggle}/bin/spaces-voice-record-toggle";
+        hideWhenIdle = false;
+      };
+
   # The bundled plugin's source tree (manifest + QML). Copied into the
   # Nix store by path interpolation; we materialise it per-file under
   # ~/.config/noctalia/plugins/spaces-sessions/ at service start.
   spacesSessionsPluginSrc = ../../programs/noctalia-spaces-sessions;
+
+  # The voice indicator's source tree (manifest + QML + i18n). Materialised
+  # per-file under ~/.config/noctalia/plugins/voice-indicator/.
+  voiceIndicatorPluginSrc = ../../programs/noctalia-voice-indicator;
 
   # Deep-merges each managed JSON file into ~/.config/noctalia/<rel>
   # (jq `a * b`, managed side wins): objects merge recursively, arrays /
@@ -100,10 +117,12 @@ let
       }
 
       materializePluginFiles ${spacesSessionsPluginSrc} "plugins/spaces-sessions"
+      materializePluginFiles ${voiceIndicatorPluginSrc} "plugins/voice-indicator"
 
       mergeNoctaliaJson ${managedSettings}                 "$cfgDir/settings.json"
       mergeNoctaliaJson ${managedPlugins}                  "$cfgDir/plugins.json"
       mergeNoctaliaJson ${managedSpacesSessionsSettings}   "$cfgDir/plugins/spaces-sessions/settings.json"
+      mergeNoctaliaJson ${managedVoiceIndicatorSettings}   "$cfgDir/plugins/voice-indicator/settings.json"
     '';
   };
 
@@ -161,6 +180,11 @@ let
   };
 in
 {
+  # The shortcut commands noctalia spawns are wrappers built here. Importing
+  # the module declares the dependency and supplies
+  # `config.services.spaces.commands` used above.
+  imports = [ ./spaces-commands.nix ];
+
   options.services.noctalia = {
     bar.position = lib.mkOption {
       # Deliberately only the horizontal edges: noctalia itself also knows

@@ -1,0 +1,7 @@
+{
+  "voice": {
+    "tooltip-idle": "Voz a texto — pulsa Mod+S para grabar",
+    "tooltip-recording": "Grabando — pulsa Mod+S para detener y transcribir",
+    "tooltip-transcribing": "Transcribiendo…"
+  }
+}
