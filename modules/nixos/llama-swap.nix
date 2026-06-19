@@ -59,6 +59,20 @@ in
       };
       description = "Per-model extra llama-server flags appended to its cmd.";
     };
+
+    apiKeyEnvFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/secrets/llama-swap.env";
+      description = ''
+        Path to a systemd `EnvironmentFile` defining `LLAMA_SWAP_API_KEY=<key>`.
+        When set, llama-swap requires that key (`Authorization: Bearer`,
+        `x-api-key`, or HTTP Basic) on its inference and `/api` endpoints. The
+        file is read at runtime by systemd — the key never enters the
+        world-readable Nix store. `null` (the default) leaves llama-swap in its
+        default-allow mode (no authentication).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -78,6 +92,11 @@ in
         settings = {
           healthCheckTimeout = 3600;
           logToStdout = "both";
+          # Require the shared key when one is provisioned (apiKeyEnvFile). The
+          # literal `''${env.LLAMA_SWAP_API_KEY}` is resolved by llama-swap from
+          # its process environment at startup, so the secret stays out of the
+          # store-rendered config.yaml. Empty list = upstream default-allow.
+          apiKeys = lib.optionals (cfg.apiKeyEnvFile != null) [ "\${env.LLAMA_SWAP_API_KEY}" ];
           models = {
             "qwen2.5:0.5b" = {
               cmd = "${llama-server} -m ${qwen25-05b-gguf} --port \${PORT}" + modelArgs "qwen2.5:0.5b";
@@ -114,6 +133,10 @@ in
     systemd.services.llama-swap = {
       environment.XDG_CACHE_HOME = "/var/cache/llama.cpp";
       serviceConfig.CacheDirectory = "llama.cpp";
+      # Inject the API key as $LLAMA_SWAP_API_KEY (referenced by settings.apiKeys
+      # above) at runtime. systemd reads this as root before dropping to the
+      # unit's DynamicUser, so the key file never has to be readable by that user.
+      serviceConfig.EnvironmentFile = lib.mkIf (cfg.apiKeyEnvFile != null) [ cfg.apiKeyEnvFile ];
     };
 
     # Free GPU VRAM across sleep: stop llama-swap (and the llama-server child
