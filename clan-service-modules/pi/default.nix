@@ -19,9 +19,15 @@
 # loopback when every assigned client is on the same machine, and dual-stack
 # (with the firewall opened) when any client lives elsewhere.
 #
-# Llama-swap (the LLM endpoint pi-sessiond's `llmUrl` points at) is *not*
-# bundled — it's hardware-specific (GPU build, model set) and belongs in
-# each executor's machine config alongside the rest of its inference setup.
+# Each executor also runs a co-located llama-swap (the OpenAI-compatible LLM
+# endpoint pi-sessiond's `llmUrl` points at), enabled by default — only the GPU
+# build and model set are overridden per machine. It is always protected by a
+# second instance-shared clan var, `<instanceName>-llama-swap-key` (deployed to
+# every member, like the token): pi-sessiond authenticates to its own loopback
+# llama-swap with it, and `llamaSwap.openFirewall` (auto-on when a remote member
+# exists) exposes the endpoint to the rest of the clan — dual-stack bind + open
+# port — for members that want to use it directly. The key, not the network, is
+# the gate.
 #
 # Example inventory entry:
 #
@@ -53,6 +59,12 @@
       lives on the same machine, dual-stack (`::`) with the firewall
       opened otherwise. Settings cover port, model defaults, OpenRouter
       opt-in (prompt-backed clan var, no manual API-key plumbing).
+      Each executor also runs a co-located llama-swap, always gated by the
+      instance-shared `<instanceName>-llama-swap-key` clan var; set
+      `llamaSwap.openFirewall` (auto-on with a remote member) to expose that
+      endpoint to the rest of the clan at
+      `http://<machine>.<meta.domain>:<port>/v1` — the key, not the network,
+      is the gate.
     - **client**: assign to every machine that should run the Quickshell
       chat panel. The panel auto-attaches to every executor in the
       instance — same-machine over loopback, remote ones at
@@ -63,6 +75,12 @@
     (`share = true`) is generated once and deployed to every machine in
     either role: both ends of every link reach the same secret with no
     manual token coordination.
+
+    A second instance-shared clan var, `<instanceName>-llama-swap-key`
+    (`share = true`), is generated and deployed the same way: every member
+    holds it, each executor requires it on its llama-swap, and the local
+    pi-sessiond authenticates with it — so the LLM endpoint is never
+    unauthenticated, even before it is exposed off-machine.
   '';
 
   roles.executor = {
@@ -201,6 +219,23 @@
                 '';
               };
             };
+
+            openFirewall = lib.mkOption {
+              type = lib.types.nullOr lib.types.bool;
+              default = null;
+              description = ''
+                Expose this executor's llama-swap (its OpenAI-compatible LLM
+                endpoint) to the rest of the clan: open its port in the firewall
+                and bind it dual-stack (`::`) so members reach it at
+                `http://<machine>.<meta.domain>:<port>/v1`. Access is gated by the
+                instance-shared `<instanceName>-llama-swap-key` clan var (every
+                member holds it; the local pi-sessiond authenticates with it
+                too), so the open port is not open to the unauthenticated world.
+                `null` (the default) auto-picks: `true` when any client of this
+                instance is a *different* machine, `false` otherwise (loopback +
+                Docker bridges only). The key is always required regardless.
+              '';
+            };
           };
         };
       };
@@ -256,6 +291,15 @@
             effectiveFirewall =
               if settings.openFirewall != null then settings.openFirewall else hasRemoteClient;
 
+            # llama-swap exposure mirrors pi-sessiond's: open + dual-stack when a
+            # remote member exists, unless overridden. The shared key is required
+            # either way (see services.llama-swap.apiKeyEnvFile below).
+            effectiveLlamaFirewall =
+              if settings.llamaSwap.openFirewall != null then
+                settings.llamaSwap.openFirewall
+              else
+                hasRemoteClient;
+
             # Every executor in the instance with `webUi.enable = true` — the
             # PWA can only open WS against hosts that have a public Caddy vhost
             # (the browser can't reach loopback-only daemons). Symmetric across
@@ -290,6 +334,16 @@
 
             services.llama-swap.enable = lib.mkDefault true;
 
+            # Require the instance-shared key on llama-swap. This covers the
+            # loopback path the co-located pi-sessiond uses *and* the Docker-bridge
+            # path the module already opens — so the endpoint is never
+            # unauthenticated, even before it is exposed to the clan. Binding
+            # dual-stack (so a `<machine>.<meta.domain>` IPv6 address is reachable)
+            # happens only when the firewall is opened for a remote member.
+            services.llama-swap.apiKeyEnvFile =
+              config.clan.core.vars.generators."${instanceName}-llama-swap-key".files."env".path;
+            services.llama-swap.listenAddress = lib.mkIf effectiveLlamaFirewall (lib.mkForce "::");
+
             # Single instance-shared `hello` token. share = true → clan
             # generates the secret once and deploys it to every machine
             # that declares this generator (every executor and every
@@ -303,6 +357,23 @@
                 runtimeInputs = [ pkgs.openssl ];
                 script = ''
                   openssl rand -hex 32 > "$out/token"
+                '';
+              };
+              # Instance-shared llama-swap API key. Two files from one secret:
+              # `key` is the raw token (pi-sessiond LoadCredential + any member
+              # using the endpoint directly); `env` is an EnvironmentFile
+              # (`LLAMA_SWAP_API_KEY=<key>`) for llama-swap itself. share = true →
+              # generated once, deployed to every member; the client role declares
+              # an identical twin so client-only machines hold it too.
+              "${instanceName}-llama-swap-key" = {
+                share = true;
+                files."key" = { };
+                files."env" = { };
+                runtimeInputs = [ pkgs.openssl ];
+                script = ''
+                  key="sk-$(openssl rand -hex 32)"
+                  printf '%s' "$key" > "$out/key"
+                  printf 'LLAMA_SWAP_API_KEY=%s\n' "$key" > "$out/env"
                 '';
               };
             }
@@ -324,6 +395,7 @@
               openFirewall = effectiveFirewall;
               executorId = if settings.executorId == null then machine.name else settings.executorId;
               tokenFile = config.clan.core.vars.generators."${instanceName}-pi-sessiond-token".files."token".path;
+              llmApiKeyFile = config.clan.core.vars.generators."${instanceName}-llama-swap-key".files."key".path;
               openrouter = {
                 inherit (settings.openrouter) enable;
                 apiKeyFile =
@@ -356,14 +428,16 @@
               ];
             };
 
-            # Open the HTTP(S) ports Caddy listens on. 443 is the actual
-            # entrypoint; 80 is Caddy's automatic HTTP→HTTPS redirect.
-            networking.firewall.allowedTCPPorts =
-              lib.mkIf (settings.webUi.enable || settings.llamaSwap.webUi.enable)
-                [
-                  80
-                  443
-                ];
+            networking.firewall.allowedTCPPorts = lib.mkMerge [
+              # Caddy's HTTP(S) ports. 443 is the actual entrypoint; 80 is
+              # Caddy's automatic HTTP→HTTPS redirect.
+              (lib.mkIf (settings.webUi.enable || settings.llamaSwap.webUi.enable) [
+                80
+                443
+              ])
+              # llama-swap, when exposed to the clan (gated by the shared key).
+              (lib.mkIf effectiveLlamaFirewall [ config.services.llama-swap.port ])
+            ];
           };
       };
   };
@@ -465,6 +539,22 @@
               runtimeInputs = [ pkgs.openssl ];
               script = ''
                 openssl rand -hex 32 > "$out/token"
+              '';
+            };
+
+            # Identical twin of the executor's llama-swap-key generator, so
+            # client-only members also hold the shared key — enough to use a
+            # remote executor's llama-swap directly. Merges with the executor's
+            # definition on dual-role machines.
+            clan.core.vars.generators."${instanceName}-llama-swap-key" = {
+              share = true;
+              files."key" = { };
+              files."env" = { };
+              runtimeInputs = [ pkgs.openssl ];
+              script = ''
+                key="sk-$(openssl rand -hex 32)"
+                printf '%s' "$key" > "$out/key"
+                printf 'LLAMA_SWAP_API_KEY=%s\n' "$key" > "$out/env"
               '';
             };
 

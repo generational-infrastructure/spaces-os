@@ -219,6 +219,19 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
     kiwiServeWebUi = if kiwiSessiond.serveWebUi then "true" else "false";
     kiwiCaddyEnabled = if kiwiCaddy.enable then "true" else "false";
     kiwiOpenPorts = builtins.toJSON kiwiSystem.config.networking.firewall.allowedTCPPorts;
+
+    # llama-swap shared-key auth + clan exposure.
+    llamaKeyShare =
+      if kiwiSystem.config.clan.core.vars.generators."pi-llama-swap-key".share then "true" else "false";
+    llamaKeyFiles = builtins.toJSON (
+      lib.attrNames kiwiSystem.config.clan.core.vars.generators."pi-llama-swap-key".files
+    );
+    kiwiLlamaApiKeys = builtins.toJSON kiwiSystem.config.services.llama-swap.settings.apiKeys;
+    kiwiLlamaEnvFile = builtins.toJSON kiwiSystem.config.systemd.services.llama-swap.serviceConfig.EnvironmentFile;
+    kiwiLlamaListen = kiwiSystem.config.services.llama-swap.listenAddress;
+    kiwiLlmApiKeyFile = toString kiwiSessiond.llmApiKeyFile;
+    traubeLlamaListen = traubeSystem.config.services.llama-swap.listenAddress;
+    traubeLlmApiKeyFile = toString traubeSessiond.llmApiKeyFile;
   }
   ''
     set -euo pipefail
@@ -284,6 +297,41 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
       || { echo "FAIL: kiwi caddy enabled = $kiwiCaddyEnabled (expected false)"; exit 1; }
     echo "$kiwiOpenPorts" | jq -e '. | index(443) | not' > /dev/null \
       || { echo "FAIL: kiwi firewall open ports = $kiwiOpenPorts (443 unexpectedly open)"; exit 1; }
+
+    # ── llama-swap shared-key auth + clan exposure ──────────────────
+    # One shared generator: raw `key` (pi-sessiond + members using the endpoint
+    # directly) and an `env` EnvironmentFile (llama-swap itself).
+    [ "$llamaKeyShare" = "true" ] \
+      || { echo "FAIL: llama-swap-key generator not shared"; exit 1; }
+    echo "$llamaKeyFiles" | jq -e '. | index("key")' > /dev/null \
+      || { echo "FAIL: llama-swap-key files = $llamaKeyFiles (missing key)"; exit 1; }
+    echo "$llamaKeyFiles" | jq -e '. | index("env")' > /dev/null \
+      || { echo "FAIL: llama-swap-key files = $llamaKeyFiles (missing env)"; exit 1; }
+
+    # Executor llama-swap requires the key: apiKeys references the env macro and
+    # EnvironmentFile points at the generator's `env` file.
+    echo "$kiwiLlamaApiKeys" | grep -q 'env.LLAMA_SWAP_API_KEY' \
+      || { echo "FAIL: kiwi llama-swap apiKeys = $kiwiLlamaApiKeys"; exit 1; }
+    echo "$kiwiLlamaEnvFile" | jq -e '.[] | select(endswith("pi-llama-swap-key/env"))' > /dev/null \
+      || { echo "FAIL: kiwi llama-swap EnvironmentFile = $kiwiLlamaEnvFile"; exit 1; }
+    # pi-sessiond authenticates to its loopback llama-swap with the raw key;
+    # both executors point at the same shared file.
+    echo "$kiwiLlmApiKeyFile" | grep -q "pi-llama-swap-key/key" \
+      || { echo "FAIL: kiwi pi-sessiond llmApiKeyFile = $kiwiLlmApiKeyFile"; exit 1; }
+    [ "$traubeLlmApiKeyFile" = "$kiwiLlmApiKeyFile" ] \
+      || { echo "FAIL: traube llmApiKeyFile=$traubeLlmApiKeyFile != kiwi=$kiwiLlmApiKeyFile"; exit 1; }
+
+    # Exposure: kiwi (no remote member) stays loopback/bridge-only — llama port
+    # closed, bind unforced (0.0.0.0). traube (kiwi attaches remotely) opens the
+    # port and binds dual-stack so traube.pin is reachable.
+    [ "$kiwiLlamaListen" = "0.0.0.0" ] \
+      || { echo "FAIL: kiwi llama listenAddress = $kiwiLlamaListen (expected 0.0.0.0)"; exit 1; }
+    echo "$kiwiOpenPorts" | jq -e '. | index(8012) | not' > /dev/null \
+      || { echo "FAIL: kiwi firewall = $kiwiOpenPorts (8012 unexpectedly open)"; exit 1; }
+    [ "$traubeLlamaListen" = "::" ] \
+      || { echo "FAIL: traube llama listenAddress = $traubeLlamaListen (expected ::)"; exit 1; }
+    echo "$traubeOpenPorts" | jq -e '. | index(8012)' > /dev/null \
+      || { echo "FAIL: traube firewall = $traubeOpenPorts (missing 8012)"; exit 1; }
 
     echo "OK: kiwi (loopback exec + client) + traube (dual-stack exec + PWA at agent-traube.pin) auto-wired"
     touch "$out"
