@@ -21,6 +21,7 @@ let
     mkdir -p "$out"
     cp ${./main.ts} "$out/main.ts"
     cp ${./sandbox.ts} "$out/sandbox.ts"
+    cp ${./provider.ts} "$out/provider.ts"
     cp ${./staging.ts} "$out/staging.ts"
     # Resolve @earendil-works/pi-coding-agent (and its deps) from the pinned pi.
     ln -s ${pi}/lib/node_modules "$out/node_modules"

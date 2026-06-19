@@ -255,6 +255,19 @@ in
       '';
     };
 
+    llmApiKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Path to a file holding the API key for `llmUrl` (this executor's
+        llama-swap), loaded via systemd `LoadCredential` (never copied into the
+        store). When set, the daemon sends it as a Bearer token on model
+        discovery and every completion — required when llama-swap is configured
+        with `apiKeys`. `null` (the default) sends the historical `"dummy"` key,
+        which a default-allow llama-swap ignores.
+      '';
+    };
+
     openrouter = {
       enable = lib.mkEnableOption (
         "the OpenRouter provider — its model catalog is registered in the "
@@ -321,11 +334,13 @@ in
       };
       serviceConfig =
         let
-          # Both secrets are read by the daemon from $CREDENTIALS_DIRECTORY:
-          # the token (loadToken) and the OpenRouter key (loadOpenRouterKey).
+          # The daemon reads each secret from $CREDENTIALS_DIRECTORY: the token
+          # (loadToken), the OpenRouter key (loadOpenRouterKey), and the
+          # llama-swap key (loadLlamaSwapKey).
           creds =
             lib.optional (cfg.tokenFile != null) "token:${toString cfg.tokenFile}"
-            ++ lib.optional cfg.openrouter.enable "openrouter-api-key:${toString cfg.openrouter.apiKeyFile}";
+            ++ lib.optional cfg.openrouter.enable "openrouter-api-key:${toString cfg.openrouter.apiKeyFile}"
+            ++ lib.optional (cfg.llmApiKeyFile != null) "llama-swap-api-key:${toString cfg.llmApiKeyFile}";
         in
         {
           ExecStart = lib.getExe' cfg.package "pi-sessiond";

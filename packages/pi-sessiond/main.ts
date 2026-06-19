@@ -50,6 +50,7 @@ import {
   type SandboxBind,
 } from "./sandbox";
 import { stageFile } from "./staging";
+import { fetchModels } from "./provider";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -179,6 +180,25 @@ function loadOpenRouterKey(): string {
 }
 const OPENROUTER_KEY = loadOpenRouterKey();
 
+// llama-swap API key (optional): when the clan `pi` service protects this
+// executor's llama-swap with a shared key, the daemon must send it on model
+// discovery and every completion. Staged via LoadCredential alongside the
+// token; falls back to an inline env (tests) and finally "dummy" so a
+// default-allow llama-swap keeps working unchanged.
+function loadLlamaSwapKey(): string {
+  const credDir = process.env.CREDENTIALS_DIRECTORY;
+  if (credDir) {
+    try {
+      const key = readFileSync(`${credDir}/llama-swap-api-key`, "utf8").trim();
+      if (key) return key;
+    } catch {
+      // No credential file — fall through to the inline env / default.
+    }
+  }
+  return (process.env.SPACES_SESSIOND_LLM_API_KEY ?? "").trim() || "dummy";
+}
+const LLAMA_SWAP_KEY = loadLlamaSwapKey();
+
 // Bundled pi extensions loaded into every session (e.g. bash-confirm, which
 // drives the confirm side-channel). Colon-separated paths; the daemon does its
 // own provider discovery, so llama-swap-discover is intentionally not here.
@@ -225,7 +245,7 @@ function isSessionId(value: string): boolean {
 // ---- model registry (local llama-swap provider, design §4.2) --------------
 
 const authStorage = AuthStorage.create(`${AGENT_DIR}/auth.json`);
-authStorage.setRuntimeApiKey("local", "dummy");
+authStorage.setRuntimeApiKey("local", LLAMA_SWAP_KEY);
 // OpenRouter is a built-in provider: setting its key surfaces its whole model
 // catalog in getAvailable() next to the local llama-swap provider, so clients
 // pick OpenRouter models from the same picker.
@@ -267,22 +287,9 @@ async function setupProvider(): Promise<void> {
   const baseUrl = `${LLM_URL.replace(/\/+$/, "")}/v1`;
   let models: ProviderModel[] = [];
   try {
-    const res = await fetch(`${baseUrl}/models`);
-    if (res.ok) {
-      const payload: unknown = await res.json();
-      const data =
-        isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
-      models = data
-        .filter(isRecord)
-        .map((m) =>
-          providerModel(
-            asString(m.id) ?? "",
-            asNumber(m.context_length) ?? asNumber(m.max_model_len) ?? 128000,
-            asNumber(m.max_tokens) ?? 4096,
-          ),
-        )
-        .filter((m) => m.id.length > 0);
-    }
+    models = (await fetchModels(LLM_URL, LLAMA_SWAP_KEY)).map((m) =>
+      providerModel(m.id, m.contextLength, m.maxTokens),
+    );
   } catch (err) {
     console.error("pi-sessiond: model discovery failed:", err);
   }
@@ -298,7 +305,7 @@ async function setupProvider(): Promise<void> {
   }
   modelRegistry.registerProvider("local", {
     baseUrl,
-    apiKey: "dummy",
+    apiKey: LLAMA_SWAP_KEY,
     api: "openai-completions",
     compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
     models,
