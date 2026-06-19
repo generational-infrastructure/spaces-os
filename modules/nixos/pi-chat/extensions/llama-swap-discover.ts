@@ -2,7 +2,11 @@
 // /v1/models endpoint and register them as provider "local".
 //
 // Configured by the pi-chat NixOS module. The endpoint base URL
-// (without /v1 suffix) is passed in via the LLAMA_SWAP_BASE_URL env var.
+// (without /v1 suffix) is passed in via the LLAMA_SWAP_BASE_URL env var. When
+// llama-swap is key-protected (the clan `pi` service does this by default),
+// set LLAMA_SWAP_API_KEY too — it is sent as a Bearer token on discovery and
+// every completion. A default-allow llama-swap ignores the header, so leaving
+// it unset (the "dummy" fallback) stays backward-compatible.
 //
 // Pi awaits this async factory before startup completes, so the
 // discovered list is available to !models, !model, and --list-models.
@@ -14,9 +18,11 @@ export default async function (pi) {
     return;
   }
   const baseUrl = `${root.replace(/\/+$/, "")}/v1`;
-
+  const apiKey = process.env.LLAMA_SWAP_API_KEY || "dummy";
   try {
-    const res = await fetch(`${baseUrl}/models`);
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
     if (!res.ok) {
       console.error(
         `llama-swap-discover: GET /v1/models -> HTTP ${res.status}`,
@@ -30,7 +36,7 @@ export default async function (pi) {
     }
     pi.registerProvider("local", {
       baseUrl,
-      apiKey: "dummy",
+      apiKey,
       api: "openai-completions",
       compat: {
         supportsDeveloperRole: false,
