@@ -154,7 +154,9 @@ pkgs.runCommand "spaces-noctalia-nix-eval-test"
     mstage=$(mktemp -d)
     mkdir -p "$mstage/.config/noctalia"
     cat >"$mstage/.config/noctalia/settings.json" <<'EOF'
-    { "bar": { "position": "bottom", "floating": true }, "general": { "avatar": "x" } }
+    { "bar": { "position": "bottom", "floating": true },
+      "general": { "avatar": "x" },
+      "wallpaper": { "enabled": true, "directory": "/home/u/Pictures" } }
     EOF
     HOME="$mstage" "$mergeScript"
     jq -e '.bar.position == "top"' "$mstage/.config/noctalia/settings.json" >/dev/null \
@@ -163,6 +165,15 @@ pkgs.runCommand "spaces-noctalia-nix-eval-test"
       || fail "merge clobbered sibling bar.floating — not a deep merge"
     jq -e '.general.avatar == "x"' "$mstage/.config/noctalia/settings.json" >/dev/null \
       || fail "merge dropped unmanaged key general.avatar"
+    # The bar must yield the wlr background layer to the spaces session
+    # background renderer (wl-harmonograph in production, swaybg on the OCR
+    # test path). noctalia's own wallpaper is a competing layer-shell
+    # surface on the same Background layer; pin its master switch off so it
+    # never draws over the harmonograph, even if the user flips it in the UI.
+    jq -e '.wallpaper.enabled == false' "$mstage/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge did not pin wallpaper.enabled=false (noctalia would draw over wl-harmonograph)"
+    jq -e '.wallpaper.directory == "/home/u/Pictures"' "$mstage/.config/noctalia/settings.json" >/dev/null \
+      || fail "merge clobbered sibling wallpaper.directory — not a deep merge"
 
     # Fresh host: no existing settings.json — the merge must seed it.
     mfresh=$(mktemp -d)

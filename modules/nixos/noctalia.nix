@@ -24,12 +24,25 @@ let
   # bar's widget list (Workspace pills + the bundled session indicator).
   # Merged, not symlinked, so the user can still change everything else
   # from the UI.
+  #
+  # wallpaper.enabled = false yields the wlr background layer to the
+  # spaces session background renderer. The desktop draws its background
+  # with a dedicated layer-shell program (wl-harmonograph in production —
+  # modules/nixos/harmonograph.nix; swaybg on the VM OCR path —
+  # modules/nixos/test-support); noctalia's own wallpaper is a competing
+  # surface on the same WlrLayer.Background, and same-layer stacking is
+  # non-deterministic, so noctalia would intermittently draw over the
+  # harmonograph. Its Background.qml only maps that surface when
+  # `wallpaper.enabled` is true, so pinning the master switch off is the
+  # robust fix — re-applied on every (re)start, it also overrides a user
+  # toggling the wallpaper back on in the in-app settings UI.
   managedSettings = (pkgs.formats.json { }).generate "noctalia-settings.json" {
     bar.position = config.services.noctalia.bar.position;
     bar.widgets.center = [
       { id = "Workspace"; }
       { id = "plugin:spaces-sessions"; }
     ];
+    wallpaper.enabled = false;
   };
 
   # Managed plugins.json — only forces our bundled plugin enabled. User
