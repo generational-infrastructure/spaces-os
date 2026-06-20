@@ -328,8 +328,8 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
       || { echo "FAIL: kiwi llama listenAddress = $kiwiLlamaListen (expected 0.0.0.0)"; exit 1; }
     echo "$kiwiOpenPorts" | jq -e '. | index(8012) | not' > /dev/null \
       || { echo "FAIL: kiwi firewall = $kiwiOpenPorts (8012 unexpectedly open)"; exit 1; }
-    [ "$traubeLlamaListen" = "::" ] \
-      || { echo "FAIL: traube llama listenAddress = $traubeLlamaListen (expected ::)"; exit 1; }
+    [ "$traubeLlamaListen" = "[::]" ] \
+      || { echo "FAIL: traube llama listenAddress = $traubeLlamaListen (expected [::])"; exit 1; }
     echo "$traubeOpenPorts" | jq -e '. | index(8012)' > /dev/null \
       || { echo "FAIL: traube firewall = $traubeOpenPorts (missing 8012)"; exit 1; }
 

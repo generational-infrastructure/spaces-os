@@ -342,7 +342,11 @@
             # happens only when the firewall is opened for a remote member.
             services.llama-swap.apiKeyEnvFile =
               config.clan.core.vars.generators."${instanceName}-llama-swap-key".files."env".path;
-            services.llama-swap.listenAddress = lib.mkIf effectiveLlamaFirewall (lib.mkForce "::");
+            # `[::]`, not `::`: the upstream services.llama-swap module builds the
+            # flag by raw concatenation (`--listen=${listenAddress}:${port}`), so
+            # the IPv6 wildcard must be bracketed. Bare `::` yields the invalid
+            # `:::8012` ("too many colons in address"), crash-looping the service.
+            services.llama-swap.listenAddress = lib.mkIf effectiveLlamaFirewall (lib.mkForce "[::]");
 
             # Single instance-shared `hello` token. share = true → clan
             # generates the secret once and deploys it to every machine
