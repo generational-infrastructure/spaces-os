@@ -31,6 +31,123 @@ let
       { id = "plugin:voice-indicator"; }
       { id = "plugin:spaces-sessions"; }
     ];
+    # Default the whole desktop to the Kin / Spaces OS colour scheme (light).
+    # noctalia's ColorSchemeService resolves this name to the `Kin` scheme
+    # materialised below, then writes ~/.config/noctalia/colors.json — the
+    # file both the bar and the pi-chat panel (Commons/Color.qml) read. Pinned
+    # like the other managed keys, so it re-applies on (re)start; the panel's
+    # Color.qml keeps its Noctalia-default fallback for when colors.json is
+    # absent. `useWallpaperColors = false` stops a wallpaper recolour from
+    # overriding the brand palette.
+    colorSchemes.predefinedScheme = "Kin";
+    colorSchemes.useWallpaperColors = false;
+    colorSchemes.darkMode = false;
+    # Match the panel: the bar wears the design-system faces too. Inter for
+    # the UI, DM Mono for clocks / metadata. Both are installed system-wide
+    # by nixosModules.spaces (fonts.packages in spaces.nix).
+    ui.fontDefault = "Inter";
+    ui.fontFixed = "DM Mono";
+  };
+
+  # The Kin / Spaces OS colour scheme, in noctalia's scheme format
+  # ({ light, dark } of M3 role colours + a terminal block). Values are the
+  # design system's tokens: white canvas, near-black ink, the teal-slate
+  # "Clan" accent, success-green / magenta / info-blue semantics. This is the
+  # same language the pi-web PWA and spaces-kits wear. The dark variant keeps
+  # the brand for a manual light/dark toggle.
+  kinColorScheme = (pkgs.formats.json { }).generate "Kin.json" {
+    light = {
+      mPrimary = "#345253"; # clan-primary-700 — teal-slate accent
+      mOnPrimary = "#ffffff";
+      mSecondary = "#06aaf1"; # info blue — links / focus
+      mOnSecondary = "#ffffff";
+      mTertiary = "#17b239"; # success green — online / connected
+      mOnTertiary = "#ffffff";
+      mError = "#d75d9f"; # destructive magenta
+      mOnError = "#ffffff";
+      mSurface = "#ffffff"; # white canvas
+      mOnSurface = "#171717"; # ink-900 body text
+      mSurfaceVariant = "#f3f3f3"; # ink-100 wells / cards / peer bubbles
+      mOnSurfaceVariant = "#6b6b6b"; # ink-500 muted text
+      mOutline = "#ebebeb"; # ink-200 hairline
+      mShadow = "#0d1416"; # clan-secondary-950 (noctalia applies alpha)
+      mHover = "#ebebeb"; # quiet grey hover fill
+      mOnHover = "#171717";
+      terminal = {
+        normal = {
+          black = "#171717";
+          red = "#d75d9f";
+          green = "#17b239";
+          yellow = "#8a9b6f";
+          blue = "#06aaf1";
+          magenta = "#c43e81";
+          cyan = "#4f747a";
+          white = "#6b6b6b";
+        };
+        bright = {
+          black = "#9ea39e";
+          red = "#d75d9f";
+          green = "#17b239";
+          yellow = "#a6b58e";
+          blue = "#5cc6f5";
+          magenta = "#d75d9f";
+          cyan = "#4f747a";
+          white = "#171717";
+        };
+        foreground = "#171717";
+        background = "#ffffff";
+        selectionFg = "#ffffff";
+        selectionBg = "#345253";
+        cursorText = "#ffffff";
+        cursor = "#345253";
+      };
+    };
+    dark = {
+      mPrimary = "#bae6ff"; # kin sky — accent on dark
+      mOnPrimary = "#0d1416";
+      mSecondary = "#06aaf1";
+      mOnSecondary = "#0d1416";
+      mTertiary = "#17b239";
+      mOnTertiary = "#0d1416";
+      mError = "#d75d9f";
+      mOnError = "#0d1416";
+      mSurface = "#0d1416"; # clan-secondary-950 ground
+      mOnSurface = "#f7f9fa"; # clan-secondary-50 text
+      mSurfaceVariant = "#142022";
+      mOnSurfaceVariant = "#afc6ca"; # clan-secondary-300
+      mOutline = "#2c4347"; # clan-secondary-900
+      mShadow = "#000000";
+      mHover = "#1c2c2f";
+      mOnHover = "#f7f9fa";
+      terminal = {
+        normal = {
+          black = "#142022";
+          red = "#d75d9f";
+          green = "#17b239";
+          yellow = "#8a9b6f";
+          blue = "#06aaf1";
+          magenta = "#c43e81";
+          cyan = "#afc6ca";
+          white = "#f7f9fa";
+        };
+        bright = {
+          black = "#2c4347";
+          red = "#d75d9f";
+          green = "#17b239";
+          yellow = "#a6b58e";
+          blue = "#5cc6f5";
+          magenta = "#d75d9f";
+          cyan = "#afc6ca";
+          white = "#ffffff";
+        };
+        foreground = "#f7f9fa";
+        background = "#0d1416";
+        selectionFg = "#0d1416";
+        selectionBg = "#bae6ff";
+        cursorText = "#0d1416";
+        cursor = "#bae6ff";
+      };
+    };
   };
 
   # Managed plugins.json — only forces our bundled plugin enabled. User
@@ -118,6 +235,13 @@ let
 
       materializePluginFiles ${spacesSessionsPluginSrc} "plugins/spaces-sessions"
       materializePluginFiles ${voiceIndicatorPluginSrc} "plugins/voice-indicator"
+
+      # Materialise the Kin colour scheme into noctalia's writable scheme
+      # dir. ColorSchemeService scans `colorschemes/` with `find -L -mindepth
+      # 2`, so the file must sit at colorschemes/Kin/Kin.json; the symlink is
+      # followed. settings.json (below) pins this scheme as the active one.
+      mkdir -p "$cfgDir/colorschemes/Kin"
+      ln -sfn ${kinColorScheme} "$cfgDir/colorschemes/Kin/Kin.json"
 
       mergeNoctaliaJson ${managedSettings}                 "$cfgDir/settings.json"
       mergeNoctaliaJson ${managedPlugins}                  "$cfgDir/plugins.json"
