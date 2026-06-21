@@ -26,6 +26,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # GitHub-hosted runners ship ~14 GB free, which the Nix-built ISO
+      # overflows ("No space left on device"). Reclaim the preinstalled
+      # toolchains we don't use before building.
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: true
+
       - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main 2026-05-25
         with:
           extra-conf: |
