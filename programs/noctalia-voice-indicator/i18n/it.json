@@ -2,6 +2,7 @@
   "voice": {
     "tooltip-idle": "Da voce a testo — premi Mod+S per registrare",
     "tooltip-recording": "Registrazione — premi Mod+S per fermare e trascrivere",
-    "tooltip-transcribing": "Trascrizione…"
+    "tooltip-transcribing": "Trascrizione…",
+    "tooltip-no-speech": "Nessun parlato rilevato — controlla il microfono o parla più forte"
   }
 }

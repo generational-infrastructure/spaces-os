@@ -86,20 +86,42 @@ let
         };
       };
 
+  # Voice Activity Detection: reject silence-only / too-quiet takes before
+  # they reach the transcription engine. This both stops Whisper
+  # hallucinating text out of silence and gives the bar indicator an
+  # observable "no speech" signal (a rejected take steps recording→idle
+  # without ever entering transcribing).
+  #
+  # backend MUST be "energy": it is pure-Rust (src/vad/energy.rs, not
+  # feature-gated) and needs no model, so it runs on the shipped vulkan
+  # build and keeps the closure offline. "auto" would select Whisper/Silero
+  # VAD for the whisper engine and download ggml-silero-vad.bin on first
+  # use, breaking the offline guarantee.
+  vadSettings = lib.optionalAttrs cfg.vad.enable {
+    vad = {
+      enabled = true;
+      backend = "energy";
+      inherit (cfg.vad) threshold;
+      min_speech_duration_ms = cfg.vad.minSpeechMs;
+    };
+  };
+
   configToml = (pkgs.formats.toml { }).generate "voxtype-config.toml" (
     lib.recursiveUpdate defaultSettings (
-      lib.recursiveUpdate engineSettings {
-        hotkey.enabled = false;
-        # We ship no OSD frontend (voxtype-osd-*) and use our own
-        # indicator; disable voxtype's built-in OSD so the daemon doesn't
-        # crash-loop trying to spawn a missing binary.
-        osd.enabled = false;
-        output = {
-          mode = "type";
-          fallback_to_clipboard = true;
-          notification.on_transcription = false;
-        };
-      }
+      lib.recursiveUpdate engineSettings (
+        lib.recursiveUpdate {
+          hotkey.enabled = false;
+          # We ship no OSD frontend (voxtype-osd-*) and use our own
+          # indicator; disable voxtype's built-in OSD so the daemon doesn't
+          # crash-loop trying to spawn a missing binary.
+          osd.enabled = false;
+          output = {
+            mode = "type";
+            fallback_to_clipboard = true;
+            notification.on_transcription = false;
+          };
+        } vadSettings
+      )
     )
   );
 in
@@ -164,6 +186,42 @@ in
         prompt budget is ~224 tokens and over-stuffing it degrades accuracy.
         Ignored by the parakeet engine.
       '';
+    };
+    vad = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Enable voxtype's energy-based Voice Activity Detection. Recordings
+          with no detected speech — silence, an accidental tap, a too-quiet
+          mic — are rejected before transcription. This prevents Whisper from
+          hallucinating text out of silence and gives the bar indicator a
+          signal to flag a rejected take ("no speech detected").
+
+          Uses the pure-Rust "energy" backend (no model download), so it
+          works on the default vulkan build and keeps the closure offline.
+        '';
+      };
+      threshold = lib.mkOption {
+        type = lib.types.float;
+        default = 0.4;
+        description = ''
+          Energy-VAD speech-detection threshold (0.0–1.0). Higher rejects
+          more aggressively (demands louder / clearer speech); lower is more
+          permissive. voxtype's own default is 0.5; we err slightly more
+          sensitive (0.4) so quiet/distant speech is less likely to be wrongly
+          dropped. Raise it if background noise is slipping through as "speech",
+          lower it if quiet-but-real dictation is still being dropped.
+        '';
+      };
+      minSpeechMs = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 100;
+        description = ''
+          Minimum detected speech duration (ms) for a take to be kept.
+          Recordings with less speech than this are rejected as no-speech.
+        '';
+      };
     };
   };
 

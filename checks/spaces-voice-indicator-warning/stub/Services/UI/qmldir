@@ -1,0 +1,2 @@
+module qs.Services.UI
+singleton TooltipService 1.0 TooltipService.qml

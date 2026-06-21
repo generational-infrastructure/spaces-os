@@ -2,9 +2,9 @@
 //
 // Hosts the plugin's Main.qml service (staged next to this file, so the
 // `Main {}` component resolves from the same directory) and exposes its
-// voiceState over IPC. The driver writes voxtype's state file and reads
-// the value back to assert the FileView wiring. No noctalia modules, no
-// compositor.
+// voiceState + qualityWarning over IPC. The driver writes voxtype's state
+// file and reads the values back to assert the FileView wiring and the
+// VAD-rejection inference. No noctalia modules, no compositor.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -14,6 +14,14 @@ Item {
 
   Main {
     id: svc
+    // Stub the injected plugin host so Main reads a short warning timeout
+    // (the real default is ~4s; 600ms keeps the auto-clear assertion fast
+    // and deterministic). Only pluginSettings is consumed by Main.qml.
+    pluginApi: QtObject {
+      property var pluginSettings: ({
+          "noSpeechWarningMs": 600
+        })
+    }
   }
 
   IpcHandler {
@@ -23,6 +31,12 @@ Item {
     // absent (daemon not running / removed).
     function state(): string {
       return svc.voiceState;
+    }
+
+    // The transient "recording quality impeded" marker: "no_speech" while
+    // a VAD-rejected take is being surfaced, "" otherwise.
+    function quality(): string {
+      return svc.qualityWarning || "";
     }
   }
 }

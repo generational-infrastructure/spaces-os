@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "author": "Spaces",
   "license": "MIT",
-  "description": "Live voice-to-text status in the bar: a mic that turns red while recording and an amber spinner while transcribing, driven by voxtype's state file. Click to toggle recording.",
+  "description": "Live voice-to-text status in the bar: a mic that turns red while recording and an amber spinner while transcribing, driven by voxtype's state file. Flags a caution-toned mic when a take is rejected for no speech. Click to toggle recording.",
   "tags": ["Bar", "System"],
   "entryPoints": {
     "main": "Main.qml",
@@ -15,7 +15,8 @@
       "toggleCommand": "spaces-voice-record-toggle",
       "hideWhenIdle": false,
       "barPulse": true,
-      "barPulseIntensity": 0.55
+      "barPulseIntensity": 0.55,
+      "noSpeechWarningMs": 4000
     }
   }
 }

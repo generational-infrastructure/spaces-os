@@ -4,7 +4,13 @@
 //   recording / streaming → red mic (mError) + opacity pulse
 //   transcribing          → amber loader-2 (mPrimary) + rotation spin
 //   idle                  → dim mic (mOnSurfaceVariant), no motion
+//   no-speech warning     → caution mic (mTertiary), no motion
 //   down (or hideWhenIdle+idle) → collapsed/hidden
+// The warning sits on the (idle) mic for a few seconds after voxtype's
+// energy VAD rejects a silent take (see Main.qml qualityWarning). mTertiary
+// is the one accent guaranteed distinct from both the recording red
+// (mError) and transcribing amber (mPrimary), and it never decides hover
+// contrast: on hover the glyph is always mOnHover on the mHover fill.
 // Hover swaps the glyph to mOnHover on an mHover fill (contrast). Click
 // runs the voice-record-toggle wrapper.
 pragma ComponentBehavior: Bound
@@ -28,6 +34,7 @@ Item {
 
   readonly property var svc: pluginApi ? pluginApi.mainInstance : null
   readonly property string voiceState: svc ? svc.voiceState : "down"
+  readonly property string qualityWarning: svc ? svc.qualityWarning : ""
   readonly property var cfg: pluginApi ? pluginApi.pluginSettings : ({})
   readonly property bool hideWhenIdle: cfg ? cfg.hideWhenIdle === true : false
 
@@ -35,9 +42,13 @@ Item {
   readonly property bool isTranscribing: voiceState === "transcribing"
   readonly property bool isIdle: voiceState === "idle"
   readonly property bool isDown: voiceState === "down" || voiceState.length === 0
+  // A VAD-rejected take leaves a transient warning on the idle glyph.
+  readonly property bool isWarning: qualityWarning.length > 0
 
-  // Hidden when the daemon is down, and (optionally) when idle.
-  readonly property bool shown: !isDown && !(isIdle && hideWhenIdle)
+  // Hidden when the daemon is down, and (optionally) when idle — but a
+  // pending quality warning forces the (idle) glyph visible so the caution
+  // recolour is actually seen even with hideWhenIdle set.
+  readonly property bool shown: !isDown && (!(isIdle && hideWhenIdle) || isWarning)
 
   readonly property string screenName: screen ? screen.name : ""
   readonly property real capsuleHeight: Style.getCapsuleHeightForScreen(screenName)
@@ -45,16 +56,28 @@ Item {
   readonly property real iconPointSize: Style.fontSizeM
 
   readonly property string glyph: isTranscribing ? "loader-2" : "microphone"
-  readonly property color stateColor: isRecording
-    ? Color.mError
-    : (isTranscribing ? Color.mPrimary : Color.mOnSurfaceVariant)
-  readonly property string tooltipKey: isRecording
-    ? "voice.tooltip-recording"
-    : (isTranscribing ? "voice.tooltip-transcribing" : "voice.tooltip-idle")
+  // Warning wins over the idle colour (it only ever fires at idle, but
+  // ordering it first keeps the intent obvious). mTertiary is the caution
+  // tone — distinct from recording red and transcribing amber.
+  readonly property color stateColor: isWarning
+    ? Color.mTertiary
+    : (isRecording ? Color.mError : (isTranscribing ? Color.mPrimary : Color.mOnSurfaceVariant))
+  readonly property string tooltipKey: isWarning
+    ? "voice.tooltip-no-speech"
+    : (isRecording ? "voice.tooltip-recording" : (isTranscribing ? "voice.tooltip-transcribing" : "voice.tooltip-idle"))
 
   implicitWidth: shown ? itemSize : 0
   implicitHeight: capsuleHeight
   visible: shown
+
+  // The warning appears asynchronously (voxtype rejects the take, not the
+  // user), so refresh an already-open tooltip when the state word it shows
+  // changes — otherwise a user hovering across the rejection keeps reading
+  // the stale "idle" text.
+  onTooltipKeyChanged: {
+    if (itemMouse.containsMouse && root.pluginApi)
+      TooltipService.show(root, root.pluginApi.tr(root.tooltipKey), "bottom");
+  }
 
   // Toggle recording via the spaces wrapper (which posts the start/stop
   // toast and calls voxtype). The home-manager module pins toggleCommand to

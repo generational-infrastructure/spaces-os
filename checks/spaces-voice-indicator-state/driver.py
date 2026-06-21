@@ -6,7 +6,7 @@ daemon does: by writing the bare lifecycle word to
 $XDG_RUNTIME_DIR/voxtype/state (truncate-in-place, mirroring voxtype's
 std::fs::write) and reading voiceState back over the quickshell ipc CLI.
 
-Asserts the seven-step contract the bar feature relies on:
+Asserts the seven-step lifecycle contract the bar feature relies on:
 
   1. no file yet                 → "down"   (onLoadFailed)
   2. write "idle"                → "idle"
@@ -19,6 +19,17 @@ Asserts the seven-step contract the bar feature relies on:
 
 This proves reactive idle→recording→transcribing on fs::write, the
 keep-previous rule on a transient empty read, and onLoadFailed→down.
+
+Then asserts the VAD-rejection inference the quality warning relies on.
+voxtype's energy VAD rejects a silent take by going recording→idle
+*without* ever writing "transcribing"; a real take goes
+recording→transcribing→idle. The service infers the former as a transient
+qualityWarning == "no_speech":
+
+  8.  recording → idle (no transcribing)   → quality "no_speech"
+  9.  wait out the (stubbed 600ms) timer   → quality ""   (auto-clear)
+  10. recording → transcribing → idle      → quality ""   (real take)
+  11. recording → idle, then recording     → warning clears on the new take
 
 Headless quickshell, offscreen platform. No voxtype, no compositor. ~3-10s.
 """
@@ -126,6 +137,9 @@ def main():
     def read_state() -> str:
         return ipc_call(qs_bin, shell_qml, env, "state")
 
+    def read_quality() -> str:
+        return ipc_call(qs_bin, shell_qml, env, "quality")
+
     def write_state(word: str) -> None:
         # Truncate-in-place, mirroring voxtype's std::fs::write.
         with open(state_file, "w") as f:
@@ -134,6 +148,10 @@ def main():
     def expect(word: str, label: str) -> None:
         if not wait_until(lambda: read_state() == word, timeout_s=8):
             die(f"{label}: expected {word!r}, got {read_state()!r}")
+
+    def expect_quality(word: str, label: str) -> None:
+        if not wait_until(lambda: read_quality() == word, timeout_s=8):
+            die(f"{label}: expected quality {word!r}, got {read_quality()!r}")
 
     try:
 
@@ -179,7 +197,54 @@ def main():
         os.remove(state_file)
         expect("down", "step7 removed")
 
-        sys.stderr.write("PASS: voice indicator reactive lifecycle holds\n")
+        # ── VAD-rejection inference ─────────────────────────────────────
+        # Re-seed a running daemon and assert the quality warning fires
+        # only when a recording ends without ever transcribing.
+
+        write_state("idle")
+        expect("idle", "step8 idle baseline")
+        expect_quality("", "step8 no warning at rest")
+
+        # (8) A rejected take: recording → idle, transcribing skipped.
+        write_state("recording")
+        expect("recording", "step8 recording")
+        expect_quality("", "step8 no warning while recording")
+        write_state("idle")
+        expect_quality("no_speech", "step8 rejection warns")
+
+        # (9) The (stubbed 600ms) timer clears it back to "".
+        expect_quality("", "step9 warning auto-clears")
+
+        # (10) A real take passes through transcribing → no warning.
+        write_state("recording")
+        expect("recording", "step10 recording")
+        write_state("transcribing")
+        expect("transcribing", "step10 transcribing")
+        write_state("idle")
+        # Give the transition a beat; a normal flow must NOT warn.
+        time.sleep(0.5)
+        if read_quality() != "":
+            die(f"step10 real take must not warn, got {read_quality()!r}")
+
+        # (11) A fresh recording clears a still-showing warning at once.
+        write_state("recording")
+        expect("recording", "step11 recording")
+        write_state("idle")
+        expect_quality("no_speech", "step11 rejection warns")
+        write_state("recording")
+        expect_quality("", "step11 new take clears warning")
+        # Leave the daemon "running"; the file removal below returns down.
+        write_state("idle")
+        # Observe idle before removing, so the FileView processes the write and
+        # the removal as distinct events: under load the two inotify events can
+        # otherwise coalesce and the widget settles on "idle" instead of "down".
+        expect("idle", "step11 cleanup idle before removal")
+        os.remove(state_file)
+        expect("down", "step11 cleanup removed")
+
+        sys.stderr.write(
+            "PASS: voice indicator lifecycle + VAD-rejection inference holds\n"
+        )
     finally:
         qs_proc.terminate()
         try:
