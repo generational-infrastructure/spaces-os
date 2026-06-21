@@ -1,0 +1,47 @@
+/* ============================================================
+   Kin / Spaces OS — Spacing, radius, shadow, motion (native tokens)
+   Soft, fully-rounded geometry (pills, big radii), diffuse low-
+   contrast shadows, and quick gentle easing.
+   ============================================================ */
+
+:root {
+  /* ---- Spacing scale (4px base) ---- */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /* ---- Radius — soft is the default; pills for actionable chrome ---- */
+  --radius-xs:     6px;
+  --radius-sm:     8px;
+  --radius-md:     12px;   /* default card / input */
+  --radius-lg:     16px;
+  --radius-xl:     20px;   /* large panels, file tiles */
+  --radius-2xl:    28px;
+  --radius-pill:   999px;  /* buttons, toggles, chips */
+  --radius-circle: 50%;
+
+  /* ---- Shadows — diffuse, low-alpha, never harsh ---- */
+  --shadow-xs:    0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-sm:    0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-md:    0 6px 18px rgba(0, 0, 0, 0.08);
+  --shadow-lg:    0 16px 40px rgba(0, 0, 0, 0.12);
+  --shadow-pop:   0 12px 32px rgba(0, 0, 0, 0.16);   /* menus, popovers */
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  --ring-hairline: 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* ---- Motion — fast, soft, no bounce on chrome ---- */
+  --ease-out:  cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-soft: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast:  120ms;
+  --dur-base:  200ms;
+  --dur-slow:  320ms;
+}
