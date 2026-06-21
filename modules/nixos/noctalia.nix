@@ -31,6 +31,25 @@ let
       { id = "plugin:voice-indicator"; }
       { id = "plugin:spaces-sessions"; }
     ];
+    # Matte glass bar, per the design: a translucent surface (here the Kin
+    # white) floating over a compositor blur of the wallpaper. noctalia's
+    # default 0.93 is near-opaque; 0.7 matches the design's rgba(255,255,255,
+    # 0.7). `enableBlurBehind` is the frosted blur behind the bar/panels/dock
+    # (on by default — pinned so the glass effect is guaranteed; it needs a
+    # compositor that supports the blur protocol, else it degrades to a clean
+    # translucent strip).
+    bar.backgroundOpacity = 0.7;
+    general.enableBlurBehind = true;
+    # Matte glass dock, per the design: a floating bottom dock of app icons,
+    # translucent over the same compositor blur as the bar. noctalia's dock is
+    # on by default; we pin it visible + floating and drop its opacity to the
+    # bar's 0.7 so the glass matches. `pinnedApps` is intentionally left empty
+    # — the dock shows running apps, and the Spaces pinned-app set isn't fixed
+    # here; populate it with desktop-entry ids (e.g. "firefox.desktop") later.
+    dock.enabled = true;
+    dock.dockType = "floating";
+    dock.displayMode = "always_visible";
+    dock.backgroundOpacity = 0.7;
     # Default the whole desktop to the Kin / Spaces OS colour scheme (light).
     # noctalia's ColorSchemeService resolves this name to the `Kin` scheme
     # materialised below, then writes ~/.config/noctalia/colors.json — the
