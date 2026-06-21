@@ -42,13 +42,15 @@ let
     general.enableBlurBehind = true;
     # Matte glass dock, per the design: a floating bottom dock of app icons,
     # translucent over the same compositor blur as the bar. noctalia's dock is
-    # on by default; we pin it visible + floating and drop its opacity to the
-    # bar's 0.7 so the glass matches. `pinnedApps` is intentionally left empty
-    # — the dock shows running apps, and the Spaces pinned-app set isn't fixed
-    # here; populate it with desktop-entry ids (e.g. "firefox.desktop") later.
+    # on by default; we float it and drop its opacity to the bar's 0.7 so the
+    # glass matches, but leave it auto-hiding (noctalia's default) so it tucks
+    # away until you reach the screen edge — the design mock shows it visible,
+    # but always-on permanently reserves screen space. `pinnedApps` is left
+    # empty — the dock shows running apps, and the Spaces pinned-app set isn't
+    # fixed here; populate it with desktop-entry ids (e.g. "firefox.desktop").
     dock.enabled = true;
     dock.dockType = "floating";
-    dock.displayMode = "always_visible";
+    dock.displayMode = "auto_hide";
     dock.backgroundOpacity = 0.7;
     # Default the whole desktop to the Kin / Spaces OS colour scheme (light).
     # noctalia's ColorSchemeService resolves this name to the `Kin` scheme
@@ -68,30 +70,42 @@ let
     ui.fontFixed = "DM Mono";
   };
 
+  # The Kin light palette as noctalia's 16 M3 role colours — white canvas,
+  # near-black ink, the teal-slate "Clan" accent, success-green / magenta /
+  # info-blue semantics. Shared between the scheme's `light` variant and the
+  # seeded colors.json below so they can't drift.
+  kinLight = {
+    mPrimary = "#345253"; # clan-primary-700 — teal-slate accent
+    mOnPrimary = "#ffffff";
+    mSecondary = "#06aaf1"; # info blue — links / focus
+    mOnSecondary = "#ffffff";
+    mTertiary = "#17b239"; # success green — online / connected
+    mOnTertiary = "#ffffff";
+    mError = "#d75d9f"; # destructive magenta
+    mOnError = "#ffffff";
+    mSurface = "#ffffff"; # white canvas — the matte-glass bar/dock surface
+    mOnSurface = "#171717"; # ink-900 body text
+    mSurfaceVariant = "#f3f3f3"; # ink-100 wells / cards / peer bubbles
+    mOnSurfaceVariant = "#6b6b6b"; # ink-500 muted text
+    mOutline = "#ebebeb"; # ink-200 hairline
+    mShadow = "#0d1416"; # clan-secondary-950 (noctalia applies alpha)
+    mHover = "#ebebeb"; # quiet grey hover fill
+    mOnHover = "#171717";
+  };
+
+  # Seed ~/.config/noctalia/colors.json directly with the Kin light palette.
+  # The bar and the pi-chat panel read colors.json, but noctalia only rewrites
+  # it when it *applies* a scheme — so on a host that already has a dark
+  # colors.json the bar would stay dark until a manual re-apply. Seeding it
+  # (deep-merged, managed wins) guarantees the light matte from first start;
+  # noctalia's own apply writes the same values, so there's no conflict.
+  kinColorsJson = (pkgs.formats.json { }).generate "noctalia-colors.json" kinLight;
+
   # The Kin / Spaces OS colour scheme, in noctalia's scheme format
-  # ({ light, dark } of M3 role colours + a terminal block). Values are the
-  # design system's tokens: white canvas, near-black ink, the teal-slate
-  # "Clan" accent, success-green / magenta / info-blue semantics. This is the
-  # same language the pi-web PWA and spaces-kits wear. The dark variant keeps
-  # the brand for a manual light/dark toggle.
+  # ({ light, dark } of M3 role colours + a terminal block). The dark variant
+  # keeps the brand for a manual light/dark toggle.
   kinColorScheme = (pkgs.formats.json { }).generate "Kin.json" {
-    light = {
-      mPrimary = "#345253"; # clan-primary-700 — teal-slate accent
-      mOnPrimary = "#ffffff";
-      mSecondary = "#06aaf1"; # info blue — links / focus
-      mOnSecondary = "#ffffff";
-      mTertiary = "#17b239"; # success green — online / connected
-      mOnTertiary = "#ffffff";
-      mError = "#d75d9f"; # destructive magenta
-      mOnError = "#ffffff";
-      mSurface = "#ffffff"; # white canvas
-      mOnSurface = "#171717"; # ink-900 body text
-      mSurfaceVariant = "#f3f3f3"; # ink-100 wells / cards / peer bubbles
-      mOnSurfaceVariant = "#6b6b6b"; # ink-500 muted text
-      mOutline = "#ebebeb"; # ink-200 hairline
-      mShadow = "#0d1416"; # clan-secondary-950 (noctalia applies alpha)
-      mHover = "#ebebeb"; # quiet grey hover fill
-      mOnHover = "#171717";
+    light = kinLight // {
       terminal = {
         normal = {
           black = "#171717";
@@ -262,6 +276,7 @@ let
       mkdir -p "$cfgDir/colorschemes/Kin"
       ln -sfn ${kinColorScheme} "$cfgDir/colorschemes/Kin/Kin.json"
 
+      mergeNoctaliaJson ${kinColorsJson}                   "$cfgDir/colors.json"
       mergeNoctaliaJson ${managedSettings}                 "$cfgDir/settings.json"
       mergeNoctaliaJson ${managedPlugins}                  "$cfgDir/plugins.json"
       mergeNoctaliaJson ${managedSpacesSessionsSettings}   "$cfgDir/plugins/spaces-sessions/settings.json"
