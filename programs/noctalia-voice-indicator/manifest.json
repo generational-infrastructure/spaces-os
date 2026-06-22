@@ -13,7 +13,9 @@
   "metadata": {
     "defaultSettings": {
       "toggleCommand": "spaces-voice-record-toggle",
-      "hideWhenIdle": false
+      "hideWhenIdle": false,
+      "barPulse": true,
+      "barPulseIntensity": 0.55
     }
   }
 }

@@ -96,10 +96,16 @@ pkgs.runCommand "spaces-voice-indicator-nix-eval-test"
     jq -e '.userKey == 42' "$cfg/settings.json" >/dev/null \
       || fail "merge clobbered an unmanaged user setting"
 
-    # ── 3. plugin settings.json (toggleCommand) ─────────────────────
+    # ── 3. plugin settings.json (toggleCommand + bar pulse) ─────────
     jq -e '.toggleCommand | test("spaces-voice-record-toggle")' \
       "$cfg/plugins/voice-indicator/settings.json" >/dev/null \
       || fail "plugin settings.json toggleCommand must target spaces-voice-record-toggle"
+    # The whole-bar ambient "recording" pulse ships ON by default; the
+    # managed settings must carry barPulse=true so the cue is wired
+    # without per-host opt-in.
+    jq -e '.barPulse == true' \
+      "$cfg/plugins/voice-indicator/settings.json" >/dev/null \
+      || fail "plugin settings.json must default barPulse=true"
 
     # ── 4. plugin code materialised under plugins/voice-indicator/ ──
     # Per-file symlinks into the store; the directory itself must be a
