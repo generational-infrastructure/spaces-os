@@ -236,6 +236,23 @@
                 Docker bridges only). The key is always required regardless.
               '';
             };
+
+            externalConfigFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "/var/lib/llama-swap/config.yaml";
+              description = ''
+                Hand this executor's llama-swap a writable, runtime-editable
+                config file instead of the bundled store-pinned catalog.
+                `null` (the default) ships the bundled models. Set to a path
+                and llama-swap loads it with `-watch-config`, dropping the
+                bundled GGUFs from the closure — models are managed at runtime
+                by editing the file, no rebuild. Forwards to
+                `services.llama-swap.externalConfigFile`; see there for the
+                seeding and permission details. Ensure `defaultModel` names a
+                model the file actually defines.
+              '';
+            };
           };
         };
       };
@@ -333,6 +350,7 @@
             ];
 
             services.llama-swap.enable = lib.mkDefault true;
+            services.llama-swap.externalConfigFile = settings.llamaSwap.externalConfigFile;
 
             # Require the instance-shared key on llama-swap. This covers the
             # loopback path the co-located pi-sessiond uses *and* the Docker-bridge

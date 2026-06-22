@@ -41,6 +41,20 @@ let
     url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q6_K.gguf";
     sha256 = "sha256-Pb9j4ivoM9DmhPJrNtRUSPXyBvDnpsrGtKqeDPTJzOg=";
   };
+
+  settingsFormat = pkgs.formats.yaml { };
+
+  # Minimal valid baseline seeded into externalConfigFile the first time the
+  # service starts (only when the file is absent). Carries the health-check
+  # default and, when a shared key is provisioned, the apiKeys requirement —
+  # so an externally managed endpoint starts out authenticated, not open.
+  # No models: those are the user's to add at runtime.
+  externalSeed = settingsFormat.generate "llama-swap-seed.yaml" {
+    healthCheckTimeout = 3600;
+    logToStdout = "both";
+    apiKeys = lib.optionals (cfg.apiKeyEnvFile != null) [ "\${env.LLAMA_SWAP_API_KEY}" ];
+    models = { };
+  };
 in
 {
   options.services.llama-swap = {
@@ -73,6 +87,31 @@ in
         default-allow mode (no authentication).
       '';
     };
+
+    externalConfigFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/var/lib/llama-swap/config.yaml";
+      description = ''
+        Source the model catalog from a writable file managed outside Nix,
+        instead of the bundled, store-pinned model set.
+
+        `null` (the default) ships the in-module catalog (qwen2.5 / gemma4),
+        fetching each GGUF into the store — fully reproducible, but every
+        served model is part of the system closure.
+
+        Set to a path and llama-swap loads that file directly and runs with
+        `-watch-config`, reloading on change. The bundled catalog is dropped
+        so its GGUFs never enter the closure; models are added/removed at
+        runtime by editing the file (and dropping the GGUFs anywhere the
+        service can read), no rebuild. The path must live outside `/home` and
+        `/root` (the unit runs with `ProtectHome`); it is readable there but,
+        as seeded, writable only by root. The file is seeded with a minimal
+        valid baseline (health-check + the shared-key requirement when
+        `apiKeyEnvFile` is set) on first start if it does not yet exist —
+        keep that `apiKeys` line, or the endpoint becomes unauthenticated.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -97,7 +136,10 @@ in
           # its process environment at startup, so the secret stays out of the
           # store-rendered config.yaml. Empty list = upstream default-allow.
           apiKeys = lib.optionals (cfg.apiKeyEnvFile != null) [ "\${env.LLAMA_SWAP_API_KEY}" ];
-          models = {
+          # Bundled, store-pinned catalog. Dropped when externalConfigFile is
+          # set — then the writable file owns the model set, and these GGUF
+          # fetches (and the closure weight they add) drop out entirely.
+          models = lib.mkIf (cfg.externalConfigFile == null) {
             "qwen2.5:0.5b" = {
               cmd = "${llama-server} -m ${qwen25-05b-gguf} --port \${PORT}" + modelArgs "qwen2.5:0.5b";
             };
@@ -137,7 +179,34 @@ in
       # above) at runtime. systemd reads this as root before dropping to the
       # unit's DynamicUser, so the key file never has to be readable by that user.
       serviceConfig.EnvironmentFile = lib.mkIf (cfg.apiKeyEnvFile != null) [ cfg.apiKeyEnvFile ];
+      # External writable config: load it directly and hot-reload on change.
+      # Mirrors upstream's ExecStart (listen + optional TLS) but swaps the
+      # store config for the writable path and adds -watch-config.
+      serviceConfig.ExecStart = lib.mkIf (cfg.externalConfigFile != null) (
+        lib.mkForce "${lib.getExe cfg.package} ${
+          lib.escapeShellArgs (
+            [
+              "--listen=${cfg.listenAddress}:${toString cfg.port}"
+              "--config=${cfg.externalConfigFile}"
+              "-watch-config"
+            ]
+            ++ lib.optionals cfg.tls.enable [
+              "--tls-cert-file=${cfg.tls.certFile}"
+              "--tls-key-file=${cfg.tls.keyFile}"
+            ]
+          )
+        }"
+      );
     };
+
+    # Seed the writable config once (only when missing) and ensure its
+    # directory exists. tmpfiles `C` copies the baseline only if the
+    # destination does not already exist, so runtime edits are never
+    # clobbered by a rebuild.
+    systemd.tmpfiles.rules = lib.mkIf (cfg.externalConfigFile != null) [
+      "d ${builtins.dirOf cfg.externalConfigFile} 0755 root root - -"
+      "C ${cfg.externalConfigFile} 0644 root root - ${externalSeed}"
+    ];
 
     # Free GPU VRAM across sleep: stop llama-swap (and the llama-server child
     # holding VRAM) before the machine sleeps, and restart it on resume.
