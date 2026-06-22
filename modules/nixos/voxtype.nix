@@ -82,6 +82,7 @@ let
         whisper = {
           language = cfg.whisperLanguage;
           model = toString models.${cfg.whisperModel};
+          initial_prompt = cfg.initialPrompt;
         };
       };
 
@@ -153,6 +154,16 @@ in
       type = lib.types.str;
       default = "auto";
       description = "Whisper language (e.g. 'en', 'auto').";
+    };
+    initialPrompt = lib.mkOption {
+      type = lib.types.str;
+      default = "Voice input from a Spaces OS user dictating to the pi agent. Likely terms: Spaces OS, NixOS, Nix flake, derivation, Quickshell, QML, Wayland, niri, systemd, llama-swap, pi agent, Claude, Rust, TypeScript, Python, async, struct, enum, GitHub, pull request, commit.";
+      description = ''
+        Whisper decoder priming text (whisper.cpp `initial_prompt`). Biases
+        transcription toward domain vocabulary. Keep it short: whisper's
+        prompt budget is ~224 tokens and over-stuffing it degrades accuracy.
+        Ignored by the parakeet engine.
+      '';
     };
   };
 
