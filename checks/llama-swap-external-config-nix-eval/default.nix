@@ -52,8 +52,12 @@ in
 pkgs.runCommand "llama-swap-external-config-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
-    bundledModels = builtins.toJSON (builtins.attrNames (bundled.config.services.llama-swap.settings.models or { }));
-    externalModels = builtins.toJSON (builtins.attrNames (external.config.services.llama-swap.settings.models or { }));
+    bundledModels = builtins.toJSON (
+      builtins.attrNames (bundled.config.services.llama-swap.settings.models or { })
+    );
+    externalModels = builtins.toJSON (
+      builtins.attrNames (external.config.services.llama-swap.settings.models or { })
+    );
     externalExecStart = builtins.toJSON externalUnit.ExecStart;
     externalTmpfiles = builtins.toJSON external.config.systemd.tmpfiles.rules;
   }
