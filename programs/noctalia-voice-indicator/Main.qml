@@ -64,4 +64,43 @@ Item {
 
   // FileView 0.3.0 only arms the watcher on construction; prime the read.
   Component.onCompleted: stateView.reload()
+
+  // ── Whole-bar ambient "recording" pulse ──────────────────────────
+  // A SECOND cue alongside the per-widget mic recolor: while voxtype is
+  // capturing, the bar grows a breathing red edge-glow (BarPulse.qml).
+  // Both cues read the same voiceState, so there is no second watcher.
+  readonly property var cfg: pluginApi ? pluginApi.pluginSettings : ({})
+
+  // Default ON; an explicit barPulse:false opts out (motion sensitivity).
+  readonly property bool barPulseEnabled: !(cfg && cfg.barPulse === false)
+
+  // Peak glow alpha at the bar edge (ambient; 0..1), with a tasteful
+  // fallback when unset or out of range.
+  readonly property real pulseIntensity: {
+    const v = cfg ? cfg.barPulseIntensity : undefined;
+    return (typeof v === "number" && v > 0 && v <= 1) ? v : 0.55;
+  }
+
+  // recording / streaming are live capture; transcribing / idle / down
+  // are not. Mirrors BarWidget.qml's isRecording so the two cues agree.
+  readonly property bool isRecording: voiceState === "recording" || voiceState === "streaming"
+  readonly property bool pulseActive: barPulseEnabled && isRecording
+
+  // The overlay is its own layer-shell surface (BarPulse.qml). It is only
+  // reachable when the plugin host is present (pluginApi set); staying
+  // inert without it keeps this service standalone-loadable, since
+  // BarPulse pulls in noctalia's qs.Commons / layer-shell. Loaded once
+  // when enabled; it maps a surface only while pulseActive.
+  LazyLoader {
+    id: barPulseLoader
+    active: root.pluginApi !== null && root.barPulseEnabled
+    source: Qt.resolvedUrl("BarPulse.qml")
+  }
+
+  Binding {
+    target: barPulseLoader.item
+    property: "service"
+    value: root
+    when: barPulseLoader.item !== null
+  }
 }

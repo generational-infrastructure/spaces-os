@@ -52,11 +52,16 @@ let
   # taken from the typed command set so it can't drift from what's
   # installed. The voice indicator shells out to it on click; voxtype /
   # notify-send resolve from the noctalia service PATH when it runs.
+  #
+  # barPulse pins the whole-bar ambient "recording" glow ON by default;
+  # it is a managed enable so the cue ships everywhere, while the glow's
+  # intensity stays an unmanaged per-user taste knob (barPulseIntensity).
   managedVoiceIndicatorSettings =
     (pkgs.formats.json { }).generate "noctalia-voice-indicator-settings.json"
       {
         toggleCommand = "${config.services.spaces.commands.voice-record-toggle}/bin/spaces-voice-record-toggle";
         hideWhenIdle = false;
+        barPulse = true;
       };
 
   # The bundled plugin's source tree (manifest + QML). Copied into the
