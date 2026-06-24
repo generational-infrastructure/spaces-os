@@ -16,6 +16,10 @@ let
   llama-server = pkgs.lib.getExe' config.services.llama-swap.llama-server-package "llama-server";
 in
 {
+  # Optional openrouter mode (gated on $OPENROUTER_API_KEY, --impure).
+  # No-op under pure eval. Shared with checks/test-machine.nix.
+  imports = [ ./openrouter.nix ];
+
   networking.hostName = "test-machine";
 
   boot.loader.systemd-boot.enable = true;

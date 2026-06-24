@@ -165,13 +165,16 @@ def wait_port(port, timeout=30):
     fail(f"daemon never opened port {port}")
 
 
-def spawn_daemon(daemon_bin, state, log):
+def spawn_daemon(daemon_bin, stub_pi, systemd_run, state, log):
     env = dict(os.environ)
     env.update(
         {
             "SPACES_SESSIOND_HOST": "127.0.0.1",
             "SPACES_SESSIOND_PORT": str(PORT),
             "SPACES_SESSIOND_TOKEN": TOKEN,
+            # The supervisor spawns this per session; the stub speaks rpc-mode.
+            "SPACES_SESSIOND_PI_BIN": stub_pi,
+            "SPACES_SESSIOND_SYSTEMD_RUN": systemd_run,
             "LLAMA_SWAP_BASE_URL": "http://127.0.0.1:1",  # unused; no prompt
             "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
             "SPACES_SESSIOND_STATE_DIR": state,
@@ -183,15 +186,17 @@ def spawn_daemon(daemon_bin, state, log):
 
 
 def main():
-    if len(sys.argv) < 2:
-        fail("usage: driver.py <daemon_bin>")
+    if len(sys.argv) < 4:
+        fail("usage: driver.py <daemon_bin> <stub_pi> <systemd_run>")
     daemon_bin = sys.argv[1]
+    stub_pi = sys.argv[2]
+    systemd_run = sys.argv[3]
 
     state = tempfile.mkdtemp(prefix="sessiond-cold-")
     log_path = os.path.join(state, "daemon.log")
     log = open(log_path, "wb")
 
-    proc = spawn_daemon(daemon_bin, state, log)
+    proc = spawn_daemon(daemon_bin, stub_pi, systemd_run, state, log)
     try:
         wait_port(PORT)
 
@@ -206,7 +211,7 @@ def main():
 
         proc.terminate()
         proc.wait(timeout=10)
-        proc = spawn_daemon(daemon_bin, state, log)
+        proc = spawn_daemon(daemon_bin, stub_pi, systemd_run, state, log)
         wait_port(PORT)
 
         asyncio.run(scenario_cold_attach_pipelined(sid))

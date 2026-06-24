@@ -1,0 +1,21 @@
+#!/bin/sh
+# Stand-in for pi-landlock-exec inside the build sandbox / cheap checks. The real
+# launcher reads `--json <policy> [--json <policy> …] -- <child…>`, applies the
+# Landlock domain, then execs the child. There is no real kernel Landlock to
+# assert here (that is checks/pi-sessiond-landlock), so we strip the policy flags
+# and exec the child unconfined.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json)
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+exec "$@"

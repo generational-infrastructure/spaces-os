@@ -29,6 +29,9 @@ let
       host = betaHost;
     }
   ];
+  # Passthrough launcher stubs (no systemd / no kernel Landlock in the build
+  # sandbox); real Landlock enforcement is checks/pi-sessiond-landlock.
+  stubs = import ../pi-sessiond-sidechannel/launcher-stubs.nix { inherit pkgs; };
 in
 pkgs.runCommand "pi-web-multi-executor-test"
   {
@@ -43,6 +46,8 @@ pkgs.runCommand "pi-web-multi-executor-test"
     set -euo pipefail
     export HOME="$TMPDIR"
     export FONTCONFIG_FILE=${fontsConf}
+    # Both daemons inherit the launcher from the environment.
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
     mkdir -p "$TMPDIR/state-alpha" "$TMPDIR/state-beta" "$TMPDIR/profile"
 
     # Alpha — serves the PWA, declares both peers.
@@ -54,6 +59,7 @@ pkgs.runCommand "pi-web-multi-executor-test"
     SPACES_SESSIOND_STATE_DIR="$TMPDIR/state-alpha" \
     SPACES_SESSIOND_IDLE_TIMEOUT_MS=0 \
     SPACES_SESSIOND_PEERS=${pkgs.lib.escapeShellArg peersJson} \
+    SPACES_SESSIOND_SYSTEMD_RUN=${stubs.systemdRun}/bin/systemd-run \
       ${pkgs.lib.getExe daemon} >"$TMPDIR/alpha.log" 2>&1 &
     alpha=$!
 
@@ -64,6 +70,7 @@ pkgs.runCommand "pi-web-multi-executor-test"
     SPACES_SESSIOND_TOKEN=multi-token \
     SPACES_SESSIOND_STATE_DIR="$TMPDIR/state-beta" \
     SPACES_SESSIOND_IDLE_TIMEOUT_MS=0 \
+    SPACES_SESSIOND_SYSTEMD_RUN=${stubs.systemdRun}/bin/systemd-run \
       ${pkgs.lib.getExe daemon} >"$TMPDIR/beta.log" 2>&1 &
     beta=$!
 

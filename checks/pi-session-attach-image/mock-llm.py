@@ -5,11 +5,11 @@ Stands in for the executor's llama-swap, with one twist over the other mock
 LLMs: every /v1/chat/completions request BODY is appended (one raw line per
 request) to the capture file in argv[2]. The driver greps that capture for the
 tiny PNG's exact base64 payload to prove the panel-encoded image rode the WS
-`prompt` command through pi-sessiond and the pi SDK all the way into the LLM
-request.
+`prompt` command through the pi-sessiond supervisor and the per-session
+`pi --mode rpc` child all the way into the LLM request.
 
-  GET  /v1/models           -> [mock-model]  (pi-sessiond's provider discovery
-                               registers it under provider "local")
+  GET  /v1/models           -> [mock-model]  (the pi child's llama-swap-discover
+                               extension registers it under provider "local")
   POST /v1/chat/completions -> body recorded, then a short streamed reply
 
 Usage: mock-llm.py <port> <capture_file>

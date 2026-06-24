@@ -19,6 +19,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chownSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -27,28 +28,16 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { ServerWebSocket } from "bun";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { RpcDriver, type RpcFrame } from "./rpc-driver";
 import {
-  type AgentSession,
-  type AgentSessionEvent,
-  AuthStorage,
-  type BashOperations,
-  createAgentSession,
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
-  DefaultResourceLoader,
-  type ExtensionUIContext,
-  ModelRegistry,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import {
-  type BashSandboxConfig,
-  buildBashSandboxArgv,
   type SandboxBind,
+  buildLandlockPolicy,
+  buildLandlockUnitArgv,
 } from "./sandbox";
+import { startCredentialProxy } from "./proxy";
 import { stageFile } from "./staging";
 import { fetchModels } from "./provider";
 
@@ -68,15 +57,50 @@ const STATE_DIR = resolve(
     process.env.STATE_DIRECTORY ??
     "/tmp/pi-sessiond",
 );
-// systemd-run that confines each `bash` tool command (or a stub, in tests).
+// systemd-run that wraps each per-session pi child in its Landlock confinement
+// unit (sandbox.ts). The runtime is always sandboxed. Production points this at
+// the real `systemd-run` (`--user` for the desktop user service, system scope
+// for the server); the cheap checks point it at a passthrough stub that strips
+// the unit flags, applies --setenv, and execs the launcher + child directly.
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
+// pi-landlock-exec, the per-session Landlock launcher (sandbox.ts / design §6):
+// the sole sandbox path. main.ts writes a per-session landlockconfig policy and
+// execs the child through the launcher, which applies the self-applied domain
+// before pi. Required — the daemon refuses to start without it.
+const LANDLOCK_EXEC = process.env.SPACES_SESSIOND_LANDLOCK_EXEC ?? "";
+if (!LANDLOCK_EXEC) {
+  throw new Error(
+    "pi-sessiond: SPACES_SESSIOND_LANDLOCK_EXEC is required (the per-session Landlock launcher)",
+  );
+}
+// System/remote executor: the root daemon drops each per-session unit to this
+// fixed non-root user and chowns the session's dirs to it (Landlock confines
+// but does not drop privilege). Resolved to uid/gid from /etc/passwd. Empty on
+// the desktop user service, whose unit already runs as the daemon's own uid.
+const SESSION_USER = process.env.SPACES_SESSIOND_SESSION_USER ?? "";
+function resolveUser(name: string): { uid: number; gid: number } {
+  const line = readFileSync("/etc/passwd", "utf8")
+    .split("\n")
+    .find((l) => l.startsWith(`${name}:`));
+  if (!line) {
+    throw new Error(
+      `pi-sessiond: SPACES_SESSIOND_SESSION_USER=${name} not in /etc/passwd`,
+    );
+  }
+  const fields = line.split(":");
+  return { uid: Number(fields[2]), gid: Number(fields[3]) };
+}
+const SESSION_IDS = SESSION_USER ? resolveUser(SESSION_USER) : undefined;
+// pi binary spawned per session in rpc-mode (or a stub, in tests).
+const PI_BIN = process.env.SPACES_SESSIOND_PI_BIN ?? "pi";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
-// Skill plumbing for the sandboxed bash units (NixOS module → JSON env).
-// SPACES_SESSIOND_BASH_ENV: { VAR: value } --setenv'd into every bash unit
+// Skill plumbing for the session's bash tool (NixOS module → JSON env).
+// SPACES_SESSIOND_BASH_ENV: { VAR: value } --setenv'd into the session unit
 // (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_BASH_BINDS:
-// [{ source, target?, mode, optional? }] bind-mounted through the unit's
-// ProtectHome=tmpfs. Paths arrive pre-expanded — systemd resolves %h/%t in
-// the module's Environment= lines before the daemon ever sees them.
+// [{ source, mode }] folded into the session's Landlock FS allowlist (bash
+// inherits the session domain — it is not a separate unit). Paths arrive
+// pre-expanded — systemd resolves %h/%t in the module's Environment= lines
+// before the daemon ever sees them.
 function jsonEnv<T>(name: string, fallback: T): T {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -95,12 +119,29 @@ const BASH_BINDS = jsonEnv<SandboxBind[]>("SPACES_SESSIOND_BASH_BINDS", []);
 // bash-confirm allow-list template, staged next to settings.json (the
 // bash-confirm extension reads $PI_CODING_AGENT_DIR/bash-confirm.json).
 const BASH_CONFIRM_TEMPLATE = process.env.SPACES_SESSIOND_BASH_CONFIRM ?? "";
-// Trusted executor → skip filesystem narrowing (ProtectHome) for bash; the
-// kernel/namespace hardening still applies. Default: untrusted (sandboxed).
-const TRUSTED = (process.env.SPACES_SESSIOND_TRUSTED ?? "") === "1";
+// Env the sandboxed child needs but cannot inherit (its unit gets a fresh
+// env): the provider endpoint, the memory store, telemetry opt-outs, and PATH
+// for the in-sandbox bash + skill CLIs. Curated allowlist — secrets (the LLM
+// key) never cross into the sandbox.
+function childPassthroughEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of [
+    "PATH",
+    "LLAMA_SWAP_BASE_URL",
+    "SEDIMENT_DB",
+    "HF_HOME",
+    "PI_OFFLINE",
+    "PI_TELEMETRY",
+  ]) {
+    const v = process.env[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
 // A live-idle session with no attached clients is disposed after
 // IDLE_TIMEOUT_MS (0 disables); MAX_LIVE caps resident sessions (0 = unlimited).
-// Both rely on the SDK SessionManager reloading the jsonl on the next attach.
+// Both rely on the child re-reading the jsonl from its session-dir on the
+// next attach (the supervisor respawns a fresh pi child for it).
 const IDLE_TIMEOUT_MS = Number(
   process.env.SPACES_SESSIOND_IDLE_TIMEOUT_MS ?? "1800000",
 );
@@ -199,12 +240,21 @@ function loadLlamaSwapKey(): string {
 }
 const LLAMA_SWAP_KEY = loadLlamaSwapKey();
 
-// Bundled pi extensions loaded into every session (e.g. bash-confirm, which
-// drives the confirm side-channel). Colon-separated paths; the daemon does its
-// own provider discovery, so llama-swap-discover is intentionally not here.
-const EXTENSION_PATHS = (process.env.SPACES_SESSIOND_PI_EXTENSIONS ?? "")
-  .split(":")
-  .filter((p) => p.length > 0);
+// The LLM loop runs in the session sandbox, but the OpenRouter key stays in the
+// supervisor: run a loopback proxy that injects it (proxy.ts, §6.2) and hand
+// sessions only its URL + a dummy key. Empty when no key is configured —
+// OpenRouter is then simply unavailable inside sessions.
+const openRouterProxy = OPENROUTER_KEY
+  ? startCredentialProxy({
+      key: OPENROUTER_KEY,
+      upstream: "https://openrouter.ai/api/v1",
+    })
+  : undefined;
+const OPENROUTER_PROXY_URL = openRouterProxy
+  ? `http://127.0.0.1:${openRouterProxy.port}`
+  : "";
+// The credential-proxy TCP port — the only egress the Landlock policy allows.
+const PROXY_PORT = openRouterProxy?.port;
 
 // One writable pi agent dir (HOME / PI_CODING_AGENT_DIR), seeded from the
 // module's settings.json template. pi reads settings.json here and writes
@@ -312,26 +362,6 @@ async function setupProvider(): Promise<void> {
   });
 }
 
-// Resolve a model for a session: the requested id (bare, or the panel's
-// "provider/id" form — the first segment is the provider, the rest the id,
-// so OpenRouter's slashed ids survive), else the configured default, else
-// the first available — inference lets us avoid annotating Model<…>.
-function resolveModel(modelId: string) {
-  const slash = modelId.indexOf("/");
-  const qualified =
-    slash > 0
-      ? modelRegistry.find(modelId.slice(0, slash), modelId.slice(slash + 1))
-      : undefined;
-  return (
-    qualified ??
-    (modelId ? modelRegistry.find(DEFAULT_PROVIDER, modelId) : undefined) ??
-    (DEFAULT_MODEL
-      ? modelRegistry.find(DEFAULT_PROVIDER, DEFAULT_MODEL)
-      : undefined) ??
-    modelRegistry.getAvailable()[0]
-  );
-}
-
 // ---- connection + session state -------------------------------------------
 
 interface ConnData {
@@ -357,8 +387,7 @@ const BUFFER_CAP = 4096;
 interface Session {
   id: string;
   name: string; // display label (create_session.name); "" if unnamed
-  agent: AgentSession;
-  unsubscribe: () => void;
+  driver: RpcDriver;
   seq: number;
   subscribers: Set<Conn>;
   buffer: BufferedEvent[];
@@ -368,7 +397,7 @@ interface Session {
   // Open side-channel requests (id -> method) awaiting an answer; used to dedupe
   // responses first-answer-wins and to drive the parked state.
   pendingSidechannels: Map<string, string>;
-  // id -> resolver for the in-process uiContext promise pi is awaiting.
+  // id -> relay the panel's answer to the child as an extension_ui_response.
   resolvers: Map<string, (response: Record<string, unknown>) => void>;
 }
 const sessions = new Map<string, Session>();
@@ -437,6 +466,88 @@ function sessionDirOf(id: string): string {
 function workdirOf(id: string): string {
   return `${STATE_DIR}/workspaces/${id}`;
 }
+// Each Landlock session's own writable agent dir (HOME / PI_CODING_AGENT_DIR),
+// nested under its session dir so the one rw grant on the session dir covers it
+// and concurrent instances never share a writable HOME.
+function agentDirOf(id: string): string {
+  return `${sessionDirOf(id)}/agent`;
+}
+// Seed a session's private agent dir with the static config. COPIED, not
+// symlinked: pi's settings-manager and startup migration rewrite settings.json,
+// and the store templates are 0444 — a symlink would EACCES. auth.json /
+// models.json / *.lock pi creates here itself; the long-term memory store stays
+// shared (granted separately in writeLandlockPolicy).
+function seedAgentDir(id: string): string {
+  const dir = agentDirOf(id);
+  mkdirSync(dir, { recursive: true });
+  if (SETTINGS_TEMPLATE) stageFile(SETTINGS_TEMPLATE, `${dir}/settings.json`);
+  if (BASH_CONFIRM_TEMPLATE) {
+    stageFile(BASH_CONFIRM_TEMPLATE, `${dir}/bash-confirm.json`);
+  }
+  return dir;
+}
+// Recursively chown a session's dir tree to the unit's uid/gid. System scope
+// only: the root daemon creates these dirs root-owned, but the per-session unit
+// runs as a fixed non-root uid that must own them to write. The daemon (root)
+// still reads them back for the session list.
+function chownTree(path: string, ids: { uid: number; gid: number }): void {
+  chownSync(path, ids.uid, ids.gid);
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const child = `${path}/${entry.name}`;
+    if (entry.isDirectory()) chownTree(child, ids);
+    else chownSync(child, ids.uid, ids.gid);
+  }
+}
+// The TCP port a base URL dials (explicit port, else the scheme default). Used
+// to grant the child connect_tcp to its model endpoint(s) under Landlock.
+function modelPort(url: string): number | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    return u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+  } catch {
+    return undefined;
+  }
+}
+// The per-session landlockconfig policy (design §5). Deny-by-default, bucketed
+// by path type so each grant matches its inode (sandbox.ts). The workspace + the
+// session dir (which contains this session's private agent dir / HOME) are
+// granted rw; the shared long-term memory store is added below. Written next to
+// the session so the launcher (pre-exec, uid 1000) can read it.
+function writeLandlockPolicy(id: string): string {
+  const rwDirs = [workdirOf(id), sessionDirOf(id)];
+  const rwFiles: string[] = [];
+  const roDirs: string[] = [];
+  const roFiles: string[] = [];
+  // A bind source ending in `.sock` is a unix socket (a file); everything else
+  // is a directory the bash tool reads/writes/lists. Splitting them keeps
+  // directory rights off socket inodes (which would downgrade enforcement).
+  for (const b of BASH_BINDS) {
+    const isSocket = b.source.endsWith(".sock");
+    if (b.mode === "rw") (isSocket ? rwFiles : rwDirs).push(b.source);
+    else (isSocket ? roFiles : roDirs).push(b.source);
+  }
+  // The memory store (sediment) writes a sqlite db plus -wal/-shm siblings.
+  const sedimentDb = process.env.SEDIMENT_DB;
+  if (sedimentDb) rwDirs.push(dirname(sedimentDb));
+  // Egress: the child dials the credential proxy (openrouter) and/or the local
+  // llama-swap endpoint. Grant connect_tcp to whichever ports are configured.
+  const connectPorts = [PROXY_PORT, modelPort(LLM_URL)].filter(
+    (p): p is number => typeof p === "number",
+  );
+
+  const policy = buildLandlockPolicy({
+    rwDirs,
+    rwFiles,
+    roDirs,
+    roFiles,
+    connectPorts,
+  });
+  mkdirSync(sessionDirOf(id), { recursive: true });
+  const path = `${sessionDirOf(id)}/landlock.json`;
+  writeFileSync(path, JSON.stringify(policy));
+  return path;
+}
 // Sibling of the session dir (not inside it) so pi never sees the daemon's
 // bookkeeping file in its session dir.
 function metaPathOf(id: string): string {
@@ -467,73 +578,6 @@ function readSessionMeta(id: string): SessionMeta | undefined {
   return { provider, model, name: asString(parsed.name) ?? "" };
 }
 
-// ---- sandboxed bash tool (design §8) ---------------------------------------
-
-// BashOperations that run each command inside a `systemd-run` confinement unit
-// (the bouquet from sandbox.ts). Output streams via onData; the AbortSignal and
-// timeout kill the unit. In tests SYSTEMD_RUN is a stub that strips the flags
-// and execs `bash -c <command>` directly.
-function sandboxedBashOperations(id: string): BashOperations {
-  const sessionDir = sessionDirOf(id);
-  return {
-    exec(command, cwd, options) {
-      const cfg: BashSandboxConfig = {
-        systemdRun: SYSTEMD_RUN,
-        workdir: cwd,
-        agentDir: AGENT_DIR,
-        memoryHigh: MEMORY_HIGH,
-        trusted: TRUSTED,
-        extraBinds: [sessionDir],
-        binds: BASH_BINDS,
-        // Skill CLIs resolve by bare name (PATH from the daemon's unit) and
-        // find their plumbing via the module-provided env. SPACES_SESSION_ID
-        // routes skill-config prompts back to the owning chat session.
-        env: {
-          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-          ...BASH_ENV,
-          SPACES_SESSION_ID: id,
-        },
-      };
-      const argv = buildBashSandboxArgv(cfg, command);
-      const { promise, resolve } = Promise.withResolvers<{
-        exitCode: number | null;
-      }>();
-      const child = spawn(argv[0], argv.slice(1), {
-        cwd,
-        env: options.env ?? process.env,
-      });
-      const onAbort = () => child.kill("SIGTERM");
-      options.signal?.addEventListener("abort", onAbort, { once: true });
-      const timer =
-        options.timeout && options.timeout > 0
-          ? setTimeout(() => child.kill("SIGKILL"), options.timeout)
-          : undefined;
-      const finish = (exitCode: number | null) => {
-        if (timer) clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        resolve({ exitCode });
-      };
-      child.stdout?.on("data", (d: Buffer) => options.onData(d));
-      child.stderr?.on("data", (d: Buffer) => options.onData(d));
-      child.on("error", () => finish(null));
-      child.on("close", (code) => finish(code));
-      return promise;
-    },
-  };
-}
-
-function buildTools(id: string) {
-  const workdir = workdirOf(id);
-  return [
-    createBashToolDefinition(workdir, {
-      operations: sandboxedBashOperations(id),
-    }),
-    createReadToolDefinition(workdir),
-    createEditToolDefinition(workdir),
-    createWriteToolDefinition(workdir),
-  ];
-}
-
 // ---- side channels (extension_ui, design §6) -------------------------------
 
 // Run the configured notifier for a parked request, so a zero-client session
@@ -556,31 +600,45 @@ function fireNotifier(session: Session, method: string, title: string): void {
   child.unref();
 }
 
-// pi (in-process) asked for a confirm/input/select/editor via uiContext. Mint an
-// id, surface it to attached clients as an `extension_ui_request` event (or park
-// + notify when none are attached), and return a promise pi awaits until a
-// client answers (resolveSidechannel). First-answer-wins; a request is buffered
-// like any event so a reconnecting client replays it.
-function askSideChannel(
-  session: Session,
-  method: string,
-  payload: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const id = randomUUID();
-  const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
+// The child emitted an extension_ui_request over the rpc pipe. Methods that
+// expect an answer (confirm/select/input/editor) surface to attached clients
+// as the `extension_ui_request` event the panel renders — buffered like any
+// event so a reconnecting client replays it — and park + notify when none are
+// attached; the client's reply is relayed back to the child as an
+// extension_ui_response (resolveSidechannel). notify reaches the user
+// out-of-band when unattended. Other ui methods (status/widget/title) have no
+// panel affordance and are dropped, matching the old terminal no-ops.
+function surfaceSideChannel(session: Session, frame: RpcFrame): void {
+  const id = asString(frame.id);
+  const method = asString(frame.method);
+  if (!id || !method) return;
+  if (method === "notify") {
+    if (session.subscribers.size === 0)
+      fireNotifier(session, "notify", asString(frame.message) ?? "");
+    else broadcast(session, frame);
+    return;
+  }
+  if (
+    method !== "confirm" &&
+    method !== "select" &&
+    method !== "input" &&
+    method !== "editor"
+  )
+    return;
   session.pendingSidechannels.set(id, method);
-  session.resolvers.set(id, resolve);
-  broadcast(session, { type: "extension_ui_request", id, method, ...payload });
+  session.resolvers.set(id, (response) =>
+    session.driver.send({ ...response, type: "extension_ui_response", id }),
+  );
+  broadcast(session, frame);
   if (session.subscribers.size === 0) {
     session.parked = true;
-    fireNotifier(session, method, asString(payload.title) ?? "");
+    fireNotifier(session, method, asString(frame.title) ?? "");
   }
-  return promise;
 }
 
-// First-answer-wins: resolve pi's pending uiContext promise with the first
-// client's response, tell the other attached clients to collapse, and unpark.
-// A later (lost-race) answer just collapses the sender's prompt.
+// First-answer-wins: relay the first client's response to the child as the
+// extension_ui_response it's awaiting, tell the other attached clients to
+// collapse, and unpark. A later (lost-race) answer just collapses its prompt.
 function resolveSidechannel(
   session: Session,
   from: Conn,
@@ -615,103 +673,89 @@ function resolveSidechannel(
   resolver(response);
 }
 
-// uiContext bound to a session: confirm/select/input/editor await a client; the
-// rest are terminal-only no-ops (the daemon has no TUI).
-function makeUiContext(session: Session): ExtensionUIContext {
-  return {
-    async confirm(title, message, opts) {
-      const r = await askSideChannel(session, "confirm", {
-        title,
-        message,
-        timeout: opts?.timeout,
-      });
-      return r.confirmed === true;
-    },
-    async select(title, options, opts) {
-      const r = await askSideChannel(session, "select", {
-        title,
-        options,
-        timeout: opts?.timeout,
-      });
-      return typeof r.value === "string" ? r.value : undefined;
-    },
-    async input(title, placeholder, opts) {
-      const r = await askSideChannel(session, "input", {
-        title,
-        placeholder,
-        timeout: opts?.timeout,
-      });
-      return typeof r.value === "string" ? r.value : undefined;
-    },
-    async editor(title, prefill) {
-      const r = await askSideChannel(session, "editor", { title, prefill });
-      return typeof r.value === "string" ? r.value : undefined;
-    },
-    notify(message, type) {
-      if (session.subscribers.size === 0)
-        fireNotifier(session, "notify", message);
-      else
-        broadcast(session, {
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "notify",
-          message,
-          notifyType: type,
-        });
-    },
-    onTerminalInput() {
-      return () => {};
-    },
-    setStatus() {},
-    setWorkingMessage() {},
-    setWorkingVisible() {},
-    setWidget() {},
-    setTitle() {},
-    pasteToEditor() {},
-    setEditorText() {},
-    getEditorText() {
-      return "";
-    },
-  };
-}
-
 // ---- session lifecycle -----------------------------------------------------
 
-function peekBusy(session: Session, ev: AgentSessionEvent): void {
+function peekBusy(session: Session, ev: RpcFrame): void {
   if (ev.type === "agent_start") session.busy = true;
   else if (ev.type === "agent_end") session.busy = false;
 }
 
-// Build a Session around an SDK AgentSession (fresh or reloaded), wire its event
-// stream to the §12 broadcast, and bind the side-channel uiContext.
-async function registerSession(
+// Build a Session around a freshly spawned pi rpc-mode child. The supervisor
+// runs no model code: it spawns `pi --mode rpc` pinned to this session's
+// session-dir/id and workspace, then drives it over the rpc pipe. --session-id
+// creates the session jsonl when absent and resumes it when present, so one
+// path serves both a fresh create and a cold reload. The event stream wires to
+// the §12 broadcast; extension_ui requests surface as the side-channel. bash,
+// the file tools, and extensions all run inside the child — wrapped in its
+// per-session Landlock unit (sandbox.ts) — never in the supervisor.
+function registerSession(
   id: string,
   name: string,
-  sessionManager: SessionManager,
+  provider: string,
   model: string,
-): Promise<Session> {
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: workdirOf(id),
-    agentDir: AGENT_DIR,
-    additionalExtensionPaths: EXTENSION_PATHS,
-  });
-  await resourceLoader.reload();
-  const { session: agent } = await createAgentSession({
-    agentDir: AGENT_DIR,
-    cwd: workdirOf(id),
-    authStorage,
-    modelRegistry,
-    model: resolveModel(model),
-    sessionManager,
-    resourceLoader,
-    noTools: "builtin",
-    customTools: buildTools(id),
-  });
+): Session {
+  const piArgv = [
+    PI_BIN,
+    "--mode",
+    "rpc",
+    "--session-dir",
+    sessionDirOf(id),
+    "--session-id",
+    id,
+    "--provider",
+    provider,
+  ];
+  if (model.length > 0) piArgv.push("--model", model);
+  if (name.length > 0) piArgv.push("--name", name);
+  // Each session gets its own writable agent dir (HOME / PI_CODING_AGENT_DIR);
+  // concurrent instances share no writable dir except the long-term memory store.
+  const agentDir = seedAgentDir(id);
+  // The child's environment. The unit gets a FRESH env, so all the runtime needs
+  // (agent dir, provider endpoint, memory store, skill plumbing) is set
+  // explicitly and carried in via --setenv.
+  const childEnv: Record<string, string> = {
+    PI_CODING_AGENT_DIR: agentDir,
+    HOME: agentDir,
+    SPACES_SESSION_ID: id,
+    // The child reaches OpenRouter only through the supervisor's injecting
+    // proxy; it never sees the real key (openrouter-proxy extension reads this).
+    ...(OPENROUTER_PROXY_URL ? { OPENROUTER_PROXY_URL } : {}),
+    ...childPassthroughEnv(),
+    ...BASH_ENV,
+  };
+  // Wrap the child in its per-session Landlock unit (sandbox.ts): systemd-run
+  // applies kernel + seccomp hardening, then pi-landlock-exec self-applies the
+  // FS/net/IPC domain before exec'ing pi. The cheap checks point SYSTEMD_RUN
+  // (and the launcher) at passthrough stubs, so this one argv path serves both.
+  const unitName = `pi-session-${id}.service`;
+  const policyPath = writeLandlockPolicy(id);
+  // System scope (root daemon): the unit runs as a fixed non-root uid, so the
+  // session's dirs — created root-owned above — must be chowned to it before the
+  // unit can write them (the launcher also reads the policy as that uid). No-op
+  // on the desktop user service, where the unit runs as the daemon's own uid.
+  if (SESSION_IDS) {
+    chownTree(sessionDirOf(id), SESSION_IDS);
+    chownTree(workdirOf(id), SESSION_IDS);
+  }
+  const argv = buildLandlockUnitArgv(
+    {
+      systemdRun: SYSTEMD_RUN,
+      landlockExec: LANDLOCK_EXEC,
+      policyPath,
+      unitName,
+      workdir: workdirOf(id),
+      memoryHigh: MEMORY_HIGH,
+      env: childEnv,
+      ...(SESSION_IDS ? { uid: SESSION_IDS.uid, gid: SESSION_IDS.gid } : {}),
+    },
+    piArgv,
+  );
   const session: Session = {
     id,
     name,
-    agent,
-    unsubscribe: () => {},
+    // Assigned immediately below; the driver's callbacks close over `session`,
+    // so it must exist before the driver is constructed.
+    driver: undefined as unknown as RpcDriver,
     seq: 0,
     subscribers: new Set(),
     buffer: [],
@@ -721,54 +765,49 @@ async function registerSession(
     pendingSidechannels: new Map(),
     resolvers: new Map(),
   };
-  session.unsubscribe = agent.subscribe((ev) => {
-    peekBusy(session, ev);
-    broadcast(session, ev);
+  session.driver = new RpcDriver({
+    argv,
+    cwd: workdirOf(id),
+    // systemd-run inherits the daemon env so `--user` reaches the user manager;
+    // the unit itself gets a fresh env built from the --setenv list (childEnv).
+    // The test stub likewise applies --setenv before exec'ing the child.
+    env: undefined,
+    onEvent: (frame) => {
+      peekBusy(session, frame);
+      broadcast(session, frame);
+    },
+    onExtensionUI: (frame) => surfaceSideChannel(session, frame),
+    onExit: () => {
+      session.busy = false;
+      session.parked = false;
+    },
   });
-  await agent.bindExtensions({ uiContext: makeUiContext(session) });
   sessions.set(id, session);
   return session;
 }
 
-// A brand-new session: mint an id, create a fresh persisted session, and record
-// its provider/model/name so it can be reloaded from disk later.
-async function createSession(
-  provider: string,
-  model: string,
-  name: string,
-): Promise<Session> {
+// A brand-new session: mint an id, record its provider/model/name so it can be
+// reloaded from disk later, and spawn its child (which creates the jsonl).
+function createSession(provider: string, model: string, name: string): Session {
   enforceCeiling();
   const id = randomUUID();
   mkdirSync(sessionDirOf(id), { recursive: true });
   mkdirSync(workdirOf(id), { recursive: true });
   writeSessionMeta(id, { provider, model, name });
-  const sm = SessionManager.create(workdirOf(id), sessionDirOf(id));
-  return registerSession(id, name, sm, model);
+  return registerSession(id, name, provider, model);
 }
 
 // Reload a cold session from its committed jsonl (design §5.1: attach to cold).
-// Returns undefined when nothing is persisted under this id.
-async function resumeSession(id: string): Promise<Session | undefined> {
-  // Dedup concurrent cold attaches from different connections: without
-  // this, two clients attaching the same cold id race two resumes and
-  // the loser's AgentSession leaks unsubscribed.
-  const inflight = resuming.get(id);
-  if (inflight) return inflight;
+// Spawning is synchronous, so concurrent attaches can't race a half-built
+// session — the first lands it in `sessions` before the next is dispatched.
+function resumeSession(id: string): Session | undefined {
+  const live = sessions.get(id);
+  if (live) return live;
   const meta = readSessionMeta(id);
   if (!meta) return undefined;
-  const p = (async () => {
-    mkdirSync(workdirOf(id), { recursive: true });
-    const sm = SessionManager.continueRecent(workdirOf(id), sessionDirOf(id));
-    return registerSession(id, meta.name, sm, meta.model);
-  })();
-  resuming.set(id, p);
-  try {
-    return await p;
-  } finally {
-    resuming.delete(id);
-  }
+  mkdirSync(workdirOf(id), { recursive: true });
+  return registerSession(id, meta.name, meta.provider, meta.model);
 }
-const resuming = new Map<string, Promise<Session>>();
 
 // ---- idle-GC + resident-session ceiling (design §5.1) ----------------------
 
@@ -781,14 +820,13 @@ function isEvictable(session: Session): boolean {
   return session.subscribers.size === 0 && !session.busy && !session.parked;
 }
 
-// Dispose a session's in-process AgentSession; its committed jsonl persists, so
-// the next attach reloads it (cold). Only ever called on idle sessions. The
-// session's listSessions state flips from "live-idle" back to "cold"; siblings
-// learn via the broadcast below.
+// Stop a session's pi child; its committed jsonl persists, so the next attach
+// reloads it (cold). Only ever called on idle sessions. The session's
+// listSessions state flips from "live-idle" back to "cold"; siblings learn via
+// the broadcast below.
 function gcSession(session: Session): void {
   sessions.delete(session.id);
-  session.unsubscribe();
-  session.agent.dispose();
+  void session.driver.stop();
   broadcastSessionsList();
 }
 
@@ -922,42 +960,50 @@ function sendEvent(ws: Conn, session: Session, payload: unknown): void {
   });
 }
 
-// Route a §12 `command` payload (pi's own command shape) into the session.
-// prompt/abort/set_model/set_thinking/set_memory act; get_state /
-// get_messages / get_available_models answer with a `response` event the
-// panel consumes (queries reply to the requester; set_model and set_memory
-// broadcast so mirrors update). The optional `id` on a command is echoed on
-// its response so the panel's _request promises correlate.
-function dispatchCommand(
+// Route a §12 `command` payload (pi's own rpc command shape) to the session's
+// pi child over the rpc pipe. prompt/abort/set_thinking forward fire-and-
+// forget (their effects arrive as events); set_model/get_state/get_messages
+// round-trip the child and relay a `response` the panel consumes; set_memory
+// and get_available_models stay supervisor-side (a marker file and the curated
+// registry). The optional `id` is echoed on the response so the panel's
+// _request promises correlate.
+async function dispatchCommand(
   session: Session,
   ws: Conn,
   payload: Record<string, unknown>,
-): void {
+): Promise<void> {
   const type = asString(payload.type);
   const reqId = asString(payload.id);
   switch (type) {
     case "prompt": {
-      const message = asString(payload.message) ?? "";
+      const command: RpcFrame = {
+        type: "prompt",
+        message: asString(payload.message) ?? "",
+      };
       const streamingBehavior = asString(payload.streamingBehavior);
-      // Image attachments arrive in pi's own RPC shape
-      // ({ type: "image", data: <base64>, mimeType }) — the client encodes,
-      // the daemon forwards verbatim to the SDK.
-      const images = Array.isArray(payload.images)
-        ? (payload.images.filter(isRecord) as NonNullable<
-            Parameters<AgentSession["prompt"]>[1]
-          >["images"])
-        : undefined;
-      const opts: Parameters<AgentSession["prompt"]>[1] = {};
       if (streamingBehavior === "steer" || streamingBehavior === "followUp")
-        opts.streamingBehavior = streamingBehavior;
-      if (images && images.length > 0) opts.images = images;
-      void session.agent.prompt(message, opts).catch((err: unknown) => {
-        broadcast(session, { type: "error", error: String(err) });
-      });
+        command.streamingBehavior = streamingBehavior;
+      // Image attachments arrive in pi's own rpc shape
+      // ({ type: "image", data: <base64>, mimeType }); forward verbatim.
+      if (Array.isArray(payload.images) && payload.images.length > 0)
+        command.images = payload.images.filter(isRecord);
+      const r = await session.driver.request(command);
+      if (r.success === false)
+        broadcast(session, {
+          type: "error",
+          error: asString(r.error) ?? "prompt failed",
+        });
       return;
     }
     case "abort":
-      void session.agent.abort().catch(() => {});
+      session.driver.send({ type: "abort" });
+      return;
+    case "set_thinking":
+      if (asString(payload.level))
+        session.driver.send({
+          type: "set_thinking_level",
+          level: payload.level,
+        });
       return;
     case "set_model": {
       const model = modelRegistry.find(
@@ -972,28 +1018,39 @@ function dispatchCommand(
         );
         return;
       }
-      void session.agent
-        .setModel(model)
-        .then(() =>
-          broadcast(
-            session,
-            responsePayload(
-              "set_model",
-              { provider: model.provider, id: model.id },
-              reqId,
-            ),
+      const r = await session.driver.request({
+        type: "set_model",
+        provider: model.provider,
+        modelId: model.id,
+      });
+      if (r.success === false) {
+        sendEvent(
+          ws,
+          session,
+          errorPayload(
+            "set_model",
+            asString(r.error) ?? "set_model failed",
+            reqId,
           ),
-        )
-        .catch((err: unknown) =>
-          sendEvent(ws, session, errorPayload("set_model", String(err), reqId)),
         );
+        return;
+      }
+      broadcast(
+        session,
+        responsePayload(
+          "set_model",
+          { provider: model.provider, id: model.id },
+          reqId,
+        ),
+      );
       return;
     }
     case "set_memory": {
       // Per-session opt-out marker for the memory extension (file present →
-      // disabled). The extension re-reads it via
+      // disabled). The child's memory extension re-reads it via
       // ctx.sessionManager.getSessionDir() at every hook entry, so the flip
-      // applies on the next prompt without touching the live AgentSession.
+      // applies on the next prompt without restarting the child. Owned by the
+      // supervisor: it is not an rpc command.
       const enabled = payload.enabled !== false;
       const marker = `${sessionDirOf(session.id)}/memory-off`;
       try {
@@ -1006,45 +1063,39 @@ function dispatchCommand(
       broadcast(session, responsePayload("set_memory", { enabled }, reqId));
       return;
     }
-    case "set_thinking": {
-      const level = asString(payload.level);
-      if (level)
-        session.agent.setThinkingLevel(
-          level as Parameters<AgentSession["setThinkingLevel"]>[0],
-        );
-      return;
-    }
-    case "get_state":
+    case "get_state": {
+      const r = await session.driver.request({ type: "get_state" });
+      const state = isRecord(r.data) ? r.data : {};
+      const model = isRecord(state.model) ? state.model : undefined;
       sendEvent(
         ws,
         session,
         responsePayload(
           "get_state",
           {
-            model: session.agent.model
-              ? {
-                  provider: session.agent.model.provider,
-                  id: session.agent.model.id,
-                }
-              : null,
-            messageCount: session.agent.messages.length,
-            isStreaming: session.agent.isStreaming,
+            model: model ? { provider: model.provider, id: model.id } : null,
+            messageCount: state.messageCount ?? 0,
+            isStreaming: state.isStreaming === true,
           },
           reqId,
         ),
       );
       return;
-    case "get_messages":
+    }
+    case "get_messages": {
+      const r = await session.driver.request({ type: "get_messages" });
+      const data = isRecord(r.data) ? r.data : {};
       sendEvent(
         ws,
         session,
         responsePayload(
           "get_messages",
-          { messages: session.agent.messages },
+          { messages: data.messages ?? [] },
           reqId,
         ),
       );
       return;
+    }
     case "get_available_models":
       sendEvent(
         ws,
@@ -1111,7 +1162,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       const provider = asString(parsed.provider) ?? DEFAULT_PROVIDER;
       const model = asString(parsed.model) ?? DEFAULT_MODEL;
       const name = asString(parsed.name) ?? "";
-      const session = await createSession(provider, model, name);
+      const session = createSession(provider, model, name);
       session.subscribers.add(ws);
       send(ws, {
         v: 1,
@@ -1147,16 +1198,9 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       const live = sessions.get(sessionId);
       if (live) {
         sessions.delete(sessionId);
-        if (live.busy) {
-          try {
-            await live.agent.abort();
-          } catch {
-            // best-effort; we're tearing the session down regardless
-          }
-        }
-        live.unsubscribe();
+        if (live.busy) live.driver.send({ type: "abort" });
         try {
-          live.agent.dispose();
+          await live.driver.stop();
         } catch {
           // best-effort; we're tearing the session down regardless
         }
@@ -1190,7 +1234,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         return;
       }
       const live = sessions.get(sessionId);
-      const session = live ?? (await resumeSession(sessionId));
+      const session = live ?? resumeSession(sessionId);
       if (!session) {
         sendNoSuchSession(ws, sessionId);
         return;
@@ -1233,7 +1277,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         resolveSidechannel(session, ws, asString(payload.id), payload);
         return;
       }
-      dispatchCommand(session, ws, payload);
+      await dispatchCommand(session, ws, payload);
       return;
     }
     default:

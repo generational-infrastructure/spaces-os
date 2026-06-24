@@ -14,6 +14,15 @@
 let
   daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
   py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
+  # The supervisor spawns `pi --mode rpc` per session; this check exercises
+  # only supervisor-side behavior (ordering, cold resume, error routing), so a
+  # stub pi child suffices.
+  stubPi = pkgs.writeShellScript "stub-pi" ''
+    exec ${pkgs.python3}/bin/python3 ${../pi-sessiond-drive-path/stub-pi.py} "$@"
+  '';
+  # Passthrough launcher stubs (no systemd / no kernel Landlock in the build
+  # sandbox); real Landlock enforcement is checks/pi-sessiond-landlock.
+  stubs = import ../pi-sessiond-sidechannel/launcher-stubs.nix { inherit pkgs; };
 in
 pkgs.runCommand "pi-sessiond-cold-attach-test"
   {
@@ -25,6 +34,7 @@ pkgs.runCommand "pi-sessiond-cold-attach-test"
   }
   ''
     export HOME="$TMPDIR"
-    ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon}
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon} ${stubPi} ${stubs.systemdRun}/bin/systemd-run
     touch "$out"
   ''

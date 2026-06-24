@@ -6,13 +6,14 @@
 # binds (skill-config socket, open-url socket, skills-defs, the
 # skill-config store, notifications). The daemon module serializes
 # that list as JSON into the user unit env var
-# SPACES_SESSIOND_BASH_BINDS, which pi-sessiond turns into systemd-run
-# BindPaths/BindReadOnlyPaths on every per-bash sandbox.
+# SPACES_SESSIOND_BASH_BINDS, which pi-sessiond folds into each
+# per-session pi child's Landlock FS allowlist by access mode.
 #
 # This check evaluates a NixOS system with a fixture list and asserts:
 #   - the env JSON carries an entry per fixture, after the baselines,
-#     with mode/optional preserved and `target` ABSENT (not null) when
-#     it was left at its default;
+#     each with exactly { source, mode } — the bind-mount-era `target`
+#     and `optional` fields are gone (Landlock grants the path in place,
+#     no remapping, and pi-landlock-exec skips a missing path non-fatally);
 #   - /etc/spaces/pi-chat.json no longer carries a sandboxBinds key
 #     (the panel never sees binds anymore — only the daemon does);
 #   - with no sandboxBinds set, the env JSON is exactly the five
@@ -28,13 +29,11 @@ let
     }
     {
       source = "%h/.local/state/spaces/signal";
-      target = "/state/signal";
       mode = "rw";
     }
     {
       source = "%h/.local/share/signal-cli/attachments";
       mode = "ro";
-      optional = true;
     }
   ];
 
@@ -103,41 +102,27 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
       exit 1
     fi
 
-    # 3. Fixture entry 0 (index 5): %t source, rw, target ABSENT —
-    # the module omits defaulted targets instead of serializing null.
-    jq -e '.[5]
-      | .source == "%t/signal-cli/socket"
-      and .mode == "rw"
-      and (has("target") | not)
-      and .optional == false' >/dev/null <<<"$bashBinds" || {
-      echo "FAIL: fixture entry 0 mismatch"
-      jq '.[5]' <<<"$bashBinds"
+    # 3. Every entry is exactly { source, mode } — the daemon emits only
+    # what Landlock can act on; no leftover bind-mount target/optional.
+    jq -e 'all(.[]; (keys | sort) == ["mode", "source"])' >/dev/null <<<"$bashBinds" || {
+      echo "FAIL: a bind entry carries keys other than source/mode"
+      jq . <<<"$bashBinds"
       exit 1
     }
 
-    # 4. Fixture entry 1 (index 6): explicit target, rw.
-    jq -e '.[6]
-      | .source == "%h/.local/state/spaces/signal"
-      and .target == "/state/signal"
-      and .mode == "rw"
-      and .optional == false' >/dev/null <<<"$bashBinds" || {
-      echo "FAIL: fixture entry 1 mismatch"
-      jq '.[6]' <<<"$bashBinds"
+    # 4. The three fixtures are forwarded verbatim, in order, after the
+    # five baselines (indices 5..7).
+    jq -e '.[5:8] == [
+      { source: "%t/signal-cli/socket",                   mode: "rw" },
+      { source: "%h/.local/state/spaces/signal",          mode: "rw" },
+      { source: "%h/.local/share/signal-cli/attachments", mode: "ro" }
+    ]' >/dev/null <<<"$bashBinds" || {
+      echo "FAIL: forwarded fixtures mismatch"
+      jq '.[5:8]' <<<"$bashBinds"
       exit 1
     }
 
-    # 5. Fixture entry 2 (index 7): ro + optional, target absent.
-    jq -e '.[7]
-      | .source == "%h/.local/share/signal-cli/attachments"
-      and .mode == "ro"
-      and .optional == true
-      and (has("target") | not)' >/dev/null <<<"$bashBinds" || {
-      echo "FAIL: fixture entry 2 mismatch"
-      jq '.[7]' <<<"$bashBinds"
-      exit 1
-    }
-
-    # 6. The panel config carries NO sandboxBinds key anymore — binds
+    # 5. The panel config carries NO sandboxBinds key anymore — binds
     # go to the daemon, the panel never assembles a sandbox itself.
     jq -e . "$configFile" >/dev/null || {
       echo "FAIL: $configFile is not valid JSON"
@@ -149,14 +134,14 @@ pkgs.runCommand "pi-chat-sandbox-binds-nix-test"
       exit 1
     fi
 
-    # 7. Default — with no sandboxBinds set, the daemon env is exactly
+    # 6. Default — with no sandboxBinds set, the daemon env is exactly
     # the five pi-chat baseline binds, in order, sockets first.
     jq -e '. == [
-      { source: "%t/spaces-skill-config.sock",                mode: "rw", optional: true  },
-      { source: "%t/spaces-pi-open-url.sock",                 mode: "rw", optional: true  },
-      { source: "%h/.local/state/spaces/pi/skills-defs",      mode: "ro", optional: false },
-      { source: "%h/.local/state/spaces/pi/skill-config",     mode: "rw", optional: false },
-      { source: "%h/.local/state/spaces/pi/notifications",    mode: "ro", optional: false }
+      { source: "%t/spaces-skill-config.sock",             mode: "rw" },
+      { source: "%t/spaces-pi-open-url.sock",              mode: "rw" },
+      { source: "%h/.local/state/spaces/pi/skills-defs",   mode: "ro" },
+      { source: "%h/.local/state/spaces/pi/skill-config",  mode: "rw" },
+      { source: "%h/.local/state/spaces/pi/notifications", mode: "ro" }
     ]' >/dev/null <<<"$defaultBashBinds" || {
       echo "FAIL: default SPACES_SESSIOND_BASH_BINDS is not exactly the 5 baseline binds"
       jq . <<<"$defaultBashBinds"

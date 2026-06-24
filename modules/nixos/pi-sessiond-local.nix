@@ -2,11 +2,13 @@
 #
 # The same pi-sessiond binary as modules/nixos/pi-sessiond, but run as a
 # systemd *user* service (it lives in the user's manager and dies at logout,
-# like the per-session pi units the panel used to spawn). Isolation mirrors
-# the old local-spawn pattern: the daemon runs as the local user, but
-# ProtectHome=tmpfs hides $HOME from the in-process read/edit/write tools,
-# and each bash command is wrapped in its own `systemd-run --user` transient
-# unit (sandbox.ts carries the full confinement bouquet there).
+# like the per-session pi units the panel used to spawn). The daemon runs as
+# the local user, hardened with ProtectHome=tmpfs so the supervisor (and any
+# in-process extension) never sees $HOME; each per-session pi child is then
+# spawned through the
+# Landlock launcher (pi-landlock-exec), which applies a self-applied, deny-by-
+# default Landlock domain (FS allowlist + egress port allowlist + IPC scoping)
+# plus a seccomp denylist before exec'ing pi (docs/landlock-sandbox-design.md).
 #
 # Auth: a oneshot sibling unit generates a per-login token at
 # $XDG_RUNTIME_DIR/pi-sessiond-local/token (0600); the daemon reads it via
@@ -23,38 +25,33 @@
 let
   cfg = config.services.pi-sessiond-local;
 
-  jsonFormat = pkgs.formats.json { };
+  sessiondLib = import ./pi-sessiond/lib.nix { inherit pkgs lib inputs; };
+  inherit (sessiondLib) jsonFormat landlockExec;
 
   # Long-term memory (sediment) — same store the local spawn pattern used
   # (~/.local/state/spaces/pi/sediment), so memories persist across the
   # executor switch. The extension runs in-process, so the *daemon*
-  # namespace gets the DB bind; bash units never see it.
+  # namespace gets the DB bind; the sandboxed pi children never see it.
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   memoryExtensionPkg = pkgs.callPackage ./pi-chat/extensions/memory { sediment = sedimentPkg; };
   memoryDbRel = ".local/state/spaces/pi/sediment";
 
-  # Materialize each extension as its own store object (see
-  # modules/nixos/pi-sessiond/default.nix for why a bare toString of a
-  # flake-relative path would be invisible to the reference scanner).
-  extPaths = map (
-    e:
-    builtins.path {
-      path = e;
-      name = baseNameOf (toString e);
-    }
-  ) cfg.extensions;
-  allExtPaths = extPaths ++ lib.optional cfg.memory.enable memoryExtensionPkg;
-
-  piSettings = jsonFormat.generate "pi-sessiond-local-settings.json" (
-    cfg.piSettings
-    // {
-      extensions = [ ];
-      inherit (cfg) defaultProvider defaultModel;
-      quietStartup = true;
-      enableInstallTelemetry = false;
+  child = sessiondLib.mkChild {
+    inherit (cfg)
+      package
+      defaultProvider
+      defaultModel
+      extensions
+      ;
+    name = "pi-sessiond-local";
+    extra = lib.optional cfg.memory.enable memoryExtensionPkg;
+    openrouter = cfg.openrouter.enable;
+    baseSettings = cfg.piSettings;
+    ownedSettings = {
       skills = lib.attrValues cfg.skills;
-    }
-  );
+    };
+  };
+  inherit (child) piBin piSettings;
 
   # bash-confirm allow-list, staged into the daemon's agent dir at boot
   # (the extension reads $PI_CODING_AGENT_DIR/bash-confirm.json).
@@ -62,7 +59,7 @@ let
     inherit (cfg.bashConfirm) allowPatterns;
   };
 
-  # Per-bash transient units must land in the *user* manager, not the system
+  # The per-session pi units must land in the *user* manager, not the system
   # one — wrap systemd-run so the daemon's every invocation carries --user.
   systemdRunUser = pkgs.writeShellScript "pi-sessiond-local-systemd-run" ''
     exec ${pkgs.systemd}/bin/systemd-run --user "$@"
@@ -123,7 +120,7 @@ in
     memoryHigh = lib.mkOption {
       type = lib.types.str;
       default = "4G";
-      description = "MemoryHigh for the daemon and for each per-bash transient unit (SPACES_SESSIOND_MEMORY_HIGH).";
+      description = "MemoryHigh for the daemon and for each per-session pi unit (SPACES_SESSIOND_MEMORY_HIGH).";
     };
 
     extensions = lib.mkOption {
@@ -131,7 +128,7 @@ in
       default = [ ./pi-chat/extensions/bash-confirm.ts ];
       defaultText = lib.literalExpression "[ ./pi-chat/extensions/bash-confirm.ts ]";
       description = ''
-        pi extensions loaded into every session via the SDK ResourceLoader.
+        Extra pi extensions loaded into every pi rpc child via its settings.json.
         Defaults to bash-confirm, which gates `bash` behind the confirm
         side-channel.
       '';
@@ -171,8 +168,9 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = ''
-        Extra environment variables --setenv'd into every sandboxed per-bash
-        transient unit (skill plumbing: SKILL_CONFIG_SOCKET, …). Values may
+        Extra environment variables --setenv'd into each per-session pi unit
+        (skill plumbing: SKILL_CONFIG_SOCKET, …); the in-domain bash tool
+        inherits them. Values may
         use systemd specifiers `%h` / `%t` — they are expanded by systemd in
         the daemon unit's Environment= before the daemon reads them. Literal
         `%` characters are NOT escaped; avoid them.
@@ -186,15 +184,10 @@ in
             source = lib.mkOption {
               type = lib.types.str;
               description = ''
-                Host path bound into each per-bash sandbox. May contain
+                Host path granted to each per-session pi sandbox. May contain
                 systemd specifiers `%h` / `%t`, expanded by systemd in the
                 daemon unit's Environment=.
               '';
-            };
-            target = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Path inside the sandbox; null reuses the source path.";
             };
             mode = lib.mkOption {
               type = lib.types.enum [
@@ -202,27 +195,17 @@ in
                 "rw"
               ];
               default = "ro";
-              description = "`ro` → BindReadOnlyPaths=; `rw` → BindPaths=.";
-            };
-            optional = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-              description = ''
-                Prefix the source with `-` so a missing host path skips the
-                bind instead of failing the unit (sockets whose publisher
-                may be down).
-              '';
+              description = "`ro` → read-only Landlock grant; `rw` → read-write.";
             };
           };
         }
       );
       default = [ ];
       description = ''
-        Bind-mounts injected into every per-bash sandbox (each bash tool
-        command runs in its own ProtectHome=tmpfs transient unit). NixOS
-        modules that ship a skill publish their host paths here — same
-        contract as the panel-era `services.pi-chat.sandboxBinds`, which
-        forwards into this option.
+        Skill-plumbing paths granted into each per-session pi sandbox's
+        Landlock FS allowlist by access mode. NixOS modules that ship a skill
+        publish their host paths here — same contract as the panel-era
+        `services.pi-chat.sandboxBinds`, which forwards into this option.
       '';
     };
 
@@ -264,7 +247,7 @@ in
     };
 
     systemd.user.services.pi-sessiond-local = {
-      description = "pi-sessiond-local — per-user loopback pi executor (WebSocket transport + in-process pi sessions)";
+      description = "pi-sessiond-local — per-user loopback pi executor (WebSocket transport + one Landlock-confined pi rpc child per session)";
       wantedBy = [ "default.target" ];
       requires = [ "pi-sessiond-local-token.service" ];
       after = [ "pi-sessiond-local-token.service" ];
@@ -275,32 +258,29 @@ in
         SPACES_SESSIOND_DEFAULT_MODEL = cfg.defaultModel;
         SPACES_SESSIOND_DEFAULT_PROVIDER = cfg.defaultProvider;
         LLAMA_SWAP_BASE_URL = cfg.llmUrl;
-        # Each bash tool command becomes a `systemd-run --user` transient
-        # unit; sandbox.ts adds the per-command confinement there.
+        # The supervisor spawns each session's pi rpc child as a
+        # `systemd-run --user` transient unit in the user manager; the
+        # Landlock launcher confines it and bash runs inside that one
+        # session domain (no per-command unit).
         SPACES_SESSIOND_SYSTEMD_RUN = "${systemdRunUser}";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
-        SPACES_SESSIOND_PI_EXTENSIONS = lib.concatStringsSep ":" (map toString allExtPaths);
+        SPACES_SESSIOND_PI_BIN = piBin;
+        # Every pi child is spawned through the Landlock launcher (design §6):
+        # main.ts writes the per-session policy and execs the child through it.
+        # The sole sandbox path for the desktop executor.
+        SPACES_SESSIOND_LANDLOCK_EXEC = landlockExec;
         SPACES_SESSIOND_MEMORY_HIGH = cfg.memoryHigh;
         SPACES_SESSIOND_BASH_CONFIRM = "${bashConfirmJson}";
-        # Skill plumbing for the per-bash sandboxes. systemd expands the
+        # Skill plumbing for the per-session sandboxes. systemd expands the
         # %h/%t specifiers inside these JSON strings before the daemon
         # parses them, so sandbox.ts only ever sees absolute paths.
         SPACES_SESSIOND_BASH_ENV = builtins.toJSON cfg.bashEnv;
-        SPACES_SESSIOND_BASH_BINDS = builtins.toJSON (
-          map (
-            b:
-            {
-              inherit (b) source mode optional;
-            }
-            // lib.optionalAttrs (b.target != null) { inherit (b) target; }
-          ) cfg.bashBinds
-        );
+        SPACES_SESSIOND_BASH_BINDS = builtins.toJSON (map (b: { inherit (b) source mode; }) cfg.bashBinds);
         # PATH for the daemon AND (via main.ts --setenv forwarding) every
-        # per-bash sandbox is set through serviceConfig.Environment below —
+        # per-session sandbox is set through serviceConfig.Environment below —
         # NixOS pins environment.PATH for user units, so it can't be
         # overridden here.
-        # NOT set: SPACES_SESSIOND_TRUSTED — the untrusted default gives every
-        # bash command ProtectHome. NOT set: SPACES_SESSIOND_STATE_DIR —
+        # NOT set: SPACES_SESSIOND_STATE_DIR —
         # main.ts falls back to $STATE_DIRECTORY from StateDirectory= below.
         #
         # Bun (and pi) want a writable HOME for caches; with ProtectHome=tmpfs
@@ -336,16 +316,15 @@ in
         # (root:users 0640) — readable through the user manager, lands in
         # $CREDENTIALS_DIRECTORY/openrouter-api-key for loadOpenRouterKey().
         ++ lib.optional cfg.openrouter.enable "openrouter-api-key:/run/spaces-secrets/openrouter-api-key";
-        # Sandbox: the in-process read/edit/write tools must not see $HOME.
-        # ProtectHome=tmpfs empties /home, /root AND /run/user — so bind
-        # back (a) the state dir (it lives under /home), and (b) the user
-        # manager's IPC endpoints (%t/systemd private socket + %t/bus),
-        # without which `systemd-run --user` — the per-bash sandbox
-        # spawner — cannot reach the manager ("Failed to connect to user
-        # scope bus"). Everything else under /run/user (skill sockets,
-        # other daemons) stays hidden from the daemon process; the bash
-        # units get their own binds, resolved by pid1 in the host
-        # namespace, so they don't depend on the daemon's view.
+        # Sandbox the daemon process: ProtectHome=tmpfs empties /home, /root
+        # AND /run/user so the supervisor (and any in-process extension, e.g.
+        # memory) cannot see $HOME. Bind back (a) the state dir (it lives under
+        # /home), and (b) the user manager's IPC endpoints (%t/systemd private
+        # socket + %t/bus), without which `systemd-run --user` — the
+        # per-session unit spawner — cannot reach the manager ("Failed to
+        # connect to user scope bus"). Everything else under /run/user (skill
+        # sockets, other daemons) stays hidden from the daemon; each per-session
+        # pi child gets its own Landlock domain, independent of the daemon's view.
         ProtectHome = "tmpfs";
         BindPaths = [
           "%S/pi-sessiond-local"
@@ -365,8 +344,9 @@ in
         SystemCallArchitectures = "native";
         MemoryHigh = cfg.memoryHigh;
         # Deliberately NO RestrictNamespaces / PrivateUsers / ProtectProc:
-        # the daemon must talk to the user manager to spawn the per-bash
-        # transient units (which carry the full bouquet from sandbox.ts).
+        # the daemon must talk to the user manager to spawn each session's pi
+        # rpc child as a transient unit (the Landlock launcher applies the
+        # per-session sandbox there, not the supervisor).
       };
     };
 

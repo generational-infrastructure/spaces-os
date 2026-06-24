@@ -7,19 +7,22 @@
   pi ? inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi,
   ...
 }:
-# pi-sessiond — the remote-pi executor daemon (docs/remote-pi-design.md).
+# pi-sessiond — the remote-pi executor *supervisor* (docs/remote-pi-design.md,
+# docs/pi-runtime-isolation-refactor.md).
 #
-# A token-authenticated WebSocket transport (§12) in front of a registry of
-# in-process pi sessions. The daemon embeds pi via its SDK
-# (@earendil-works/pi-coding-agent), which ships inside the `pi` package at
-# lib/node_modules — so main.ts's import resolves from the pinned pi build via a
-# node_modules symlink, with no offline npm fetch. bash is sandboxed per command
-# through systemd-run (sandbox.ts); read/edit/write run in-process under the
-# daemon's own (module-level) confinement.
+# A token-authenticated WebSocket transport (§12) in front of a registry of pi
+# sessions. The supervisor runs no model code: it spawns one `pi --mode rpc`
+# child per session (SPACES_SESSIOND_PI_BIN) and drives it over a JSON-line pipe
+# (rpc-driver.ts). The pi binary + its SDK ship in the `pi` package; main.ts's
+# SDK import (model registry / provider discovery, supervisor-side) resolves
+# from it via a node_modules symlink. `pi` is re-exported as a passthru attr so
+# the NixOS module can point SPACES_SESSIOND_PI_BIN at the exact same build.
 let
   src = pkgs.runCommandLocal "pi-sessiond-src" { } ''
     mkdir -p "$out"
     cp ${./main.ts} "$out/main.ts"
+    cp ${./rpc-driver.ts} "$out/rpc-driver.ts"
+    cp ${./proxy.ts} "$out/proxy.ts"
     cp ${./sandbox.ts} "$out/sandbox.ts"
     cp ${./provider.ts} "$out/provider.ts"
     cp ${./staging.ts} "$out/staging.ts"
@@ -27,6 +30,13 @@ let
     ln -s ${pi}/lib/node_modules "$out/node_modules"
   '';
 in
-pkgs.writeShellScriptBin "pi-sessiond" ''
+# Re-export `pi` so the module wires SPACES_SESSIOND_PI_BIN to the same build
+# the embedded SDK resolves against (no child/supervisor version skew).
+(pkgs.writeShellScriptBin "pi-sessiond" ''
   exec ${pkgs.bun}/bin/bun ${src}/main.ts
-''
+'').overrideAttrs
+  (old: {
+    passthru = (old.passthru or { }) // {
+      inherit pi;
+    };
+  })

@@ -207,9 +207,11 @@ def wait_port(port, timeout=30):
 
 
 def main():
-    if len(sys.argv) < 2:
-        fail("usage: driver.py <daemon_bin>")
+    if len(sys.argv) < 4:
+        fail("usage: driver.py <daemon_bin> <stub_pi> <systemd_run>")
     daemon_bin = sys.argv[1]
+    stub_pi = sys.argv[2]
+    systemd_run = sys.argv[3]
 
     state = tempfile.mkdtemp(prefix="sessiond-push-")
     env = dict(os.environ)
@@ -218,6 +220,9 @@ def main():
             "SPACES_SESSIOND_HOST": "127.0.0.1",
             "SPACES_SESSIOND_PORT": str(PORT),
             "SPACES_SESSIOND_TOKEN": TOKEN,
+            # The supervisor spawns this per session; the stub speaks rpc-mode.
+            "SPACES_SESSIOND_PI_BIN": stub_pi,
+            "SPACES_SESSIOND_SYSTEMD_RUN": systemd_run,
             "LLAMA_SWAP_BASE_URL": "http://127.0.0.1:1",  # unused; no prompt
             "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
             "SPACES_SESSIOND_STATE_DIR": state,

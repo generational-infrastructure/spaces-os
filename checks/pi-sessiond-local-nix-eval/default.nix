@@ -3,12 +3,12 @@
 #
 # What actually needs pinning here:
 #   - the daemon's isolation shape: ProtectHome=tmpfs with the state dir
-#     bound back in, untrusted (no SPACES_SESSIOND_TRUSTED), token via
+#     bound back in, no removed SPACES_SESSIOND_TRUSTED knob, token via
 #     LoadCredential from %t, ordered after the token generator;
 #   - the env contract main.ts reads: loopback host/port, HOME pointed at
 #     the state dir, NO SPACES_SESSIOND_STATE_DIR (the $STATE_DIRECTORY
 #     fallback must win), and a systemd-run wrapper that targets the *user*
-#     manager (--user) so per-bash transient units land next to the daemon;
+#     manager (--user) so the per-session pi units land next to the daemon;
 #   - the token oneshot owns %t/pi-sessiond-local and survives restarts;
 #   - enable=false generates neither unit.
 #
@@ -82,11 +82,24 @@ in
 # eval, so read its content here rather than dragging shell parsing into
 # the runCommand below.
 assert lib.hasInfix "--user" (builtins.readFile daemon.environment.SPACES_SESSIOND_SYSTEMD_RUN);
+# PI_BIN points at the pi build the supervisor spawns as the rpc child; assert
+# its shape at eval (a string match never realizes the path, keeping this check
+# off the pi build — same reason ExecStart is stripped below).
+assert lib.hasSuffix "/bin/pi" daemon.environment.SPACES_SESSIOND_PI_BIN;
+# Memory now loads inside the child via settings.json (not a daemon env var);
+# the generated settings must still list the sediment extension.
+assert lib.hasInfix "memory" (builtins.readFile daemon.environment.SPACES_SESSIOND_PI_SETTINGS);
+# Landlock is the desktop executor's only sandbox: the daemon always points each
+# pi child at pi-landlock-exec. A string match never realizes the Rust build
+# (same discipline as PI_BIN / ExecStart).
+assert lib.hasSuffix "/bin/pi-landlock-exec" daemon.environment.SPACES_SESSIOND_LANDLOCK_EXEC;
 pkgs.runCommand "pi-sessiond-local-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
     daemonServiceConfig = builtins.toJSON daemonServiceConfig;
-    daemonEnvironment = builtins.toJSON daemon.environment;
+    daemonEnvironment = builtins.toJSON (
+      builtins.removeAttrs daemon.environment [ "SPACES_SESSIOND_PI_BIN" ]
+    );
     daemonRequires = builtins.toJSON daemon.requires;
     daemonAfter = builtins.toJSON daemon.after;
     tokenServiceConfig = builtins.toJSON tokenUnit.serviceConfig;
@@ -121,10 +134,11 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     # manager. Sediment DB bind comes from memory.enable (default on).
     sc '.BindPaths == ["%S/pi-sessiond-local", "%t/systemd", "%t/bus", "%h/.local/state/spaces/pi/sediment"]'
 
-    # ── 1b. Memory parity (sediment runs in-process, daemon ns) ─────
+    # ── 1b. Memory parity: sediment runs in the child, which inherits the
+    # supervisor's SEDIMENT_DB/HF_HOME; the extension itself loads via
+    # settings.json (asserted at eval above). ───────────────────────
     env_ '.SEDIMENT_DB == "%h/.local/state/spaces/pi/sediment/data"'
     env_ '.HF_HOME | startswith("/nix/store/")'
-    env_ '.SPACES_SESSIOND_PI_EXTENSIONS | contains("memory")'
 
     # Ordered after (and hard-required on) the token generator.
     jq -e 'index("pi-sessiond-local-token.service") != null' <<<"$daemonRequires" >/dev/null \
@@ -135,7 +149,7 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     # ── 2. Daemon env contract (what main.ts reads) ─────────────────
     env_ '.SPACES_SESSIOND_HOST == "127.0.0.1"'
     env_ '.SPACES_SESSIOND_PORT == "8768"'
-    # Untrusted default = ProtectHome for every bash command.
+    # The removed SPACES_SESSIOND_TRUSTED knob must stay gone.
     env_ 'has("SPACES_SESSIOND_TRUSTED") | not'
     # $STATE_DIRECTORY (from StateDirectory= above) must win.
     env_ 'has("SPACES_SESSIOND_STATE_DIR") | not'

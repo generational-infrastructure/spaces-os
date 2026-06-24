@@ -15,10 +15,9 @@
 let
   daemon = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
   harness = ../pi-session-quick-launch;
-  stub = pkgs.runCommandLocal "systemd-run-stub" { nativeBuildInputs = [ pkgs.bash ]; } ''
-    install -Dm755 ${../pi-sessiond-sidechannel/systemd-run-stub} $out/bin/systemd-run
-    patchShebangs $out/bin/systemd-run
-  '';
+  # Passthrough launcher stubs (no systemd / no kernel Landlock in the build
+  # sandbox); real Landlock enforcement is checks/pi-sessiond-landlock.
+  stubs = import ../pi-sessiond-sidechannel/launcher-stubs.nix { inherit pkgs; };
 in
 pkgs.runCommand "pi-session-stale-recovery-test"
   {
@@ -43,11 +42,14 @@ pkgs.runCommand "pi-session-stale-recovery-test"
     # QML path — add it on both the Qt and the nixpkgs import-path vars.
     export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml:${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
     export NIXPKGS_QT6_QML_IMPORT_PATH=${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
+    # The daemon requires the Landlock launcher; the passthrough stub stands in
+    # (driver.py inherits this via os.environ.copy() into the daemon's env).
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
     python3 ${./driver.py} \
       ${pkgs.lib.getExe daemon} \
       ${pkgs.lib.getExe pkgs.quickshell} \
       ${harness}/mock-llm.py \
-      ${stub}/bin/systemd-run \
+      ${stubs.systemdRun}/bin/systemd-run \
       ${./.} \
       "$pluginDir" \
       "$work"

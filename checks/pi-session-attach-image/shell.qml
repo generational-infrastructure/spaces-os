@@ -5,7 +5,8 @@
 // is root-owned and unwritable in the build sandbox), pointed at a REAL
 // pi-sessiond. PiSession has no local pi-spawn path anymore; sendFile's
 // prompt rides the executor's WebSocket, so the harness exercises the exact
-// production wiring: backend -> PiExecutor -> daemon -> embedded pi SDK.
+// production wiring: backend -> PiExecutor -> daemon supervisor -> the
+// per-session `pi --mode rpc` child.
 //
 // The whole pi-chat plugin tree is staged alongside this file by the driver,
 // so PiExecutor / PiSession / qs.Commons resolve exactly as in production.

@@ -44,12 +44,10 @@ let
   openrouterKey = builtins.getEnv "OPENROUTER_API_KEY";
   useOpenrouter = openrouterKey != "";
 
-  # Small, cheap, fast. Swap to taste; the round-trip only asserts a
-  # non-empty reply, not specific content.
-  openrouterModel = "google/gemma-4-26b-a4b-it";
-
-  apiKeyFile = if useOpenrouter then pkgs.writeText "openrouter-api-key" openrouterKey else null;
-
+  # openrouterModel / apiKeyFile and the pi-chat openrouter override now
+  # live in hosts/test-machine/openrouter.nix (shared with `test-vm`),
+  # keyed off the same OPENROUTER_API_KEY env var; useOpenrouter here only
+  # gates the test-only bits below (mock LLM, __impure, testScript mode).
   testPiChat = ./test-pi-chat.py;
   testPiMemory = ./test-pi-memory.py;
   mockLlm = ./test-machine-mock-llm.py;
@@ -85,10 +83,10 @@ let
           pkgs.mako
         ];
 
-        # Openrouter mode: switch provider/model and give the VM
-        # outbound internet via a second user-mode NIC so it can reach
-        # api.openrouter.ai. The first NIC stays on the test driver's
-        # vlan for the python harness <-> machine plumbing.
+        # Openrouter mode (provider/model switch + outbound networking)
+        # is wired by hosts/test-machine/openrouter.nix, imported via the
+        # host config above and keyed off OPENROUTER_API_KEY — shared with
+        # `nix run .#test-vm`. The bits below are test-harness-only.
         # Test-only: in local mode pi-chat would otherwise hit real
         # llama-swap on this VM. Cold-prefilling pi's multi-thousand
         # token system prompt on qwen2.5:0.5b under QEMU CPU blows
@@ -104,12 +102,6 @@ let
           # Opt the test VM into the forwarder so the
           # notification-bridge subtest has something to drive.
           notificationForwarding.enable = true;
-        }
-        // lib.optionalAttrs useOpenrouter {
-          defaultProvider = "openrouter";
-          defaultModel = openrouterModel;
-          openrouter.enable = true;
-          openrouter.apiKeyFile = apiKeyFile;
         };
 
         services.llama-swap.enable = lib.mkIf (!useOpenrouter) (lib.mkForce false);
@@ -138,17 +130,6 @@ let
             ExecStart = "${pkgs.mako}/bin/mako";
             Restart = "on-failure";
           };
-        };
-
-        # nixosTest's default networking is QEMU user-mode (gateway
-        # 10.0.2.2, DNS 10.0.2.3). Enable DHCP and bypass NetworkManager
-        # so the VM has outbound internet for api.openrouter.ai.
-        networking = lib.mkIf useOpenrouter {
-          useDHCP = lib.mkForce true;
-          nameservers = lib.mkForce [ "10.0.2.3" ];
-        };
-        environment.etc = lib.mkIf useOpenrouter {
-          "resolv.conf".text = lib.mkForce "nameserver 10.0.2.3\n";
         };
       };
 

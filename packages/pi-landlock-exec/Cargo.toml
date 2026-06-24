@@ -1,0 +1,28 @@
+[package]
+name = "pi-landlock-exec"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+description = "Per-session Landlock launcher for pi-sessiond: apply a landlockconfig policy, then exec the runtime confined."
+
+[[bin]]
+name = "pi-landlock-exec"
+path = "src/main.rs"
+
+[dependencies]
+# The reference Landlock policy format + ruleset builder (deny-by-default,
+# best-effort ABI degradation). Pinned by revision: the schema is explicitly
+# pre-1.0/unstable (design §15). `default-features = false` drops the `toml`
+# feature — the launcher only ever consumes machine-emitted JSON.
+landlockconfig = { git = "https://github.com/landlock-lsm/landlockconfig", rev = "8b6b59b339181f9fa1ec6f7889564ba154c1a47d", default-features = false }
+# RulesetStatus for the enforcement-level log line.
+landlock = "0.4.3"
+# Raw landlock_create_ruleset(version) to report the kernel's Landlock ABI.
+libc = "0.2"
+
+[profile.release]
+# Tiny launcher; favour a small, fast-linking binary over codegen tuning.
+opt-level = "s"
+lto = true
+strip = true

@@ -8,6 +8,84 @@ All work is on branch **`pi-remote-chat`** (not pushed). Checks run with
 `nix build .#checks.x86_64-linux.<name>`.
 
 ---
+## Runtime isolation refactor — phase 1 (drive path) complete
+
+Per [`pi-runtime-isolation-refactor.md`](./pi-runtime-isolation-refactor.md):
+`pi-sessiond` is inverted from an SDK-embedded daemon into a thin **supervisor**
+that spawns one `pi --mode rpc` child per session and drives it over a single
+JSON-line pipe. The supervisor runs **no model-controlled code** — the
+prerequisite for [`agent-integrations-design.md`](./agent-integrations-design.md)
+(no model-steerable code ever runs bare as uid 1000). This re-inverts the
+"SDK-embedded execution" decision below; the earlier fear of "untyped NDJSON"
+is addressed by reusing pi's own rpc protocol types in the driver.
+
+Phase 1 (the drive path; **no per-session sandbox yet** — that is phase 2)
+landed:
+
+- **`rpc-driver.ts`** — the supervisor's entire trusted control surface: spawns
+  the child (argv injectable, so phase 2 can wrap it in a unit unchanged),
+  splits its stdout into correlated command responses, the `extension_ui`
+  side-channel, and the event stream. Not the SDK's `RpcClient` (it hardcodes
+  `spawn("node")`, has no side-channel response path, and is single-consumer).
+- **`main.ts`** — `createAgentSession`/`SessionManager`/the in-process file
+  tools/`makeUiContext`/per-command bash sandbox all removed. `registerSession`
+  spawns `pi --mode rpc --session-dir <dir> --session-id <id> --provider …
+  --model …`; commands forward over the pipe; `get_state`/`get_messages`/
+  `set_model` round-trip the child and are re-stamped into the panel's response
+  shapes; `set_memory` (marker file) and the model registry / `get_available_models`
+  stay supervisor-side; the side-channel is relayed (`surfaceSideChannel` /
+  `resolveSidechannel` write `extension_ui_response` back to the child).
+- **Child provider discovery** — the child loads `llama-swap-discover` (now in
+  `settings.json` `extensions`, no longer `SPACES_SESSIOND_PI_EXTENSIONS`) and
+  registers the `local` provider from the inherited `LLAMA_SWAP_BASE_URL`;
+  `bash-confirm` + `memory` also move to the child via settings.json.
+- **Packaging** — the daemon package re-exports `pi` as a passthru attr; both
+  modules (`pi-sessiond`, `pi-sessiond-local`) wire `SPACES_SESSIOND_PI_BIN` to
+  that exact build (no child/supervisor skew) and drop `SPACES_SESSIOND_PI_EXTENSIONS`.
+
+Verified GREEN: `pi-sessiond-rpc-driver` (driver unit test vs a stub pi),
+`pi-sessiond-drive-path` (real daemon drives a stub pi: turn + side-channel
+round-trip), `pi-sessiond-{cold-attach,sessions-push}` (stub pi),
+`pi-sessiond-sidechannel` (first-answer-wins + park + notifier, now stub-driven),
+`pi-session-attach-image` + `pi-web-e2e` (real pi child + mock LLM),
+`pi-sessiond-local-nix-eval`. End-to-end smoke against the real pi 0.78 binary
+confirmed a full turn streams back through the supervisor.
+
+## Runtime isolation refactor — phase 2 (the sandbox) implemented, opt-in
+
+The per-session child is wrapped in a `PrivateUsers=managed` transient unit so
+the whole runtime runs as a delegated host uid (`sandbox.ts`
+`buildSessionUnitArgv`; the old per-command bash wrapper is gone — bash runs in
+the already-sandboxed runtime). The platform prereqs are a new
+`modules/nixos/nsresourced.nix` (enables `systemd-nsresourced` +
+`systemd-mountfsd`; `user.max_user_namespaces`), imported by both pi-sessiond
+modules. It is gated behind `services.pi-sessiond{,-local}.sandbox.enable`
+(**default off**) and `SPACES_SESSIOND_SANDBOX`.
+
+Verified: the argv contract is unit-tested (`pi-sessiond-sandbox`); a dedicated
+`pi-sessiond-sandbox-wall` VM check regression-guards the prereq module (both
+`systemd-nsresourced` and `systemd-mountfsd` activate) and asserts the wall — a
+`PrivateUsers=managed` unit runs as a delegated host uid ≠ 0 — wherever managed
+userns is supported; the drive path itself is VM-verified end-to-end
+(`pi-sessiond-lifecycle`, real pi 0.78).
+
+**Not verified: managed userns itself, in CI.** An isolated probe — a bare
+`systemd-run -p PrivateUsers=managed -- id` with both helpers up — fails at the
+USER setup step with `Operation not supported` (217/USER). So the limitation is
+the managed-userns *mechanism* in the `nix build` nixos-test kernel/QEMU
+(not our wiring, not idmapped mounts — the failure is before any mount). The
+wall-check detects exactly this and skips its uid assertion there, staying green
+while still guarding the prereqs. So `sandbox.enable` is **off by default** (the
+VM-verified drive path ships) and the wall is verified on real hardware / the
+`agent-vm`: set `sandbox.enable = true`; the check then asserts the delegated
+uid for real. State ownership rides the idmapped BindPaths (no manual chown);
+confirm there too, plus the §9-step-4 ptrace isolation once integration units
+exist.
+
+The OpenRouter LLM-key proxy (item 6.2) is **done**: `proxy.ts` injects the key
+in the supervisor; the child holds only the proxy URL + a dummy key
+(`openrouter-proxy` extension). Local provider works key-free regardless.
+
 ## Local-spawn cutover — complete
 
 The panel's legacy local execution path (`PiSession` spawning `pi --mode rpc`
@@ -54,6 +132,10 @@ units exist (cutover regression guard).
 
 ---
 ## Architecture revision — SDK-embedded execution (complete)
+> **Superseded** by the runtime-isolation refactor above: the security
+> invariant (no model code at uid 1000) forces spawning `pi --mode rpc`
+> per session again. The typed-protocol concern that motivated embedding is
+> resolved by reusing pi's rpc types in `rpc-driver.ts`.
 
 **Decision reversed: the daemon embeds pi via its SDK instead of spawning
 `pi --mode rpc` subprocesses.** The original "sandboxed subprocess per session"

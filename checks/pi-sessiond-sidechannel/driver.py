@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Daemon-level side-channel test (design §6), against the REAL pi-sessiond.
 
-Boots the daemon with a fake pi (no VM, no LLM) behind a systemd-run stub and
-drives two scenarios over the §12 WebSocket protocol:
+The runtime-isolation refactor inverts the daemon: it no longer embeds pi, it
+spawns `pi --mode rpc` per session and drives it over a JSON-line pipe. So this
+boots the real supervisor against the reused stub pi (SPACES_SESSIOND_PI_BIN)
+and opens the confirm side-channel the natural way: a prompt whose message
+contains CONFIRM makes the child emit an `extension_ui_request` and wait for the
+`extension_ui_response`. The supervisor surfaces/relays that request over the
+§12 WebSocket protocol exactly as before, so the three supervisor-side
+assertions are unchanged:
 
   1. first-answer-wins — two clients mirror one session and both answer the same
-     extension_ui_request; pi must receive exactly ONE response (confirm_received
-     n==1, never 2), and the loser must get a `sidechannel_resolved`.
+     extension_ui_request; the child must receive exactly ONE response (the turn
+     completes once), and the loser must get a `sidechannel_resolved`.
   2. park — a zero-client extension_ui_request marks the session `parked`
      (visible via list_sessions), survives, and is resolvable on re-attach.
+  3. notifier — a zero-client park fires SPACES_SESSIOND_NOTIFY_CMD out-of-band.
 
-Usage: driver.py <daemon_bin> <fake_pi> <systemd_run_stub>
+Usage: driver.py <daemon_bin> <stub_pi> <notify_cmd>
 """
 
 import asyncio
@@ -26,7 +33,6 @@ import websockets
 
 TOKEN = "sidechannel-secret"
 PORT = 8771
-LLM_PORT = 8013
 NOTIFY_OUT = ""  # set by main(); the notifier stub appends parked requests here
 
 
@@ -97,7 +103,9 @@ async def scenario_first_answer_wins():
         await b.send(json.dumps({"v": 1, "kind": "attach", "sessionId": sid}))
         await recv_kind(b, "attached")
 
-        await a.send(cmd(sid, {"type": "prompt", "message": "go"}))
+        # CONFIRM makes the stub child raise an extension_ui_request and defer
+        # agent_end until the answer crosses the rpc pipe back.
+        await a.send(cmd(sid, {"type": "prompt", "message": "CONFIRM go"}))
 
         # Both mirrored clients must see the side-channel request.
         req_a = await drain_for(a, lambda e: e.get("type") == "extension_ui_request")
@@ -166,7 +174,7 @@ async def scenario_park():
         # Detach BEFORE prompting (ordered on one conn) so the request fires
         # with zero clients attached and the session parks.
         await a.send(json.dumps({"v": 1, "kind": "detach", "sessionId": sid}))
-        await a.send(cmd(sid, {"type": "prompt", "message": "go"}))
+        await a.send(cmd(sid, {"type": "prompt", "message": "CONFIRM go"}))
         await wait_state(sid, "parked")
 
         # The zero-client park must fire the notifier (block-and-notify, §6/§7).
@@ -222,31 +230,25 @@ def wait_port(port, timeout=30):
 
 def main():
     global NOTIFY_OUT
-    if len(sys.argv) < 6:
-        fail(
-            "usage: driver.py <daemon_bin> <mock_llm> <systemd_run_stub> <notify_cmd> <bash_confirm>"
-        )
-    daemon_bin, mock_llm, stub, notify_cmd, bash_confirm = sys.argv[1:6]
+    if len(sys.argv) < 5:
+        fail("usage: driver.py <daemon_bin> <stub_pi> <notify_cmd> <systemd_run>")
+    daemon_bin, stub_pi, notify_cmd, systemd_run = sys.argv[1:5]
 
     state = tempfile.mkdtemp(prefix="sessiond-")
     NOTIFY_OUT = os.path.join(state, "notified")
-    # Deterministic offline LLM that emits a bash tool_call; bash-confirm then
-    # gates it, opening the confirm side-channel this test drives.
-    mock = subprocess.Popen([sys.executable, mock_llm, str(LLM_PORT)])
-    wait_port(LLM_PORT)
     env = dict(os.environ)
     env.update(
         {
             "SPACES_SESSIOND_HOST": "127.0.0.1",
             "SPACES_SESSIOND_PORT": str(PORT),
             "SPACES_SESSIOND_TOKEN": TOKEN,
-            "LLAMA_SWAP_BASE_URL": f"http://127.0.0.1:{LLM_PORT}",
-            "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
-            "SPACES_SESSIOND_SYSTEMD_RUN": stub,
-            "SPACES_SESSIOND_PI_EXTENSIONS": bash_confirm,
+            # The supervisor spawns this per session; the stub speaks rpc-mode
+            # and opens the confirm side-channel on a CONFIRM prompt.
+            "SPACES_SESSIOND_PI_BIN": stub_pi,
             "SPACES_SESSIOND_STATE_DIR": state,
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # disable idle-GC for determinism
             "SPACES_SESSIOND_NOTIFY_CMD": notify_cmd,
+            "SPACES_SESSIOND_SYSTEMD_RUN": systemd_run,
             "NOTIFY_OUT": NOTIFY_OUT,
             "HOME": state,
         }
@@ -265,7 +267,6 @@ def main():
         raise
     finally:
         proc.terminate()
-        mock.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:

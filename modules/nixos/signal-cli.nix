@@ -253,9 +253,9 @@ in
       }
       {
         source = "%h/${identityRel}/attachments";
-        # signal-cli only creates this dir once it has received the
-        # first attachment, so it may legitimately be missing.
-        optional = true;
+        # signal-cli only creates this dir once it has received the first
+        # attachment, so it may be missing; pi-landlock-exec skips an absent
+        # grant non-fatally.
         mode = "ro";
       }
       {
@@ -271,6 +271,15 @@ in
         mode = "rw";
       }
     ];
+
+    # The agent-facing `signal` CLI resolves messages.db from
+    # $SPACES_SIGNAL_DB (db.default_db_path), falling back to a
+    # $HOME-relative path. Inside the sandbox $HOME is the private
+    # per-session agent dir, not the login home, so that fallback would
+    # miss the store granted read-only above. Publish the absolute host
+    # path — %h expands to the login home in the daemon unit's
+    # Environment=, matching the RO bind source.
+    services.pi-chat.sandboxEnv.SPACES_SIGNAL_DB = "%h/${storeRel}/messages.db";
 
     # Skip the bash-confirm prompt for `signal …` — the bridge already
     # gates non-self-sends at panel.sock (unreachable from the

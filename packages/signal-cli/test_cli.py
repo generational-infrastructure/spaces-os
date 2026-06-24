@@ -329,6 +329,106 @@ class TestSearch(CliBase):
         self.assertTrue(all("alice" in (r.get("body") or "").lower() for r in parsed))
 
 
+# ── sandbox $HOME remap (regression) ────────────────────────────────
+
+
+class TestSandboxHomeRemap(unittest.TestCase):
+    """Regression for the signal-can't-read-the-DB bug after the Landlock
+    refactor. Inside the sandbox the `signal` CLI runs with HOME repointed
+    to a private per-session agent dir, not the login home.
+    db.default_db_path() is HOME-relative, so without an explicit
+    SPACES_SIGNAL_DB it resolves messages.db under that empty agent dir and
+    misses the store the daemon grants (read-only) at the login home.
+    pi-chat publishes SPACES_SIGNAL_DB (services.pi-chat.sandboxEnv, set in
+    signal-cli.nix) to bridge the gap; these tests pin the skill-side
+    contract that nix wiring depends on — and exercise the real runtime
+    shape (read-only WAL store with a live bridge writer) the plain DB
+    tests never reach.
+    """
+
+    _ENV_KEYS = (
+        "HOME",
+        "SPACES_SIGNAL_DB",
+        "SPACES_SIGNAL_ENQUEUE_SOCKET",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+    )
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        # Sandbox HOME: a private per-session agent dir with no signal
+        # store beneath it (mirrors STATE_DIR/sessions/<id>/agent).
+        self.sandbox_home = base / "session-agent"
+        self.sandbox_home.mkdir()
+        # The real login-home store the daemon grants read-only.
+        self.store = base / "login-home" / ".local" / "state" / "spaces" / "signal"
+        self.store.mkdir(parents=True)
+        self.real_db = self.store / "messages.db"
+        # Bridge enqueue socket present so _signal_running() passes.
+        self.runtime = base / "runtime"
+        self.runtime.mkdir(mode=0o700)
+        self.enqueue_sock = self.runtime / "spaces-signal" / "sandbox" / "enqueue.sock"
+        self.enqueue_sock.parent.mkdir(mode=0o700, parents=True)
+        self.enqueue_sock.touch()
+        self._saved = {k: os.environ.get(k) for k in self._ENV_KEYS}
+        os.environ["HOME"] = str(self.sandbox_home)
+        os.environ["XDG_RUNTIME_DIR"] = str(self.runtime)
+        # The sandbox child inherits neither: only the explicit
+        # SPACES_SIGNAL_DB the fix publishes bridges the HOME remap.
+        os.environ.pop("SPACES_SIGNAL_DB", None)
+        os.environ.pop("SPACES_SIGNAL_ENQUEUE_SOCKET", None)
+        os.environ.pop("XDG_STATE_HOME", None)
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_home_relative_default_misses_login_store(self) -> None:
+        # The bug: HOME-relative resolution points into the empty agent
+        # dir, NOT the login-home store the daemon granted.
+        resolved = dbmod.default_db_path()
+        self.assertEqual(
+            resolved, self.sandbox_home / ".local/state/spaces/signal/messages.db"
+        )
+        self.assertNotEqual(resolved, self.real_db)
+        self.assertFalse(resolved.exists())
+
+    def test_published_db_env_targets_login_store(self) -> None:
+        # The fix: SPACES_SIGNAL_DB (published by signal-cli.nix) wins and
+        # points at the granted login-home store regardless of HOME.
+        os.environ["SPACES_SIGNAL_DB"] = str(self.real_db)
+        self.assertEqual(dbmod.default_db_path(), self.real_db)
+
+    def test_threads_reads_ro_wal_store_with_live_writer(self) -> None:
+        # End-to-end seam in the real runtime shape: a WAL store the bridge
+        # holds open (so -wal/-shm exist), granted read-only, read via the
+        # published SPACES_SIGNAL_DB. A read-only WAL open succeeds only
+        # while a writer keeps the sidecars alive — exactly the bridge's
+        # long-lived connection — so this also guards that invariant.
+        _seed_messages(self.real_db)
+        writer = dbmod.connect(self.real_db)  # bridge-style live connection
+        self.addCleanup(writer.close)
+        # Make the store subtree read-only, mirroring the Landlock `ro`
+        # grant: the CLI may read but cannot create/extend -wal/-shm.
+        for child in self.store.iterdir():
+            os.chmod(child, 0o400)
+        os.chmod(self.store, 0o500)
+        self.addCleanup(
+            lambda: [os.chmod(c, 0o600) for c in self.store.iterdir()]
+        )
+        self.addCleanup(lambda: os.chmod(self.store, 0o700))
+        os.environ["SPACES_SIGNAL_DB"] = str(self.real_db)
+        rc, out, err = _run(["threads", "--json"])
+        self.assertEqual(rc, 0, err)
+        thread_ids = [r["thread_id"] for r in json.loads(out)]
+        self.assertEqual(thread_ids, ["uuid-carol", "GROUP=1", "uuid-alice"])
+
+
 # ── bridge-proxied daemon reads ─────────────────────────────────────
 
 

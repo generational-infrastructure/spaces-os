@@ -7,6 +7,9 @@ let
   sys = pkgs.stdenv.hostPlatform.system;
   daemon = inputs.self.packages.${sys}.pi-sessiond;
   web = inputs.self.packages.${sys}.pi-web;
+  # Passthrough launcher stub (the daemon requires it even though this check
+  # never spawns a session); real Landlock enforcement is checks/pi-sessiond-landlock.
+  stubs = import ../pi-sessiond-sidechannel/launcher-stubs.nix { inherit pkgs; };
 in
 pkgs.runCommand "pi-web-serve-test"
   {
@@ -15,6 +18,7 @@ pkgs.runCommand "pi-web-serve-test"
   ''
     set -euo pipefail
     export HOME="$TMPDIR"
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
     SPACES_SESSIOND_HOST=127.0.0.1 \
     SPACES_SESSIOND_PORT=8790 \
     SPACES_SESSIOND_TOKEN=serve-test \

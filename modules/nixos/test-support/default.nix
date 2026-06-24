@@ -57,7 +57,14 @@
   # so VM tests can detect via OCR that niri actually drew something
   # to its outputs (proves the compositor is alive end-to-end, not
   # just that niri.service started).
-  environment.systemPackages = [ pkgs.swaybg ];
+  #
+  # python3 rides along: agent-driven panel verification (Quickshell
+  # IPC JSON parsing, the WebSocket probes) shells out to it, and the
+  # interactive agent-vm/remote-agent-vm loops expect it on PATH.
+  environment.systemPackages = [
+    pkgs.swaybg
+    pkgs.python3
+  ];
   systemd.user.services.test-wallpaper = {
     description = "Test wallpaper for OCR-based VM verification";
     wantedBy = [ "niri.service" ];

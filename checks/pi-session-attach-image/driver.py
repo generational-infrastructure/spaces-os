@@ -4,8 +4,8 @@
 PiSession has no local pi-spawn path anymore; it only talks to pi-sessiond
 executors over WebSocket. So this check runs the real PiChatBackend in a
 headless quickshell with one executor injected via $SPACES_PI_CHAT_EXECUTORS,
-pointed at a real pi-sessiond (bun, embedded pi SDK) whose llama-swap is a
-recording mock LLM, and drives `sendFile(<image_path>)` — the entry point the
+pointed at a real pi-sessiond (bun supervisor) whose recording mock LLM stands
+in for llama-swap, and drives `sendFile(<image_path>)` — the entry point the
 paperclip button and drag-and-drop both call.
 
 What this test guarantees:
@@ -19,17 +19,20 @@ What this test guarantees:
   - the attachment actually reaches the model: the panel base64-encodes
     the file (`file -b --mime-type` + `base64 -w0` in a one-shot Process —
     both binaries must be on PATH), ships it inside the WS `prompt`
-    command as `images: [{type:"image", data, mimeType}]`, pi-sessiond
-    forwards that verbatim to the SDK's prompt options, and pi posts a
-    multimodal /v1/chat/completions request. Asserted on the stable part:
-    the tiny PNG's exact base64 payload appears in the recorded request
-    body (however pi shapes the content block around it).
+    command as `images: [{type:"image", data, mimeType}]`, the supervisor
+    forwards that array verbatim over the rpc pipe to the per-session
+    `pi --mode rpc` child, and pi posts a multimodal /v1/chat/completions
+    request. Asserted on the stable part: the tiny PNG's exact base64 payload
+    appears in the recorded request body (however pi shapes the content block
+    around it). The assertion is on the LLM-facing bytes, so this drives the
+    REAL pi child (SPACES_SESSIOND_PI_BIN = the daemon package's `pi`
+    passthru), never a stub.
 
 Token plumbing mirrors production: the daemon reads its token from
 $CREDENTIALS_DIRECTORY/token (LoadCredential), the panel-side executor entry
 carries a `tokenPath` to the same file.
 
-Usage: driver.py <qs_bin> <daemon_bin> <systemd_run_stub> <test_dir>
+Usage: driver.py <qs_bin> <daemon_bin> <pi_bin> <discover_ext> <test_dir>
        <plugin_dir> <work_dir>
 """
 
@@ -125,12 +128,21 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 7:
+    if len(sys.argv) != 9:
         fail(
-            "usage: driver.py <qs_bin> <daemon_bin> <systemd_run_stub> "
-            "<test_dir> <plugin_dir> <work_dir>"
+            "usage: driver.py <qs_bin> <daemon_bin> <pi_bin> <discover_ext> "
+            "<test_dir> <plugin_dir> <work_dir> <systemd_run>"
         )
-    qs_bin, daemon_bin, stub, test_dir, plugin_dir, work_dir = sys.argv[1:7]
+    (
+        qs_bin,
+        daemon_bin,
+        pi_bin,
+        discover_ext,
+        test_dir,
+        plugin_dir,
+        work_dir,
+        systemd_run,
+    ) = sys.argv[1:9]
     os.makedirs(work_dir, exist_ok=True)
 
     home = os.path.join(work_dir, "home")
@@ -159,6 +171,25 @@ def main() -> None:
 
     shell_qml = stage_shell(test_dir, plugin_dir, work_dir)
 
+    # pi child settings (staged into the daemon's agent dir via
+    # SPACES_SESSIOND_PI_SETTINGS): the supervisor no longer embeds pi or does
+    # its own discovery for the child, so the child must register the `local`
+    # provider itself. llama-swap-discover hits ${LLAMA_SWAP_BASE_URL}/v1/models
+    # (the recording mock) and registers `mock-model` under provider `local`,
+    # which the child resolves from the create_session default.
+    settings_path = os.path.join(work_dir, "pi-settings.json")
+    with open(settings_path, "w") as fh:
+        json.dump(
+            {
+                "extensions": [discover_ext],
+                "defaultProvider": "local",
+                "defaultModel": "mock-model",
+                "quietStartup": True,
+                "enableInstallTelemetry": False,
+            },
+            fh,
+        )
+
     # ── mock LLM (records every completion request body) ──────────────────
     llm_port = free_port()
     capture_path = os.path.join(work_dir, "llm-requests.jsonl")
@@ -185,9 +216,21 @@ def main() -> None:
             "CREDENTIALS_DIRECTORY": cred_dir,
             "SPACES_SESSIOND_STATE_DIR": state_dir,
             "SPACES_SESSIOND_DEFAULT_MODEL": "mock-model",
-            "SPACES_SESSIOND_SYSTEMD_RUN": stub,
+            # The supervisor spawns this REAL pi build per session in rpc-mode;
+            # the child reads settings.json (→ llama-swap-discover) from the
+            # agent dir staged from this template.
+            "SPACES_SESSIOND_PI_BIN": pi_bin,
+            "SPACES_SESSIOND_PI_SETTINGS": settings_path,
+            # No systemd in the build sandbox: point the daemon's per-session
+            # confinement wrapper at the passthrough stub (strips the unit
+            # flags, re-applies --setenv, execs the real pi child).
+            "SPACES_SESSIOND_SYSTEMD_RUN": systemd_run,
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",  # no idle-GC mid-test
+            # Inherited by the child: point its discover extension at the mock
+            # and keep pi off the network for telemetry/update probes.
             "LLAMA_SWAP_BASE_URL": f"http://127.0.0.1:{llm_port}",
+            "PI_OFFLINE": "1",
+            "PI_TELEMETRY": "0",
         }
     )
     daemon_log = open(os.path.join(work_dir, "daemon.log"), "w")

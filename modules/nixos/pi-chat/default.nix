@@ -457,19 +457,10 @@ in
             source = lib.mkOption {
               type = lib.types.str;
               description = ''
-                Host path to bind into the per-session pi sandbox. May
+                Host path granted to each per-session pi sandbox. May
                 contain systemd specifiers `%h` (user `$HOME`) and `%t`
-                (`$XDG_RUNTIME_DIR`); both are expanded by the panel at
-                session-spawn time.
-              '';
-            };
-            target = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = ''
-                Path inside the sandbox the source is bound to. Same
-                specifier expansion as `source`. When null (the default),
-                the source path is reused on both sides.
+                (`$XDG_RUNTIME_DIR`); both are expanded by systemd in the
+                daemon unit's Environment=.
               '';
             };
             mode = lib.mkOption {
@@ -479,20 +470,9 @@ in
               ];
               default = "ro";
               description = ''
-                `ro` → systemd `BindReadOnlyPaths=`; `rw` → `BindPaths=`.
+                `ro` → read-only Landlock grant; `rw` → read-write.
                 Default `ro` because skills almost always only need to
                 read configuration and data they did not produce.
-              '';
-            };
-            optional = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-              description = ''
-                When true, prefix the bind source with `-` so systemd
-                skips the entry instead of refusing to start the sandbox
-                when the host path is missing. Use for sockets whose
-                publisher may legitimately be down (e.g. a forwarder
-                service that hasn't booted yet).
               '';
             };
           };
@@ -507,24 +487,40 @@ in
           # signal-cli daemon socket and panel.sock are deliberately NOT
           # exposed — that split is the send-approval gate's boundary.
           { source = "%h/.local/state/spaces/signal"; mode = "ro"; }
-          {
-            source = "%h/.local/share/signal-cli/attachments";
-            mode = "ro";
-            optional = true;
-          }
+          { source = "%h/.local/share/signal-cli/attachments"; mode = "ro"; }
           { source = "%t/spaces-signal/sandbox"; mode = "rw"; }
         ]
       '';
       description = ''
-        Extra bind-mounts for the per-bash sandboxes of the loopback
-        executor (pi-sessiond-local).
+        Extra filesystem grants for the per-session pi sandboxes of the
+        loopback executor (pi-sessiond-local).
 
         NixOS modules that add a skill **MUST** publish their required
         host paths through this option. Forwarded into
         `services.pi-sessiond-local.bashBinds` after the pi-chat-owned
-        baseline binds; the daemon emits the corresponding systemd-run
-        `--property=BindPaths` / `--property=BindReadOnlyPaths` flags on
-        every bash unit.
+        baseline binds; the daemon folds them into each session's Landlock
+        FS allowlist.
+      '';
+    };
+
+    sandboxEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = lib.literalExpression ''
+        { SPACES_SIGNAL_DB = "%h/.local/state/spaces/signal/messages.db"; }
+      '';
+      description = ''
+        Extra environment variables for the per-session pi sandboxes of the
+        loopback executor (pi-sessiond-local).
+
+        NixOS modules that add a skill **MUST** publish here any absolute
+        path a skill CLI must resolve independently of the sandbox's
+        remapped `$HOME`: each session runs under a private per-session
+        agent dir as `$HOME`, so a `~`-relative default no longer points at
+        a host path granted via `sandboxBinds`. May contain systemd
+        specifiers `%h` / `%t`, expanded in the daemon unit's Environment=.
+        Forwarded into `services.pi-sessiond-local.bashEnv` after the
+        pi-chat-owned baseline — same contract as `sandboxBinds`.
       '';
     };
 
@@ -678,7 +674,7 @@ in
         ) resolvedEnabledExtensions
       );
       memory.enable = enabledExtensions ? memory;
-      # Skill plumbing for the per-bash sandboxes — same env + binds the
+      # Skill plumbing for the per-session sandboxes — same env + binds the
       # panel used to assemble per session, now applied daemon-side.
       # %h/%t expand in the daemon unit's Environment=.
       bashEnv = {
@@ -686,20 +682,19 @@ in
         SPACES_OPEN_URL_SOCKET = "%t/spaces-pi-open-url.sock";
         SPACES_PI_CHAT_STATE_DIR = "%h/${stateRel}";
         SPACES_NOTIFICATIONS_FILE = "%h/${notificationsRel}/history.json";
-      };
+      }
+      // cfg.sandboxEnv;
       bashBinds = [
-        # Sockets are optional: a bash unit must still start when the
-        # skill-config daemon / panel listener happens to be down — the
-        # CLIs degrade gracefully on a missing socket.
+        # A missing socket is fine: pi-landlock-exec skips an absent grant
+        # non-fatally, and the CLIs degrade gracefully when the skill-config
+        # daemon / panel listener is down.
         {
           source = "%t/spaces-skill-config.sock";
           mode = "rw";
-          optional = true;
         }
         {
           source = "%t/spaces-pi-open-url.sock";
           mode = "rw";
-          optional = true;
         }
         # skill-config needs the skill schemas (read-only nix-store
         # symlinks) and the user's config/secrets store (read-write).
@@ -719,7 +714,7 @@ in
 
     # Every built-in skill's CLI lands on the system PATH. Two reasons:
     #   1. pi-sessiond-local forwards a PATH containing the system
-    #      profile into every per-bash sandbox, so the agent can shell
+    #      profile into every per-session sandbox, so the agent can shell
     #      out by bare name (`signal threads`, `osm-cli search …`,
     #      `caldav list …`, etc.) without each skill's SKILL.md having
     #      to spell out absolute store paths.
@@ -770,8 +765,8 @@ in
       SEDIMENT_DB = "$HOME/${memoryDbRel}/data";
     };
 
-    # Panel-side state skeleton plus the skill plumbing dirs the per-bash
-    # sandboxes bind (skills-defs / skill-config store / notifications).
+    # Panel-side state skeleton plus the skill plumbing dirs the per-session
+    # sandboxes use (skills-defs / skill-config store / notifications).
     systemd.user.tmpfiles.rules = [
       "d %h/.local 0755 - - -"
       "d %h/.local/state 0755 - - -"

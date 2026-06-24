@@ -115,13 +115,15 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
 
     # pi settings template (SPACES_SESSIOND_PI_SETTINGS): the daemon copies
     # it to $STATE_DIRECTORY/pi-agent/settings.json for its embedded pi.
-    # Defaults match the mock; the daemon does its own llama-swap model
-    # discovery, so no discovery extension is listed here.
+    # Defaults match the mock; the child self-registers the `local` provider via
+    # the llama-swap-discover extension (its per-session agent dir does not
+    # inherit the daemon's provider auth/models).
     settings_path = os.path.join(work_dir, "settings.json")
     with open(settings_path, "w") as fh:
         json.dump(
             {
                 "defaultProvider": "local",
+                "extensions": [os.environ["SPACES_QL_DISCOVER_EXT"]],
                 "defaultModel": "mock-model",
                 "quietStartup": True,
                 "enableInstallTelemetry": False,

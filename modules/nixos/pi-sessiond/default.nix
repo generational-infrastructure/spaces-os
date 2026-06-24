@@ -2,13 +2,16 @@
 #
 # See docs/remote-pi-design.md. pi-sessiond is the resident, single-user
 # daemon that owns a machine's pi sessions: a token-authenticated WebSocket
-# listener that embeds pi via its SDK (one in-process `AgentSession` per
-# session, with `bash` sandboxed at the tool boundary), fans pi's event stream
-# out to attached clients, and routes client commands into each session. The
-# same binary runs on the desktop (a local executor on `localhost`) and on the
-# always-on server; clients hold a static list of executors and attach over the uniform
-# WebSocket transport (no TLS for now — the `hello` token is the only gate;
-# §1).
+# listener that spawns one `pi --mode rpc` child per session, fans pi's event
+# stream out to attached clients, and routes client commands into each session.
+# The supervisor itself runs no model code; each per-session pi child is confined
+# by a self-applied Landlock domain (docs/landlock-sandbox-design.md) applied by
+# the pi-landlock-exec launcher, dropped to the dedicated `pi-session` uid. The
+# same binary runs on the desktop (a local user-service executor on `localhost`,
+# modules/nixos/pi-sessiond-local.nix) and here on the always-on server (a root
+# system service); clients hold a static list of executors and attach over the
+# uniform WebSocket transport (no TLS for now — the `hello` token is the only
+# gate; §1).
 #
 # This module is the durable *contract* (option surface + service shape). The
 # daemon implementation it runs is `services.pi-sessiond.package`.
@@ -28,44 +31,32 @@ let
   # per-session workdir, not the daemon's), so pass the resolved absolute path.
   stateDir = "/var/lib/pi-sessiond";
 
-  jsonFormat = pkgs.formats.json { };
+  sessiondLib = import ./lib.nix { inherit pkgs lib inputs; };
+  inherit (sessiondLib) jsonFormat landlockExec;
+
+  child = sessiondLib.mkChild {
+    inherit (cfg)
+      package
+      defaultProvider
+      defaultModel
+      extensions
+      ;
+    name = "pi-sessiond";
+    openrouter = cfg.openrouter.enable;
+  };
+  inherit (child) piBin piSettings;
 
   # PWA topology file: the list of executors in this clan instance so
   # `GET /executors` can hand it back to browsing clients (see main.ts:
   # loadPeers). Materialized as a tracked store path so nix's reference
-  # scanner pins it to the unit closure (same trick as piSettings below).
+  # scanner pins it to the unit closure (same trick the extensions use).
   peersFile = jsonFormat.generate "pi-sessiond-peers.json" cfg.peers;
-
-  # Materialize each extension as its own store object. A bare `toString` of a
-  # flake-relative path embeds the whole-flake `…-source` path, which nix's
-  # reference scanner does NOT capture as a runtime dependency of settings.json
-  # — so the file is absent from the executor's store at runtime and pi
-  # silently skips the extension (the `local` provider never registers).
-  # `builtins.path` copies just the file to a standalone, tracked store path.
-  extPaths = map (
-    e:
-    builtins.path {
-      path = e;
-      name = baseNameOf (toString e);
-    }
-  ) cfg.extensions;
-
-  # pi's settings.json (provider/model defaults), copied into the daemon's
-  # writable agent dir at startup. Extensions are NOT listed here: the daemon
-  # loads them itself (SPACES_SESSIOND_PI_EXTENSIONS) and does its own provider
-  # discovery, so a settings-based list would double-register the provider.
-  piSettings = jsonFormat.generate "pi-sessiond-settings.json" {
-    extensions = [ ];
-    inherit (cfg) defaultProvider defaultModel;
-    quietStartup = true;
-    enableInstallTelemetry = false;
-  };
 in
 {
   options.services.pi-sessiond = {
     enable = lib.mkEnableOption (
-      "pi-sessiond: WebSocket daemon embedding pi via its SDK (one in-process "
-      + "session per chat session) for one user (a remote-pi executor)"
+      "pi-sessiond: WebSocket executor that spawns one Landlock-confined "
+      + "`pi --mode rpc` child per session for one user (a remote-pi executor)"
     );
 
     package = lib.mkOption {
@@ -82,7 +73,7 @@ in
       type = lib.types.package;
       default = inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.pi;
       defaultText = lib.literalExpression "inputs.llm-agents.packages.\${system}.pi";
-      description = "The pi build whose SDK the daemon embeds. Pins the in-process pi and (via the daemon package) the desktop's local pi to one source — no version skew.";
+      description = "The pi build the supervisor spawns as each session's `pi --mode rpc` child (and resolves its SDK types against). Pins the spawned pi and (via the daemon package) the desktop's local pi to one source — no version skew.";
     };
 
     serveWebUi = lib.mkEnableOption (
@@ -171,7 +162,7 @@ in
       type = lib.types.int;
       default = 1800000;
       description = ''
-        Dispose a live-idle session's in-process pi after this many milliseconds with
+        Dispose a live-idle session's pi rpc child after this many milliseconds with
         no attached clients (design §5.1). The committed session.jsonl persists,
         so the next attach resurrects it (`pi --continue`). 0 disables idle-GC.
         A busy (mid-turn) or parked session is never stopped.
@@ -182,7 +173,7 @@ in
       type = lib.types.int;
       default = 0;
       description = ''
-        Ceiling on resident in-process pi sessions (design §5.1). When a
+        Ceiling on resident live pi rpc-child sessions (design §5.1). When a
         new session would exceed it, the least-recently-active idle session is
         evicted (stopped → cold, resurrected on its next attach). 0 = unlimited.
         Busy/parked/attached sessions are never evicted.
@@ -248,10 +239,10 @@ in
       default = [ ../pi-chat/extensions/bash-confirm.ts ];
       defaultText = lib.literalExpression "[ ../pi-chat/extensions/bash-confirm.ts ]";
       description = ''
-        pi extensions loaded into every session via the SDK ResourceLoader.
-        Defaults to bash-confirm, which gates `bash` behind the confirm
-        side-channel. The model list is discovered by the daemon itself from
-        `''${llmUrl}/v1/models`, so llama-swap-discover is not needed here.
+        Extra pi extensions loaded into every pi rpc child via its
+        settings.json, on top of llama-swap-discover (always added so the
+        child registers the `local` provider from ''${llmUrl}). Defaults to
+        bash-confirm, which gates `bash` behind the confirm side-channel.
       '';
     };
 
@@ -299,9 +290,19 @@ in
     ];
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+    # The unprivileged uid every per-session pi unit is dropped to. The root
+    # daemon chowns each session's dirs to it; Landlock + seccomp wall the
+    # sessions from each other (they share this one uid — the same model as the
+    # desktop executor, no distinct-uid namespace).
+    users.users.pi-session = {
+      isSystemUser = true;
+      group = "pi-session";
+      description = "pi-sessiond per-session runtime (Landlock-confined)";
+    };
+    users.groups.pi-session = { };
 
     systemd.services.pi-sessiond = {
-      description = "pi-sessiond — remote-pi executor (WebSocket transport + in-process pi sessions via the SDK)";
+      description = "pi-sessiond — remote-pi executor (WebSocket transport + one Landlock-confined pi rpc child per session)";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       environment = {
@@ -311,10 +312,15 @@ in
         SPACES_SESSIOND_DEFAULT_MODEL = cfg.defaultModel;
         SPACES_SESSIOND_DEFAULT_PROVIDER = cfg.defaultProvider;
         LLAMA_SWAP_BASE_URL = cfg.llmUrl;
-        # Wrap each bash tool command in a systemd-run confinement unit (§8).
         SPACES_SESSIOND_SYSTEMD_RUN = lib.getExe' pkgs.systemd "systemd-run";
         SPACES_SESSIOND_PI_SETTINGS = "${piSettings}";
-        SPACES_SESSIOND_PI_EXTENSIONS = lib.concatStringsSep ":" (map toString extPaths);
+        SPACES_SESSIOND_PI_BIN = piBin;
+        # Every pi child is spawned through the Landlock launcher (design §6) —
+        # the sole sandbox path — and dropped to the pi-session uid (system
+        # scope): main.ts resolves the user, chowns the session dirs, and passes
+        # --uid/--gid to systemd-run.
+        SPACES_SESSIOND_LANDLOCK_EXEC = landlockExec;
+        SPACES_SESSIOND_SESSION_USER = "pi-session";
         SPACES_SESSIOND_STATE_DIR = stateDir;
         SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
@@ -348,7 +354,11 @@ in
           RestartSec = 2;
           # Per-session jsonl + the daemon-owned session index live here.
           StateDirectory = "pi-sessiond";
-          StateDirectoryMode = "0700";
+          # 0711 (not 0700): the per-session unit runs as the pi-session uid and
+          # must traverse the root-owned state root to reach its chowned session
+          # dir (Landlock denies the parents directly; DAC must still allow the
+          # walk). Listing is still denied (no o+r).
+          StateDirectoryMode = "0711";
         }
         // lib.optionalAttrs (creds != [ ]) {
           LoadCredential = creds;
