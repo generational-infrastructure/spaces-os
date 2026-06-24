@@ -31,15 +31,23 @@ QtObject {
   // real bar even when this monitor customises them.
   readonly property string barPosition: Settings.getBarPositionForScreen(geo.screenName)
   readonly property bool barIsVertical: barPosition === "left" || barPosition === "right"
-  readonly property string barType: Settings.data.bar.barType
+  // noctalia declares `property JsonObject bar: JsonObject { … }`, so the
+  // static type of Settings.data.bar is the base JsonObject and its inline
+  // schema (barType/monitors/frameThickness/marginHorizontal/…) is invisible
+  // to qmllint. Read the bar config as a `var` — it is genuinely dynamic JSON
+  // — so these member reads resolve at runtime without tripping qmllint's
+  // static member check. Bound, not aliased, so it re-evaluates when noctalia
+  // swaps the settings object wholesale.
+  readonly property var barData: Settings.data.bar
+  readonly property string barType: barData.barType
   readonly property bool barFramed: barType === "framed"
   readonly property bool barFloating: barType === "floating"
-  readonly property real frameThickness: Settings.data.bar.frameThickness ?? 12
+  readonly property real frameThickness: barData.frameThickness ?? 12
   // Floating margins inset the bar from the screen edges; simple/framed
   // bars carry none (framed insets via frameThickness instead). Ceil to
   // match BarContentWindow so the glow lands on the same pixel grid.
-  readonly property real marginH: Math.ceil(barFloating ? Settings.data.bar.marginHorizontal : 0)
-  readonly property real marginV: Math.ceil(barFloating ? Settings.data.bar.marginVertical : 0)
+  readonly property real marginH: Math.ceil(barFloating ? barData.marginHorizontal : 0)
+  readonly property real marginV: Math.ceil(barFloating ? barData.marginVertical : 0)
   readonly property real barThickness: Style.getBarHeightForScreen(geo.screenName)
   // How far the glow blooms inward from the bar's inner edge.
   readonly property real glowDepth: Math.max(6, Math.round(barThickness * 0.6))
@@ -50,7 +58,7 @@ QtObject {
   // disables its customisations, not the bar itself, so it is not a
   // visibility gate here.)
   readonly property bool barShown: {
-    var monitors = Settings.data.bar.monitors || [];
+    var monitors = barData.monitors || [];
     if (!monitors || monitors.length === 0)
       return true;
     return monitors.indexOf(geo.screenName) !== -1;
