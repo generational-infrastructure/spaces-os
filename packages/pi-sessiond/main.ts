@@ -472,6 +472,14 @@ function workdirOf(id: string): string {
 function agentDirOf(id: string): string {
   return `${sessionDirOf(id)}/agent`;
 }
+// Each session's private TMPDIR, nested under its session dir (so the one rw
+// grant on sessions/<id> covers it, and chownTree reaches it in system scope).
+// The host's shared /tmp is absent from the allowlist and thus denied; tools
+// that ignore $TMPDIR and write /tmp/... would otherwise EACCES, so point them
+// here instead (design §5.1 / §15).
+function tmpDirOf(id: string): string {
+  return `${sessionDirOf(id)}/tmp`;
+}
 // Seed a session's private agent dir with the static config. COPIED, not
 // symlinked: pi's settings-manager and startup migration rewrite settings.json,
 // and the store templates are 0444 — a symlink would EACCES. auth.json /
@@ -710,6 +718,10 @@ function registerSession(
   // Each session gets its own writable agent dir (HOME / PI_CODING_AGENT_DIR);
   // concurrent instances share no writable dir except the long-term memory store.
   const agentDir = seedAgentDir(id);
+  // Private per-session scratch dir, created up front so it exists under the
+  // session-dir grant (and gets chowned with the tree in system scope).
+  const tmpDir = tmpDirOf(id);
+  mkdirSync(tmpDir, { recursive: true });
   // The child's environment. The unit gets a FRESH env, so all the runtime needs
   // (agent dir, provider endpoint, memory store, skill plumbing) is set
   // explicitly and carried in via --setenv.
@@ -717,6 +729,8 @@ function registerSession(
     PI_CODING_AGENT_DIR: agentDir,
     HOME: agentDir,
     SPACES_SESSION_ID: id,
+    // Private scratch under the session-dir grant; the host /tmp is denied.
+    TMPDIR: tmpDir,
     // The child reaches OpenRouter only through the supervisor's injecting
     // proxy; it never sees the real key (openrouter-proxy extension reads this).
     ...(OPENROUTER_PROXY_URL ? { OPENROUTER_PROXY_URL } : {}),
