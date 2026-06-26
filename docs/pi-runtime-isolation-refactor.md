@@ -5,8 +5,9 @@ below is unchanged and shipped. The per-session confinement, however, is **no
 longer a `PrivateUsers=managed` user namespace** — both executors now confine
 each pi child with a self-applied **Landlock** domain (see
 [landlock-sandbox-design.md](./landlock-sandbox-design.md)). The `managed`-userns
-path, `nsresourced`, and the `pi-sessiond-sandbox`/`-sandbox-wall` checks
-referenced below have been deleted; read the managed-userns specifics as
+path, `nsresourced`, and the `pi-sessiond-sandbox-wall` check referenced below
+have been deleted (`pi-sessiond-sandbox` was repurposed to unit-test the new
+Landlock policy/argv emitter); read the managed-userns specifics as
 historical. The threat model and the supervisor architecture still apply.
 
 **Goal:** invert `pi-sessiond` so the **entire pi runtime** — the model

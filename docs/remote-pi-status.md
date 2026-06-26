@@ -4,8 +4,19 @@ Living execution tracker for the remote-pi build. Rationale and the staged
 plan live in [`remote-pi-design.md`](./remote-pi-design.md); "stage N" below
 refers to its §14. Update this file as work lands.
 
-All work is on branch **`pi-remote-chat`** (not pushed). Checks run with
-`nix build .#checks.x86_64-linux.<name>`.
+**Status update (confinement superseded).** The supervisor / RPC-pipe drive
+path below is unchanged and shipped. The per-session confinement, however, is
+**no longer a `PrivateUsers=managed` user namespace** — both executors now
+confine each pi child with a self-applied **Landlock** domain (see
+[`landlock-sandbox-design.md`](./landlock-sandbox-design.md)), dropping each
+system-executor session to a shared `pi-session` uid. The `managed`-userns path,
+`nsresourced.nix`, the per-command `systemd-run` bash sandbox, and the
+`pi-sessiond-sandbox-wall` check referenced below have been **deleted**; read
+every managed-userns / per-bash-sandbox / SDK-embedded passage below as
+historical. The threat model and the supervisor architecture still apply.
+
+Work is squashed onto branch **`landlock`** (granular history under
+`landlock-unify`). Checks run with `nix build .#checks.x86_64-linux.<name>`.
 
 ---
 ## Runtime isolation refactor — phase 1 (drive path) complete

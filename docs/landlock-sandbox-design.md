@@ -465,9 +465,9 @@ A kernel 0-day defeats both — that is a microVM, separately.
   chat round-trip still works; the "bash runs sandboxed: `HOME` hidden" subtest
   holds (now via Landlock deny, not `ProtectHome`); a **Signal** end-to-end
   (`signal threads`) succeeds through the granted `enqueue.sock`.
-- **Unit** (`sandbox.test.ts`): the emitted landlockconfig policy contains the
-  expected grants/scope and excludes `$HOME`/sibling sessions; the `systemd-run`
-  argv carries the seccomp denylist.
+- **Unit** (`sandbox.test.ts`, run by `checks/pi-sessiond-sandbox/`): the emitted
+  landlockconfig policy contains the expected grants/scope and excludes
+  `$HOME`/sibling sessions; the `systemd-run` argv carries the seccomp denylist.
 
 ---
 
@@ -541,6 +541,9 @@ BTF/systemd override are all **deleted**. What was done:
    sessions share the one `pi-session` uid — cross-session isolation is the same
    Landlock `scoped` + seccomp wall as the desktop, not a distinct-uid namespace.
    One mechanism, one policy emitter, one launcher for both executors.
+   Pinned by `checks/pi-sessiond-session-uid`: the spawned `pi-session-<id>`
+   service runs as the non-root `pi-session` uid (the supervisor stays root) and
+   the session dirs are chowned to it.
 3. **Optional, later — nspawn uid backstop.** If a genuinely *multi-user* server
    (distinct humans, not just distinct sessions), or the policy-mistake
    forgiveness of a per-session distinct uid (§11), is later judged worth the
@@ -559,9 +562,13 @@ BTF/systemd override are all **deleted**. What was done:
 - **landlockconfig stability** — the schema is explicitly pre-1.0/unstable. Pin a
   revision; the kernel-maintainer backing and small surface keep the risk low,
   but track it.
-- **`TMPDIR`** — give each session a private temp (`RuntimeDirectory=` under
-  `/run/user/<uid>` or `/tmp/pi-<id>`, granted rw) so tools that ignore the
-  allowlist for `/tmp` don't escape; deny the global `/tmp`.
+- **`TMPDIR`** — RESOLVED: each session's `TMPDIR` is a private `sessions/<id>/tmp`
+  dir, created up front in `registerSession` and carried into the child via
+  `--setenv`. It nests under the `sessions/<id>` rw grant (so no extra rule, and
+  `chownTree` reaches it in system scope); the host's shared `/tmp` stays denied
+  by absence from the allowlist. Pinned by `checks/pi-sessiond-session-tmpdir`
+  (child env carries the private `TMPDIR`; replaying the emitted policy, a write
+  into it succeeds while a write to `/tmp` is denied).
 - **Network granularity** — port-granular only (§5.2). Accept (the proxy bounds
   the upstream host), or add a loopback-only net namespace later (needs its own
   mechanism since the userns is dropped).
