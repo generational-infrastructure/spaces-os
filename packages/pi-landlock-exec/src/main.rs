@@ -21,11 +21,12 @@
 
 use std::ffi::OsString;
 use std::fs::File;
+use std::io::ErrorKind;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use landlock::RulesetStatus;
-use landlockconfig::{Config, OptionalConfig};
+use landlock::{PathFdError, RulesetStatus};
+use landlockconfig::{Config, OptionalConfig, RuleError};
 
 /// Exit code for any launcher-side failure (policy/exec). Distinct from a normal
 /// program exit; mirrors the shell "command not executable" convention.
@@ -108,10 +109,20 @@ fn main() {
         .build_ruleset()
         .unwrap_or_else(|e| die(format!("build ruleset: {e}")));
 
-    // A granted path that does not exist is a policy bug worth surfacing, but not
-    // fatal: the rest of the domain still applies (and deny-by-default holds).
+    // A granted path that can't be opened is dropped, not fatal: the rest of the
+    // domain still applies (and deny-by-default holds). A missing path is the
+    // benign common case — an optional grant absent on this host (e.g. a skill
+    // dir) — so name it tersely; anything else (e.g. EACCES) is a real policy
+    // bug, so surface the full error.
     for err in &rule_errors {
-        eprintln!("pi-landlock-exec: skipped rule: {err:?}");
+        match err {
+            RuleError::PathFd(PathFdError::OpenCall { source, path, .. })
+                if source.kind() == ErrorKind::NotFound =>
+            {
+                eprintln!("pi-landlock-exec: skipped absent path {}", path.display());
+            }
+            _ => eprintln!("pi-landlock-exec: dropped grant: {err}"),
+        }
     }
 
     let status = ruleset
