@@ -217,6 +217,7 @@ Item {
   // Plain-JS array so QML bindings re-evaluate on assignment.
   property var sessionsList: []        // [{id, name, workspacePath, trusted, model, createdAt, lastActiveAt, unread}]
   property string activeSessionId: ""
+  readonly property string defaultAgentName: "arlo"
 
   // ms-since-epoch cutoff that filters _importRemoteSessions. Sessions
   // whose `updated` is ≤ this value are pre-existing daemon residue and
@@ -284,21 +285,29 @@ Item {
     // on disk and orphaning the daemon sessions it pointed at.
     // slice.call normalizes any indexable sequence into a real Array.
     const raw = Array.prototype.slice.call(root._sessions.sessions || []);
+    let normalizedChanged = false;
+    let collapsedGeneratedSessions = false;
     if (raw.length > 0) {
-      sessionsList = raw;
-      activeSessionId = root._sessions.activeSessionId || raw[0].id;
+      const normalized = _normalizeLoadedSessions(raw);
+      normalizedChanged = JSON.stringify(normalized) !== JSON.stringify(raw);
+      collapsedGeneratedSessions = raw.length > 1 && normalized.length === 1;
+      sessionsList = normalized;
+      const storedActive = root._sessions.activeSessionId || raw[0].id;
+      activeSessionId = normalized.some(s => s.id === storedActive)
+        ? storedActive
+        : normalized[0].id;
     } else {
       // Bootstrap: auto-create one default session so the panel has
       // something to render on first run.
       const id = root._newId();
-      sessionsList = [_freshSessionEntry(id, "Chat 1")];
+      sessionsList = [_freshSessionEntry(id, defaultAgentName)];
       activeSessionId = id;
       _ensureSessionDirs(sessionsList[0].id, sessionsList[0].workspacePath);
       _persist();
     }
     const stored = root._sessions.lastImportTime || 0;
-    lastImportTime = stored > 0 ? stored : Date.now();
-    if (stored <= 0) _persist();
+    lastImportTime = collapsedGeneratedSessions ? Date.now() : (stored > 0 ? stored : Date.now());
+    if (stored <= 0 || normalizedChanged) _persist();
     // An executor's `sessions` reply may have raced past this load with
     // lastImportTime still at 0 (no-op then); replay the import now that
     // the cutoff is durable.
@@ -307,6 +316,33 @@ Item {
     // carry executor: "" — pin them now if the default is already known;
     // otherwise onDefaultExecutorIdChanged catches up when it loads.
     _stampDefaultExecutor();
+  }
+
+  function _normalizeLoadedSessions(raw) {
+    const out = raw.slice();
+    if (out.length === 0) return out;
+
+    const first = out[0];
+    const name = String(first.name || "").trim();
+    const allGenerated = out.every((s, i) => {
+      const n = String(s.name || "").trim();
+      return n === "" || n === defaultAgentName || n === ("Chat " + (i + 1));
+    });
+
+    if (allGenerated) {
+      const resetLegacyHistory = out.length > 1;
+      const only = Object.assign({}, first, {
+        name: defaultAgentName,
+        unread: 0,
+      });
+      if (resetLegacyHistory) only.daemonSessionId = "";
+      return [only];
+    }
+
+    if (name === "" || name === "Chat 1")
+      out[0] = Object.assign({}, first, { name: defaultAgentName });
+
+    return out;
   }
 
   function _persist() {

@@ -47,11 +47,18 @@ QtObject {
 
   property QtObject backendStub: QtObject {
     property var chat: shell.chatStub
-    property var sessionsList: []
-    property string activeSessionId: ""
+    property var sessionsList: [{
+      id: "scroll-test",
+      name: "Tester",
+      section: "chats",
+      unread: 0
+    }]
+    property string activeSessionId: "scroll-test"
     property var executors: []
     property var signalPendingSends: []
     property bool signalBridgeConnected: false
+    property var _sessionObjs: ({})
+    function selectSession(id) { activeSessionId = id; }
     function signalApprove(_t) {}
     function signalDeny(_t) {}
     function newSession() {}
@@ -67,6 +74,7 @@ QtObject {
       id: panel
       anchors.fill: parent
       backend: shell.backendStub
+      selectedConversationId: "scroll-test"
     }
   }
 
@@ -133,6 +141,5 @@ QtObject {
     function contentY(): string { const h = shell._hist(); return h ? String(h.contentY) : "no-hist"; }
     function originY(): string { const h = shell._hist(); return h ? String(h.originY) : "no-hist"; }
     function count(): string { const h = shell._hist(); return h ? String(h.count) : "no-hist"; }
-    function unseen(): string { const h = shell._hist(); return h ? String(h.unseen) : "no-hist"; }
   }
 }

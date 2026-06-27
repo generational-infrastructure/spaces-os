@@ -2,1057 +2,1309 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Window
 import QtQuick.Controls
-import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
+import QtQuick.Effects
 import qs.Commons
 import qs.Widgets
-import "MsgText.js" as Txt
-import "MsgFilter.js" as MsgFilter
 
 Item {
   id: root
 
-  // Set by shell.qml. The Panel never reaches around `backend` for
-  // anything noctalia used to mediate via `pluginApi.mainInstance`.
   property var backend: null
-  property var chat: backend?.chat || null
 
-  // Daemon pushes this in the status event — single source of truth is
-  // the hm-module's displayName option, not a separate plugin setting.
-  readonly property string peerName: root.chat?.peerName || tr("panel.default-peer-name")
-
-  // UI-only "hide thinking bubbles" toggle. Persisted in our own
-  // settings.json (Commons.Settings) so it survives across launches.
-  // Flipping it never mutates session.messages; restoring it brings
-  // every previously hidden bubble back in place.
-  readonly property bool showThinking: Settings.data.showThinking
-
-  function tr(key, args) {
-    return I18n.tr(key, args);
-  }
-
-  // Look up a message by id to render the quoted snippet above a
-  // threaded reply. Linear scan is fine — maxHistory caps it at ~200.
-  function findMsg(id) {
-    const arr = root.chat?.messages || [];
-    for (let i = arr.length - 1; i >= 0; i--)
-      if (arr[i].id === id) return arr[i];
-    return null;
-  }
-
-
-  // No implicitWidth/implicitHeight on purpose. shell.qml's
-  // PanelWindow requests the wayland-surface size via its own
-  // `implicitWidth: 480`, and QQuickWindow uses its contentItem's
-  // implicit size as the window's implicit. Anything we advertise
-  // here would propagate up and replace the shell's value, sizing
-  // the surface to whatever we put (the noctalia SmartPanel host
-  // used to read a 1000 px `contentPreferredWidth` from us — that
-  // value reaching the standalone window made the panel render
-  // wider than the screen, clipping the header and bubbles off the
-  // right edge). The shell sets the width; we fill it via
-  // anchors.fill at our call site.
-
-  // Relative-time formatter for the tiny timestamp under each bubble.
-  // Absolute times would be noise for a chat that's mostly "just now".
-  // `_now` ticks every 30s so `ago()` bindings re-evaluate — otherwise
-  // "now" freezes at send time and never becomes "1m".
+  property string selectedConversationId: ""
+  property string listMode: "chats"
   property real _now: Date.now()
-  // Voice input via voxtype. Toggle-style: click starts recording,
-  // click again stops + transcribes into the focused input. We track
-  // state locally — same command the Mod+Space keybind invokes — so
-  // the button color reflects what we asked for. Out-of-band toggles
-  // from the keyboard will drift, but that's a rare edge case.
-  property bool voiceRecording: false
-  Timer { interval: 30000; running: root.visible; repeat: true; onTriggered: root._now = Date.now() }
+  property var _historyCache: ({})
+
+  readonly property bool inChat: selectedConversationId !== ""
+  readonly property var selectedConversation: conversationById(selectedConversationId)
+  readonly property var selectedSession: sessionObject(selectedConversationId)
+
+  readonly property color dusk: "#1f231f"
+  readonly property color ink: "#171717"
+  readonly property color granite: "#6b6b6b"
+  readonly property color muted: "#9ea39e"
+  readonly property color cloud: "#cdd1cd"
+  readonly property color dust: "#ebebeb"
+  readonly property color sleet: "#f3f3f3"
+  readonly property color ice: "#f8f8f8"
+  readonly property color matcha: "#17b239"
+  readonly property color warning: "#ff6157"
+  readonly property color cardColor: Qt.rgba(250 / 255, 250 / 255, 250 / 255, 0.92)
+  readonly property color navColor: Qt.rgba(255 / 255, 255 / 255, 255 / 255, 0.92)
+
+  Timer {
+    interval: 30000
+    running: root.visible
+    repeat: true
+    onTriggered: {
+      root._now = Date.now();
+      root.syncHistoryModel();
+    }
+  }
+
+  onSelectedConversationIdChanged: {
+    if (history) history.followTail = true;
+    if (selectedConversationId !== "") Qt.callLater(() => root.syncHistoryModel(true));
+  }
 
   function ago(ts) {
-    const s = Math.max(0, (_now - ts) / 1000);
-    if (s < 60)   return tr("panel.time-now");
-    if (s < 3600) return Math.floor(s/60) + "m";
-    if (s < 86400) return Math.floor(s/3600) + "h";
+    if (!ts) return "";
+    const s = Math.max(0, (root._now - ts) / 1000);
+    if (s < 60) return "now";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
     return Qt.formatDateTime(new Date(ts), "ddd HH:mm");
   }
 
-  ColumnLayout {
-    anchors.fill: parent
-    anchors.margins: Style.marginL
-    spacing: Style.marginM
+  function openConversation(conversationId) {
+    if (!conversationId) return;
+    root.backend?.selectSession?.(conversationId);
+    selectedConversationId = conversationId;
+    Qt.callLater(() => {
+      root.syncHistoryModel(true);
+      history.followTail = true;
+      history.positionViewAtEnd();
+      inputArea.forceActiveFocus();
+    });
+  }
 
-    // ── Session tabs ───────────────────────────────────────────────
-    // Session tabs are populated by PiChatBackend; if the list
-    // is empty the row collapses to zero height.
-    Item {
-      id: sessionTabsHost
-      Layout.fillWidth: true
-      visible: sessionTabsRow.count > 0
-      implicitHeight: visible ? Style.baseWidgetSize : 0
+  function closeConversation() {
+    selectedConversationId = "";
+  }
 
-      readonly property var sessions: root.backend?.sessionsList || []
-      readonly property string active: root.backend?.activeSessionId || ""
+  function rawSessions() {
+    return Array.prototype.slice.call(root.backend?.sessionsList || []);
+  }
 
-      RowLayout {
-        anchors.fill: parent
-        spacing: Style.marginXS
+  function primarySession() {
+    const sessions = rawSessions();
+    if (sessions.length === 0) return null;
+    for (const session of sessions) {
+      if (String(session.name || "").toLowerCase() === "arlo") return session;
+    }
+    return sessions[0];
+  }
 
-        NIconButton {
-          id: newSessionButton
-          icon: "plus"
-          tooltipText: root.tr("panel.new-session-tooltip")
-          baseSize: Style.baseWidgetSize * 0.85
-          // One executor (or none): create directly on the default. Multiple
-          // (multi-homing): open the picker so the session can be pinned.
-          onClicked: {
-            if ((root.backend?.executors?.length || 0) > 1)
-              executorPickerPopup.visible ? executorPickerPopup.close() : executorPickerPopup.open();
-            else
-              root.backend?.newSession?.();
-          }
-        }
+  function sessionObject(id) {
+    if (!id) return null;
+    const map = root.backend?._sessionObjs || {};
+    if (map[id]) return map[id];
+    if (root.backend?.activeSessionId === id) return root.backend?.chat || null;
+    return null;
+  }
 
-        ListView {
-          id: sessionTabsRow
-          Layout.fillWidth: true
-          Layout.fillHeight: true
-          orientation: ListView.Horizontal
-          spacing: Style.marginXS
-          clip: true
-          interactive: contentWidth > width
-          model: sessionTabsHost.sessions
+  function avatarColorFor(id) {
+    const colors = ["#dff5e6", "#ffefcb", "#b8c9c3", "#ffdfb4", "#a7b1d4", "#ffefee", "#d7e7ff"];
+    let h = 0;
+    const s = String(id || "");
+    for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) & 0x7fffffff;
+    return colors[h % colors.length];
+  }
 
-          delegate: Rectangle {
-            id: tabDelegate
-            required property var modelData
-            readonly property bool isActive: tabDelegate.modelData.id === sessionTabsHost.active
-            readonly property int unread: tabDelegate.modelData.unread || 0
-            height: ListView.view.height
-            width: tabLabel.implicitWidth + Style.marginM * 2
-            radius: Style.radiusS
-            color: tabDelegate.isActive ? Color.mPrimary : Color.mSurfaceVariant
-            border.width: tabDelegate.isActive ? 0 : 1
-            border.color: Color.mOutline
-            TapHandler {
-              onTapped: root.backend?.selectSession?.(tabDelegate.modelData.id)
-              onLongPressed: root.backend?.removeSession?.(tabDelegate.modelData.id)
-            }
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
-            NText {
-              id: tabLabel
-              anchors.centerIn: parent
-              text: (tabDelegate.modelData.name || "chat")
-                + ((tabDelegate.modelData.executor && (root.backend?.executors?.length || 0) > 1)
-                   ? " · " + tabDelegate.modelData.executor : "")
-                + (tabDelegate.unread > 0 ? "  •" : "")
-              color: tabDelegate.isActive ? Color.mOnPrimary : Color.mOnSurface
-              pointSize: Style.fontSizeS
-              font.bold: tabDelegate.isActive
-            }
-          }
+  function latestPreview(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m || (m.type || "") === "thinking") continue;
+      const text = String(m.text || "").trim();
+      if (text !== "") return text.replace(/\s+/g, " ");
+    }
+    return "Ready";
+  }
+
+  function conversationFromSession(session) {
+    const obj = sessionObject(session.id);
+    const messages = Array.prototype.slice.call(obj?.messages || []);
+    const title = session.name || obj?.sessionName || "Chat";
+    const busy = obj?.busy || false;
+    return {
+      id: session.id,
+      section: session.section || "chats",
+      title,
+      subtitle: busy ? "Working" : latestPreview(messages),
+      chatTitle: title,
+      avatarText: initials(title),
+      avatarColor: avatarColorFor(session.id),
+      avatarTextColor: root.dusk,
+      icon: "message-chatbot",
+      online: obj?.streaming || false,
+      snoozed: busy,
+      unread: session.unread || 0,
+    };
+  }
+
+  function visibleConversations() {
+    if (root.listMode !== "chats") return [];
+    const session = primarySession();
+    return session ? [conversationFromSession(session)] : [];
+  }
+
+  function conversationById(id) {
+    const sessions = rawSessions();
+    for (const session of sessions) {
+      if (session.id === id) return conversationFromSession(session);
+    }
+    return null;
+  }
+
+  function initials(name) {
+    const parts = String(name || "?").split(/[ ,&]+/).filter(p => p.length > 0);
+    if (parts.length === 0) return "?";
+    if (parts.length === 1) return String(parts[0]).slice(0, 2).toUpperCase();
+    return String(parts[0]).slice(0, 1).toUpperCase()
+      + String(parts[1]).slice(0, 1).toUpperCase();
+  }
+
+  function visibleMessages() {
+    const obj = sessionObject(selectedConversationId);
+    const messages = Array.prototype.slice.call(obj?.messages || []);
+    return messages.map(message => normalizeMessage(message));
+  }
+
+  function rememberHistoryRows(sessionId, rows) {
+    if (!sessionId || rows.length === 0) return;
+    const next = Object.assign({}, _historyCache);
+    next[sessionId] = rows.slice();
+    _historyCache = next;
+  }
+
+  function syncHistoryModel(forceReset) {
+    if (!historyModel) return;
+    const sessionId = selectedConversationId;
+    let rows = root.inChat ? visibleMessages() : [];
+    const cached = sessionId ? (_historyCache[sessionId] || []) : [];
+    if (root.inChat && rows.length === 0 && cached.length > 0) {
+      rows = cached.slice();
+    } else if (root.inChat && rows.length > 0) {
+      rememberHistoryRows(sessionId, rows);
+    }
+    let reset = forceReset || historyModel.count > rows.length;
+
+    if (!reset) {
+      for (let i = 0; i < Math.min(historyModel.count, rows.length); i++) {
+        const current = historyModel.get(i).value || {};
+        if (current.id !== rows[i].id) {
+          reset = true;
+          break;
         }
       }
     }
 
-    // ── Header ────────────────────────────────────────────────────────
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: Style.marginS
+    if (reset) {
+      historyModel.clear();
+      for (const row of rows) historyModel.append({ value: row });
+      return;
+    }
+
+    for (let i = 0; i < rows.length; i++) {
+      if (i >= historyModel.count) {
+        historyModel.append({ value: rows[i] });
+        continue;
+      }
+
+      const current = historyModel.get(i).value || {};
+      if (JSON.stringify(current) !== JSON.stringify(rows[i])) {
+        historyModel.setProperty(i, "value", rows[i]);
+      }
+    }
+  }
+
+  function normalizeMessage(message) {
+    const mine = message.from === "me";
+    const notification = (message.type || "") === "notification";
+    const thinking = (message.type || "") === "thinking";
+    const author = mine ? "You" : (notification ? "System" : (root.selectedConversation?.chatTitle || "Pi"));
+    return Object.assign({}, message, {
+      author,
+      time: ago(message.ts),
+      avatarText: mine ? "Y" : (notification ? "S" : root.initials(author)),
+      avatarColor: mine ? "#dff5e6" : (notification ? root.sleet : root.selectedConversation?.avatarColor || root.sleet),
+      avatarTextColor: root.dusk,
+      icon: (!mine && !notification && !thinking) ? "message-chatbot" : "",
+      online: !mine && (root.selectedSession?.streaming || false),
+      mine,
+    });
+  }
+
+  function submitMessage() {
+    const text = inputArea.text.trim();
+    if (text.length === 0) return;
+
+    root.selectedSession?.send?.(text);
+    inputArea.clear();
+    history.scheduleTailScroll(true);
+  }
+
+  function attachFiles(paths) {
+    const session = root.selectedSession;
+    if (!session || !paths) return;
+
+    const selectedPaths = Array.isArray(paths) ? paths : [paths];
+    for (const path of selectedPaths) {
+      const filePath = String(path || "");
+      if (filePath.length > 0) session.sendFile?.(filePath, true);
+    }
+    history.scheduleTailScroll(true);
+  }
+
+  component Avatar: Item {
+    id: avatar
+
+    property string label: "?"
+    property string iconName: ""
+    property color baseColor: root.sleet
+    property color textColor: root.dusk
+    property bool online: false
+    property bool snoozed: false
+    property real side: 36
+
+    implicitWidth: side
+    implicitHeight: side
+
+    Rectangle {
+      anchors.fill: parent
+      radius: 10
+      color: avatar.baseColor
+      clip: true
 
       NIcon {
-        icon: "message-chatbot"
-        pointSize: Style.fontSizeXL * 1.4
-        color: Color.mPrimary
+        visible: avatar.iconName !== ""
+        anchors.centerIn: parent
+        icon: avatar.iconName
+        pointSize: 14
+        color: avatar.textColor
       }
-      ColumnLayout {
-        spacing: 0
-        NText {
-          text: root.peerName
-          pointSize: Style.fontSizeL
-          font.bold: true
-        }
-        NText {
-          text: (root.chat !== null && root.chat.typing)
-            ? "thinking…"
-            : root.chat?.streaming
-              ? "ready"
-              : root.tr("panel.status-offline")
-          pointSize: Style.fontSizeXS
-          color: Color.mOnSurfaceVariant
-        }
-      }
-      // Model selector. PiChatBackend exposes the llama-swap-discovered list.
-      NComboBox {
-        id: modelCombo
-        // fillWidth so the combo claims the whole header width after the
-        // icon and name/status block — every other action moved into the
-        // "more" menu, so the dropdown gets nearly the full panel width.
-        Layout.fillWidth: true
-        Layout.alignment: Qt.AlignVCenter
-        Layout.minimumWidth: 0
-        popupHeight: 420
-        baseSize: 0.85
-        tooltip: root.tr("panel.models-tooltip")
-        searchable: true
-        searchPlaceholder: root.tr("panel.models-search")
-        // NComboBox expects [{key, name}]. Key is the stable "<provider>/<id>";
-        // name prefixes the model with its source — the executor id for that
-        // executor's local provider ("[kiwi] …"), else the provider name
-        // ("[openrouter] …"). Frecency sort orders most-recently/often-used first.
-        sourceModel: ModelFrecency.sortModels(root.chat?.models ?? [], m => m.provider + "/" + m.id).map(m => ({
-          key: m.provider + "/" + m.id,
-          name: "[" + (m.provider === "local" ? (root.chat?.executor?.executorId || "local") : m.provider) + "] " + m.id + (m.reasoning ? "  ⚡" : ""),
-          provider: m.provider,
-          modelId: m.id,
-        }))
-        currentKey: root.chat?.activeModel ?? ""
-        onSelected: key => {
-          const item = (root.chat?.models ?? []).find(m => (m.provider + "/" + m.id) === key);
-          if (item) root.chat.setModel(item.provider, item.id);
-        }
-      }
-      // Overflow "more" menu: search, memory toggle, wipe and reset all
-      // live in optionsPopup now, keeping the header to just the model
-      // selector plus this button (and the relay status dot).
-      NIconButton {
-        id: optionsButton
-        icon: "dots-vertical"
-        tooltipText: root.tr("panel.options-tooltip")
-        baseSize: Style.baseWidgetSize * 0.9
-        onClicked: optionsPopup.visible ? optionsPopup.close() : optionsPopup.open()
-      }
-      Rectangle {
-        id: relayDot
-        implicitWidth: 8; implicitHeight: 8; radius: 4
-        color: root.chat?.streaming ? Color.mTertiary : Color.mError
+
+      Text {
+        visible: avatar.iconName === ""
+        anchors.centerIn: parent
+        text: avatar.label
+        color: avatar.textColor
+        font.family: Settings.data.ui.fontDefault
+        font.pixelSize: avatar.label.length > 1 ? 12 : 15
+        font.weight: 700
       }
     }
 
-    // Inline confirm strip for "Wipe all memory". Renders only when
-    // the user clicked the eraser button; closes itself on either
-    // confirm or cancel. We do not stop running pi sessions before
-    // the rm — the next sediment call will recreate an empty DB layout.
-    RowLayout {
-      id: wipeConfirmBar
-      visible: false
-      Layout.fillWidth: true
-      spacing: Style.marginS
-      NText {
-        Layout.fillWidth: true
-        text: root.tr("panel.memory-wipe-confirm")
-        pointSize: Style.fontSizeS
-        color: Color.mError
-        wrapMode: Text.Wrap
-      }
-      NIconButton {
-        icon: "check"
-        tooltipText: root.tr("panel.memory-wipe-yes")
-        baseSize: Style.baseWidgetSize * 0.85
-        onClicked: {
-          root.backend?.wipeMemory?.();
-          wipeConfirmBar.visible = false;
-        }
-      }
-      NIconButton {
-        icon: "x"
-        tooltipText: root.tr("panel.memory-wipe-no")
-        baseSize: Style.baseWidgetSize * 0.85
-        onClicked: wipeConfirmBar.visible = false
+    Rectangle {
+      visible: avatar.online || avatar.snoozed
+      width: avatar.snoozed ? 14 : 12
+      height: avatar.snoozed ? 14 : 12
+      radius: width / 2
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.rightMargin: -2
+      anchors.bottomMargin: -2
+      color: avatar.snoozed ? root.warning : root.matcha
+      border.color: root.cardColor
+      border.width: 2
+
+      Text {
+        visible: avatar.snoozed
+        anchors.centerIn: parent
+        text: "z"
+        color: "white"
+        font.family: Settings.data.ui.fontDefault
+        font.pixelSize: 8
+        font.weight: 700
       }
     }
+  }
 
-    // ── Search ────────────────────────────────────────────────────────────
-    // Case-insensitive substring match over the in-memory mirror.
-    // hits[] indexes history.model (already newest-first), cursor walks
-    // them. Closing clears the query so bubbles drop the outline.
-    RowLayout {
-      id: searchBar
-      visible: false
-      Layout.fillWidth: true
-      spacing: Style.marginS
+  component ContactRow: Item {
+    id: row
 
-      // Store message IDs, not model indices — the reversed model
-      // shifts by one every time a message arrives, which would point
-      // every cached index at the wrong bubble.
-      property var hits: []      // [id, id, …] newest-first
-      property string current: ""
-      readonly property string query: searchField.text.toLowerCase()
-      onVisibleChanged: if (!visible) { searchField.text = ""; history.positionViewAtBeginning(); history._follow = true; }
+    property var conversation
+    signal clicked
 
-      function refresh() {
-        if (!query) { hits = []; current = ""; return; }
-        const out = [];
-        for (const m of history.model)
-          if ((m.text || "").toLowerCase().includes(query)) out.push(m.id);
-        hits = out;
-        current = out[0] || "";
-        jump();
-      }
-      function step(d) {
-        if (!hits.length) return;
-        const i = Math.max(0, hits.indexOf(current));
-        current = hits[(i + d + hits.length) % hits.length];
-        jump();
-      }
-      function jump() {
-        if (!current) return;
-        const i = history.model.findIndex(m => m.id === current);
-        if (i >= 0) { history.positionViewAtIndex(i, ListView.Center); history._captureFollow(); }
-      }
-      // Re-scan when messages arrive mid-search so the counter stays
-      // honest. current is an ID so the cursor survives the refresh.
-      readonly property int _watch: history.count
-      on_WatchChanged: if (visible && query) {
-        const keep = current;
-        refresh();
-        if (hits.includes(keep)) { current = keep; jump(); }
-      }
+    implicitHeight: 60
 
-      NTextInput {
-        id: searchField
-        Layout.fillWidth: true
-        placeholderText: root.tr("panel.search-placeholder")
-        inputItem.onTextChanged: searchBar.refresh()
-        inputItem.Keys.onReturnPressed: e => searchBar.step(e.modifiers & Qt.ShiftModifier ? -1 : 1)
-        inputItem.Keys.onEscapePressed: searchBar.visible = false
-        function forceActiveFocus() { inputItem.forceActiveFocus(); }
-      }
-      NText {
-        text: searchBar.hits.length
-          ? (searchBar.hits.indexOf(searchBar.current) + 1) + "/" + searchBar.hits.length
-          : (searchField.text ? "0" : "")
-        color: Color.mOnSurfaceVariant
-        pointSize: Style.fontSizeS
-      }
-      NIconButton { icon: "chevron-up";   baseSize: Style.baseWidgetSize * 0.8; onClicked: searchBar.step(1) }
-      NIconButton { icon: "chevron-down"; baseSize: Style.baseWidgetSize * 0.8; onClicked: searchBar.step(-1) }
-      NIconButton { icon: "x";            baseSize: Style.baseWidgetSize * 0.8; onClicked: searchBar.visible = false }
+    Rectangle {
+      anchors.fill: parent
+      anchors.leftMargin: 4
+      anchors.rightMargin: 4
+      radius: 12
+      color: hover.hovered ? Qt.rgba(1, 1, 1, 0.86) : Qt.rgba(1, 1, 1, 0)
+      Behavior on color { ColorAnimation { duration: 80 } }
     }
 
-    NDivider { Layout.fillWidth: true }
+    Avatar {
+      id: contactAvatar
+      anchors.left: parent.left
+      anchors.leftMargin: 16
+      anchors.verticalCenter: parent.verticalCenter
+      label: row.conversation.avatarText || root.initials(row.conversation.title)
+      iconName: row.conversation.icon || ""
+      baseColor: row.conversation.avatarColor || root.sleet
+      textColor: row.conversation.avatarTextColor || root.dusk
+      online: row.conversation.online || false
+      snoozed: row.conversation.snoozed || false
+    }
 
-    // Asymmetry hint: when the panel comes up empty but the daemon is
-    // already running, the underlying pi process likely has prior turns
-    // in its context window — typing here continues that conversation
-    // rather than starting a new one. Plugin can't reliably distinguish
-    // a truly fresh daemon from a long-running one without a daemon-side
-    // signal, so this also surfaces on first-ever startup; the cost of
-    // that false positive (one extra line until the user sends anything)
-    // is lower than the cost of silently appending to a hidden history.
-    NText {
-      visible: root.chat?.streaming && (root.chat?.messages?.length ?? 0) === 0
-      Layout.fillWidth: true
-      text: root.tr("panel.context-hint")
-      color: Color.mOnSurfaceVariant
-      pointSize: Style.fontSizeXS
+    Text {
+      id: contactTitle
+      anchors.left: contactAvatar.right
+      anchors.leftMargin: 10
+      anchors.right: parent.right
+      anchors.rightMargin: 14
+      y: 12
+      text: row.conversation.title || ""
+      color: root.dusk
+      elide: Text.ElideRight
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 14
+      font.weight: 700
+    }
+
+    Text {
+      anchors.left: contactTitle.left
+      anchors.right: contactTitle.right
+      y: 32
+      text: row.conversation.subtitle || ""
+      color: root.muted
+      elide: Text.ElideRight
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 12
+      font.weight: 500
+    }
+
+    HoverHandler {
+      id: hover
+      cursorShape: Qt.PointingHandCursor
+    }
+
+    TapHandler {
+      onTapped: row.clicked()
+    }
+  }
+
+  component AttachmentMenuAction: Item {
+    id: action
+
+    property string icon: ""
+    property string label: ""
+    signal triggered
+
+    implicitHeight: 36
+    implicitWidth: 150
+    height: implicitHeight
+
+    Rectangle {
+      anchors.fill: parent
+      radius: 10
+      color: actionMouse.containsMouse ? root.ice : "transparent"
+      Behavior on color { ColorAnimation { duration: 80 } }
+    }
+
+    NIcon {
+      id: actionIcon
+      anchors.left: parent.left
+      anchors.leftMargin: 10
+      anchors.verticalCenter: parent.verticalCenter
+      icon: action.icon
+      pointSize: 13
+      color: root.granite
+    }
+
+    Text {
+      anchors.left: actionIcon.right
+      anchors.leftMargin: 8
+      anchors.right: parent.right
+      anchors.rightMargin: 10
+      anchors.verticalCenter: parent.verticalCenter
+      text: action.label
+      color: root.dusk
+      elide: Text.ElideRight
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 13
+      font.weight: 600
+    }
+
+    MouseArea {
+      id: actionMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: action.triggered()
+    }
+  }
+
+  component KinMessageRow: Item {
+    id: row
+
+    property var message
+    readonly property bool isConfirm: (row.message.type || "") === "confirm"
+    readonly property bool isPrompt: (row.message.type || "") === "prompt"
+    readonly property bool isNotice: (row.message.type || "") === "notification"
+    readonly property bool isThinking: (row.message.type || "") === "thinking"
+    signal confirmRequested(bool confirmed)
+    signal promptSubmit(string value)
+    signal promptCancel
+
+    implicitHeight: row.isConfirm
+      ? confirmCard.implicitHeight
+      : row.isPrompt
+        ? promptCard.implicitHeight
+        : Math.max(52, body.y + body.implicitHeight + 8)
+
+    Avatar {
+      id: messageAvatar
+      visible: !row.isConfirm && !row.isPrompt
+      anchors.left: parent.left
+      anchors.leftMargin: 0
+      y: 4
+      label: row.message.avatarText || root.initials(row.message.author)
+      iconName: row.message.icon || ""
+      baseColor: row.message.avatarColor || root.sleet
+      textColor: row.message.avatarTextColor || root.dusk
+      online: row.message.online || false
+      snoozed: false
+    }
+
+    Text {
+      id: author
+      visible: !row.isConfirm && !row.isPrompt
+      anchors.left: messageAvatar.right
+      anchors.leftMargin: 10
+      y: 0
+      text: row.message.author || ""
+      color: root.dusk
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 14
+      font.weight: 700
+    }
+
+    Text {
+      visible: !row.isConfirm && !row.isPrompt
+      anchors.left: author.right
+      anchors.leftMargin: 8
+      anchors.baseline: author.baseline
+      text: row.message.time || ""
+      color: root.muted
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 10
+      font.weight: 500
+    }
+
+    Text {
+      id: body
+      visible: !row.isConfirm && !row.isPrompt
+      anchors.left: author.left
+      anchors.right: parent.right
+      anchors.rightMargin: 4
+      y: 25
+      text: row.isThinking && !(row.message.text || "") ? "thinking..." : (row.message.text || "")
+      color: row.isNotice || row.isThinking ? root.muted : root.ink
       wrapMode: Text.Wrap
-      font.italic: true
+      lineHeight: 20
+      lineHeightMode: Text.FixedHeight
+      font.family: Settings.data.ui.fontDefault
+      font.pixelSize: 14
+      font.weight: 400
+      font.italic: row.isThinking
+      horizontalAlignment: row.isNotice ? Text.AlignHCenter : Text.AlignLeft
     }
 
-    // ── Pending Signal-send approvals (out-of-band channel) ──────────
-    // The bridge runs outside the pi-chat sandbox; the agent can
-    // enqueue but only the human (here) can mint approvals. Cards
-    // sit ABOVE the history pane so the user can never miss one
-    // while looking at the chat.
+    Rectangle {
+      id: confirmCard
+      visible: row.isConfirm
+      anchors.left: parent.left
+      anchors.right: parent.right
+      radius: 12
+      color: Qt.rgba(1, 1, 1, 0.9)
+      border.color: root.dust
+      border.width: 1
+      implicitHeight: confirmCol.implicitHeight + 20
+
+      Column {
+        id: confirmCol
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 10
+        spacing: 8
+
+        Text {
+          width: parent.width
+          text: row.message.confirmTitle || "Confirm action"
+          color: root.dusk
+          wrapMode: Text.Wrap
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 13
+          font.weight: 700
+        }
+
+        Text {
+          width: parent.width
+          text: row.message.text || ""
+          color: root.ink
+          wrapMode: Text.Wrap
+          font.family: Settings.data.ui.fontFixed || Settings.data.ui.fontDefault
+          font.pixelSize: 12
+        }
+
+        Row {
+          anchors.right: parent.right
+          spacing: 8
+          visible: (row.message.confirmState || "pending") === "pending"
+
+          NButton {
+            text: "Deny"
+            bgColor: root.sleet
+            fgColor: root.dusk
+            onClicked: row.confirmRequested(false)
+          }
+
+          NButton {
+            text: "Allow"
+            onClicked: row.confirmRequested(true)
+          }
+        }
+
+        Text {
+          anchors.right: parent.right
+          visible: row.message.confirmState === "allowed" || row.message.confirmState === "denied"
+          text: row.message.confirmState === "allowed" ? "Allowed" : "Denied"
+          color: row.message.confirmState === "allowed" ? root.matcha : root.warning
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 12
+          font.weight: 700
+        }
+      }
+    }
+
+    Rectangle {
+      id: promptCard
+      visible: row.isPrompt
+      anchors.left: parent.left
+      anchors.right: parent.right
+      radius: 12
+      color: Qt.rgba(1, 1, 1, 0.9)
+      border.color: root.dust
+      border.width: 1
+      implicitHeight: promptCol.implicitHeight + 20
+
+      Column {
+        id: promptCol
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 10
+        spacing: 8
+
+        Text {
+          width: parent.width
+          text: row.message.promptSkill
+            ? row.message.promptSkill + " · " + (row.message.promptField || "input")
+            : "Input required"
+          color: root.dusk
+          wrapMode: Text.Wrap
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 13
+          font.weight: 700
+        }
+
+        Text {
+          width: parent.width
+          text: row.message.text || ""
+          color: root.ink
+          wrapMode: Text.Wrap
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 12
+        }
+
+        TextField {
+          id: promptInput
+          visible: (row.message.promptState || "pending") === "pending"
+          width: parent.width
+          echoMode: row.message.promptSecret ? TextInput.Password : TextInput.Normal
+          placeholderText: row.message.promptSecret ? "Enter secret value" : "Enter value"
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 12
+          onAccepted: if (text.length > 0) row.promptSubmit(text)
+        }
+
+        Row {
+          anchors.right: parent.right
+          spacing: 8
+          visible: (row.message.promptState || "pending") === "pending"
+
+          NButton {
+            text: "Cancel"
+            bgColor: root.sleet
+            fgColor: root.dusk
+            onClicked: row.promptCancel()
+          }
+
+          NButton {
+            text: "Submit"
+            enabled: promptInput.text.length > 0
+            onClicked: row.promptSubmit(promptInput.text)
+          }
+        }
+
+        Text {
+          anchors.right: parent.right
+          visible: (row.message.promptState || "pending") !== "pending"
+          text: row.message.promptState || ""
+          color: root.muted
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 12
+          font.weight: 700
+        }
+      }
+    }
+  }
+
+  Rectangle {
+    id: cardShadow
+    width: card.width
+    height: card.height
+    anchors.centerIn: card
+    radius: 18
+    color: root.cardColor
+    opacity: 0.01
+    layer.enabled: true
+    layer.effect: MultiEffect {
+      shadowEnabled: true
+      shadowColor: Qt.rgba(0, 0, 0, 0.18)
+      shadowBlur: 0.85
+      shadowVerticalOffset: 8
+      shadowHorizontalOffset: 0
+    }
+  }
+
+  Rectangle {
+    id: card
+    width: Math.min(parent.width - 20, 408)
+    height: Math.min(parent.height - 20, 612)
+    anchors.right: parent.right
+    anchors.rightMargin: 10
+    anchors.top: parent.top
+    anchors.topMargin: 10
+    radius: 16
+    color: root.cardColor
+    clip: true
+
+    Item {
+      id: membersPane
+      anchors.fill: parent
+      visible: !root.inChat
+      opacity: visible ? 1 : 0
+      Behavior on opacity { NumberAnimation { duration: 120 } }
+
+      Rectangle {
+        id: listTopBarShadow
+        x: listTopBar.x
+        y: listTopBar.y
+        width: listTopBar.width
+        height: listTopBar.height
+        radius: listTopBar.radius
+        color: root.navColor
+        opacity: 0.01
+        layer.enabled: true
+        layer.effect: MultiEffect {
+          shadowEnabled: true
+          shadowColor: Qt.rgba(0, 0, 0, 0.12)
+          shadowBlur: 0.7
+          shadowVerticalOffset: 4
+          shadowHorizontalOffset: 0
+        }
+      }
+
+      Rectangle {
+        id: listTopBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 8
+        height: 40
+        radius: 12
+        color: root.navColor
+
+        Text {
+          id: chatsTab
+          x: 16
+          y: 0
+          height: parent.height
+          text: "Chats"
+          color: root.listMode === "chats" ? root.ink : root.cloud
+          elide: Text.ElideRight
+          verticalAlignment: Text.AlignVCenter
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 14
+          font.weight: 700
+
+          HoverHandler {
+            id: chatsHover
+            cursorShape: Qt.PointingHandCursor
+          }
+
+          TapHandler {
+            onTapped: root.listMode = "chats"
+          }
+        }
+
+        Text {
+          id: communitiesTab
+          anchors.left: chatsTab.right
+          anchors.leftMargin: 26
+          y: 0
+          height: parent.height
+          text: "Communities"
+          color: root.listMode === "communities" ? root.ink : root.cloud
+          elide: Text.ElideRight
+          verticalAlignment: Text.AlignVCenter
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 14
+          font.weight: 700
+
+          HoverHandler {
+            id: communitiesHover
+            cursorShape: Qt.PointingHandCursor
+          }
+
+          TapHandler {
+            onTapped: root.listMode = "communities"
+          }
+        }
+
+        Rectangle {
+          width: 12
+          height: 2
+          radius: 1
+          x: (root.listMode === "communities"
+              ? communitiesTab.x + communitiesTab.implicitWidth / 2
+              : chatsTab.x + chatsTab.implicitWidth / 2) - width / 2
+          y: parent.height - 1
+          color: root.ink
+          Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.InOutQuad } }
+        }
+
+        NIconButton {
+          id: plusButton
+          anchors.right: parent.right
+          anchors.rightMargin: 8
+          anchors.verticalCenter: parent.verticalCenter
+          icon: "plus"
+          tooltipText: "New chat"
+          baseSize: 24
+          colorBg: root.ice
+          colorBgHover: root.sleet
+          colorFg: root.granite
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+          onClicked: {
+            const primary = root.primarySession();
+            const id = primary ? primary.id : root.backend?.newSession?.("arlo");
+            if (id) root.openConversation(id);
+          }
+        }
+
+        NIconButton {
+          anchors.right: plusButton.left
+          anchors.rightMargin: 8
+          anchors.verticalCenter: parent.verticalCenter
+          icon: "search"
+          tooltipText: "Search"
+          baseSize: 24
+          colorBg: root.ice
+          colorBgHover: root.sleet
+          colorFg: root.granite
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+        }
+      }
+
+      ListView {
+        id: contacts
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: 62
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 62
+        anchors.leftMargin: 14
+        anchors.rightMargin: 14
+        model: root.visibleConversations()
+        interactive: contentHeight > height
+        clip: true
+        spacing: 0
+
+        delegate: ContactRow {
+          required property var modelData
+
+          width: contacts.width
+          conversation: modelData
+          onClicked: root.openConversation(modelData.id)
+        }
+      }
+    }
+
+    Item {
+      id: chatPane
+      anchors.fill: parent
+      visible: root.inChat
+      opacity: visible ? 1 : 0
+      Behavior on opacity { NumberAnimation { duration: 120 } }
+
+      Rectangle {
+        id: navShadow
+        x: nav.x
+        y: nav.y
+        width: nav.width
+        height: nav.height
+        radius: 12
+        color: root.navColor
+        opacity: 0.01
+        layer.enabled: true
+        layer.effect: MultiEffect {
+          shadowEnabled: true
+          shadowColor: Qt.rgba(0, 0, 0, 0.12)
+          shadowBlur: 0.7
+          shadowVerticalOffset: 4
+          shadowHorizontalOffset: 0
+        }
+      }
+
+      Rectangle {
+        id: nav
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 8
+        height: 40
+        radius: 12
+        color: root.navColor
+
+        NIconButton {
+          id: backButton
+          anchors.left: parent.left
+          anchors.leftMargin: 8
+          anchors.verticalCenter: parent.verticalCenter
+          icon: "arrow-left"
+          tooltipText: "Back"
+          baseSize: 24
+          colorBg: root.ice
+          colorBgHover: root.sleet
+          colorFg: root.granite
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+          onClicked: root.closeConversation()
+        }
+
+        Text {
+          anchors.left: backButton.right
+          anchors.right: searchButton.left
+          anchors.leftMargin: 8
+          anchors.rightMargin: 8
+          anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignHCenter
+          verticalAlignment: Text.AlignVCenter
+          text: root.selectedConversation?.chatTitle || ""
+          color: root.dusk
+          elide: Text.ElideRight
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 16
+          font.weight: 700
+        }
+
+        NIconButton {
+          id: infoButton
+          anchors.right: parent.right
+          anchors.rightMargin: 8
+          anchors.verticalCenter: parent.verticalCenter
+          icon: "info-circle"
+          tooltipText: "Info"
+          baseSize: 24
+          colorBg: root.ice
+          colorBgHover: root.sleet
+          colorFg: root.granite
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+        }
+
+        NIconButton {
+          id: searchButton
+          anchors.right: infoButton.left
+          anchors.rightMargin: 6
+          anchors.verticalCenter: parent.verticalCenter
+          icon: "search"
+          tooltipText: "Search"
+          baseSize: 24
+          colorBg: root.ice
+          colorBgHover: root.sleet
+          colorFg: root.granite
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+        }
+      }
+
+      ListModel {
+        id: historyModel
+        dynamicRoles: true
+      }
+
+      ListView {
+        id: history
+        objectName: "chatHistory"
+        property bool followTail: true
+        property bool userInteracting: false
+        property real _lastContentHeight: 0
+        readonly property real tailSlack: 32
+
+        function isAtTail(contentHeightToCheck) {
+          const h = contentHeightToCheck === undefined ? contentHeight : contentHeightToCheck;
+          return h <= height || contentY >= Math.max(0, h - height - tailSlack);
+        }
+
+        function scheduleTailScroll(force) {
+          if (force) followTail = true;
+          if (!root.inChat || !followTail || userInteracting) return;
+          tailScrollTimer.remainingPasses = 3;
+          tailScrollTimer.restart();
+        }
+
+        function beginUserScroll() {
+          userInteracting = true;
+          tailScrollTimer.stop();
+        }
+
+        function finishUserScroll() {
+          if (moving || flicking) return;
+          userInteracting = false;
+          followTail = isAtTail();
+          scheduleTailScroll();
+        }
+
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: nav.bottom
+        anchors.topMargin: 20
+        anchors.bottom: composer.top
+        anchors.bottomMargin: 16
+        anchors.leftMargin: 24
+        anchors.rightMargin: 18
+        model: historyModel
+        clip: true
+        spacing: 8
+        interactive: contentHeight > height
+        Component.onCompleted: {
+          root.syncHistoryModel(true);
+          _lastContentHeight = contentHeight;
+          scheduleTailScroll(true);
+        }
+
+        onMovementStarted: beginUserScroll()
+        onMovementEnded: finishUserScroll()
+        onFlickStarted: beginUserScroll()
+        onFlickEnded: finishUserScroll()
+        onContentHeightChanged: {
+          const wasAtTail = followTail || isAtTail(_lastContentHeight);
+          _lastContentHeight = contentHeight;
+          if (wasAtTail) scheduleTailScroll(true);
+        }
+        onHeightChanged: scheduleTailScroll()
+        onCountChanged: scheduleTailScroll()
+
+        Timer {
+          id: tailScrollTimer
+          property int remainingPasses: 0
+
+          interval: 16
+          repeat: false
+          onTriggered: {
+            if (!root.inChat || !history.followTail || history.userInteracting) return;
+
+            history.positionViewAtEnd();
+            if (remainingPasses > 0) {
+              remainingPasses--;
+              restart();
+            }
+          }
+        }
+
+        Connections {
+          target: root.selectedSession
+          ignoreUnknownSignals: true
+
+          function onMessagesChanged() {
+            const wasAtTail = history.followTail || history.isAtTail(history._lastContentHeight);
+            root.syncHistoryModel();
+            if (wasAtTail) history.scheduleTailScroll(true);
+          }
+        }
+
+        delegate: KinMessageRow {
+          required property var value
+
+          width: history.width
+          message: value
+          onConfirmRequested: confirmed => root.selectedSession?.confirmRespond?.(value.id, confirmed)
+          onPromptSubmit: response => root.selectedSession?.promptRespond?.(value.id, response)
+          onPromptCancel: root.selectedSession?.promptCancel?.(value.id)
+        }
+      }
+
+      Item {
+        id: composer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 0
+        height: 60
+        property bool attachmentMenuOpen: false
+
+        NFilePicker {
+          id: attachmentPicker
+          title: "Attach files"
+          selectionMode: "files"
+          allowMultiSelection: true
+          nameFilters: ["*"]
+          onAccepted: paths => root.attachFiles(paths)
+          onCancelled: composer.attachmentMenuOpen = false
+        }
+
+        NIconButton {
+          id: addButton
+          anchors.left: parent.left
+          anchors.leftMargin: 16
+          anchors.top: parent.top
+          anchors.topMargin: 8
+          icon: "plus"
+          tooltipText: "Add"
+          baseSize: 24
+          colorBg: "transparent"
+          colorBgHover: root.ice
+          colorFg: root.muted
+          colorFgHover: root.dusk
+          colorBorder: "transparent"
+          onClicked: composer.attachmentMenuOpen = !composer.attachmentMenuOpen
+        }
+
+        Rectangle {
+          id: attachmentMenuShadow
+          visible: composer.attachmentMenuOpen
+          x: attachmentMenu.x
+          y: attachmentMenu.y
+          width: attachmentMenu.width
+          height: attachmentMenu.height
+          radius: attachmentMenu.radius
+          color: root.navColor
+          opacity: 0.01
+          z: 19
+          layer.enabled: visible
+          layer.effect: MultiEffect {
+            shadowEnabled: true
+            shadowColor: Qt.rgba(0, 0, 0, 0.14)
+            shadowBlur: 0.8
+            shadowVerticalOffset: 4
+            shadowHorizontalOffset: 0
+          }
+        }
+
+        Rectangle {
+          id: attachmentMenu
+          visible: composer.attachmentMenuOpen
+          anchors.left: addButton.left
+          anchors.bottom: addButton.top
+          anchors.bottomMargin: 8
+          width: 156
+          height: attachmentMenuColumn.implicitHeight + 12
+          radius: 14
+          color: root.navColor
+          border.color: root.dust
+          border.width: 1
+          z: 20
+
+          Column {
+            id: attachmentMenuColumn
+            anchors.fill: parent
+            anchors.margins: 6
+            spacing: 2
+
+            AttachmentMenuAction {
+              width: parent.width
+              icon: "paperclip"
+              label: "Files"
+              onTriggered: {
+                composer.attachmentMenuOpen = false;
+                attachmentPicker.openFilePicker();
+              }
+            }
+          }
+        }
+
+        Rectangle {
+          id: inputBox
+          anchors.left: parent.left
+          anchors.leftMargin: 48
+          anchors.right: parent.right
+          anchors.rightMargin: 16
+          anchors.top: parent.top
+          anchors.topMargin: 0
+          height: 40
+          radius: 16
+          color: "white"
+          border.color: root.dust
+          border.width: 1
+
+          TextArea {
+            id: inputArea
+            objectName: "composeInput"
+            anchors.left: parent.left
+            anchors.right: sendButton.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 16
+            anchors.rightMargin: 0
+            anchors.topMargin: 0
+            anchors.bottomMargin: 0
+            background: null
+            placeholderText: "Message space"
+            placeholderTextColor: root.cloud
+            color: root.ink
+            wrapMode: TextEdit.NoWrap
+            selectByMouse: true
+            verticalAlignment: TextEdit.AlignVCenter
+            font.family: Settings.data.ui.fontDefault
+            font.pixelSize: 14
+            leftPadding: 0
+            rightPadding: 0
+            topPadding: 0
+            bottomPadding: 0
+
+            Keys.onPressed: event => {
+              if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return;
+              if ((event.modifiers & Qt.ShiftModifier) !== 0) {
+                event.accepted = false;
+                return;
+              }
+              event.accepted = true;
+              root.submitMessage();
+            }
+          }
+
+          NIconButton {
+            id: sendButton
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            icon: inputArea.text.trim().length > 0 ? "send" : "microphone"
+            tooltipText: inputArea.text.trim().length > 0 ? "Send" : "Voice"
+            baseSize: 24
+            colorBg: "transparent"
+            colorBgHover: root.ice
+            colorFg: inputArea.text.trim().length > 0 ? root.dusk : root.muted
+            colorFgHover: root.dusk
+            colorBorder: "transparent"
+            onClicked: root.submitMessage()
+          }
+        }
+
+        Text {
+          anchors.left: inputBox.left
+          anchors.top: inputBox.bottom
+          anchors.topMargin: 4
+          visible: root.selectedSession?.typing || false
+          text: (root.selectedConversation?.chatTitle || "Pi") + " is typing"
+          color: root.muted
+          font.family: Settings.data.ui.fontDefault
+          font.pixelSize: 10
+          font.weight: 400
+        }
+      }
+    }
+
     Rectangle {
       id: signalConfirmBanner
       objectName: "signalConfirmBanner"
       readonly property var items: (root.backend?.signalPendingSends) || []
-      Layout.fillWidth: true
+
       visible: items.length > 0
-      implicitHeight: visible ? signalConfirmCol.implicitHeight + Style.marginS * 2 : 0
-      color: Color.mSurfaceVariant
-      radius: Style.radiusS
-      border.color: Color.mPrimary
+      z: 40
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.margins: 12
+      height: visible ? Math.min(signalConfirmCol.implicitHeight + 20, parent.height - 24) : 0
+      radius: 14
+      color: Qt.rgba(1, 1, 1, 0.96)
+      border.color: root.dust
       border.width: 1
 
-      ColumnLayout {
+      Column {
         id: signalConfirmCol
-        anchors.fill: parent
-        anchors.margins: Style.marginS
-        spacing: Style.marginS
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 10
+        spacing: 10
+
         Repeater {
           model: signalConfirmBanner.items
-          delegate: RowLayout {
+
+          delegate: Column {
             id: signalDelegate
             required property var modelData
-            // Always surface the raw recipient beside the (attacker-
-            // controllable) display name so the human can catch a
-            // spoofed name aimed at an unrelated number/UUID before
-            // tapping Send. Mirrors the `signal` CLI's pending card.
+
+            width: signalConfirmCol.width
+            spacing: 8
+
             readonly property string recipientLabel: {
               const dn = signalDelegate.modelData.display_name || "";
               const rc = signalDelegate.modelData.recipient || "?";
               return (dn === "" || dn === rc) ? rc : (dn + " <" + rc + ">");
             }
-            readonly property real maxBodyHeight: Style.baseWidgetSize * 5
-            Layout.fillWidth: true
-            spacing: Style.marginS
-            ColumnLayout {
-              Layout.fillWidth: true
-              spacing: 0
-              NText {
-                Layout.fillWidth: true
-                text: root.tr("panel.signal-pending-prefix", { to: signalDelegate.recipientLabel })
-                pointSize: Style.fontSizeS
-                font.bold: true
-                wrapMode: Text.Wrap
+
+            Text {
+              width: parent.width
+              text: "Pending Signal send to " + signalDelegate.recipientLabel + ":"
+              color: root.dusk
+              wrapMode: Text.Wrap
+              font.family: Settings.data.ui.fontDefault
+              font.pixelSize: 13
+              font.weight: 700
+            }
+
+            Text {
+              width: parent.width
+              text: signalDelegate.modelData.body || ""
+              color: root.ink
+              wrapMode: Text.Wrap
+              maximumLineCount: 8
+              elide: Text.ElideRight
+              font.family: Settings.data.ui.fontDefault
+              font.pixelSize: 12
+            }
+
+            Row {
+              anchors.right: parent.right
+              spacing: 8
+
+              NButton {
+                text: "Cancel"
+                bgColor: root.sleet
+                fgColor: root.dusk
+                onClicked: root.backend?.signalDeny?.(signalDelegate.modelData.token)
               }
-              ScrollView {
-                id: signalBodyScroll
-                Layout.fillWidth: true
-                // Untruncated: show the whole body, but cap the card and
-                // scroll past the cap so a long message can't blow up the
-                // panel. The human can scroll to read all of what they
-                // are about to approve.
-                Layout.preferredHeight: Math.min(signalBody.implicitHeight, signalDelegate.maxBodyHeight)
-                clip: true
-                contentWidth: availableWidth
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                NText {
-                  id: signalBody
-                  width: signalBodyScroll.availableWidth
-                  text: signalDelegate.modelData.body || ""
-                  pointSize: Style.fontSizeXS
-                  wrapMode: Text.Wrap
-                }
-              }
-            }
-            NButton {
-              text: root.tr("panel.signal-approve")
-              onClicked: root.backend?.signalApprove(signalDelegate.modelData.token)
-            }
-            NButton {
-              text: root.tr("panel.signal-deny")
-              onClicked: root.backend?.signalDeny(signalDelegate.modelData.token)
-            }
-          }
-        }
-      }
-    }
 
-    // ── History ───────────────────────────────────────────────────────
-    // Wrapped so the "new messages" pill can float over the list
-    // without joining the ColumnLayout flow.
-    Item {
-      Layout.fillWidth: true
-      Layout.fillHeight: true
-    NListView {
-      id: history
-      objectName: "chatHistory"
-      anchors.fill: parent
-      // BottomToTop + reversed model: index 0 = newest = the visual
-      // bottom, which Qt anchors to the bottom edge. In this layout
-      // originY is large-negative and contentY is never ≈0; "at the
-      // bottom" is Qt's atYEnd, and scrolling up drives contentY toward
-      // originY.
-      verticalLayoutDirection: ListView.BottomToTop
-      model: MsgFilter.visible(root.chat?.messages ?? [], root.showThinking).slice().reverse()
-      clip: true
-      // atYEnd is the only honest "pinned to the newest message" signal
-      // here — a `contentY < N` test reads true everywhere. Drives the
-      // unread pill below.
-      readonly property bool atBottom: atYEnd
-      property int unseen: 0
-      onAtBottomChanged: if (atBottom) unseen = 0
-      spacing: Style.marginM
-      // NListView's custom WheelHandler clamps contentY assuming
-      // originY==0, which breaks once our reassigned-array model shifts
-      // originY. 1.0 disables it and falls back to Qt's own scrolling.
-      wheelScrollMultiplier: 1.0
-      // The gradient fade looks wrong over chat bubbles — it's meant for
-      // flat lists. Bubbles already provide their own visual boundary.
-      showGradientMasks: false
-
-      // ── keep scrollback while the agent streams (issue #28) ──
-      // Each streaming token reassigns `messages`, regrowing the newest
-      // bubble; the model-driven relayout then re-anchors to index 0 and
-      // snaps the view to the bottom — yanking a reader who scrolled up,
-      // on every token. Hold their position by pinning the gap from the
-      // top of content (contentY − originY) across every height change,
-      // and only let Qt's snap stand when they were already at the bottom.
-      // `_follow` records that intent on user-driven movement, captured
-      // before the snap flips atYEnd back to true.
-      property bool _follow: true
-      property real _topGap: 0
-      function _captureFollow() {
-        _follow = atYEnd;
-        if (!_follow) _topGap = contentY - originY;
-      }
-      onMovementEnded: _captureFollow()
-      onContentYChanged: if (moving) _captureFollow()
-      // The relayout that snaps to the bottom runs after this notifier,
-      // so re-pin once it has settled (Qt.callLater coalesces the burst
-      // of per-token height changes into a single correction). Never
-      // fight an active gesture — let _captureFollow track it instead.
-      onContentHeightChanged: if (!_follow && !moving) Qt.callLater(_restoreScroll)
-      function _restoreScroll() {
-        if (_follow || moving) return;
-        const y = originY + _topGap;
-        if (Math.abs(contentY - y) > 0.5) contentY = y;
-      }
-
-      // ListView injects modelData into the delegate root; Bubble
-      // declares that as required and aliases it to msg internally.
-      delegate: Bubble {
-        width: history.availableWidth
-        searchQuery: searchBar.visible ? searchBar.query : ""
-        searchCurrent: searchBar.current === modelData.id
-        quotedText: root.findMsg(modelData.replyTo)?.text ?? ""
-        ago: root.ago
-        tr: root.tr
-
-        onReplyRequested: {
-          root.chat.replyTarget = { id: modelData.id, text: modelData.text };
-          input.forceActiveFocus();
-        }
-        onJumpToQuote: {
-          const i = history.model.findIndex(m => m.id === modelData.replyTo);
-          if (i >= 0) { history.positionViewAtIndex(i, ListView.Center); history._captureFollow(); }
-        }
-        onRetryRequested:  root.chat.retry(modelData.id)
-        onCancelRequested: root.chat.cancel(modelData.id)
-        onConfirmRequested: confirmed => root.chat.confirmRespond(modelData.id, confirmed)
-        onPromptSubmit: value => root.chat.promptRespond(modelData.id, value)
-        onPromptCancel: root.chat.promptCancel(modelData.id)
-      }
-
-      // A streaming token reassigns the model every frame but never
-      // changes the count, so the per-append work below is skipped for it.
-      // Switching sessions (chat identity changes) or first populating one
-      // snaps to the newest message and re-engages follow. Within a chat,
-      // own sends snap to the new bubble — not seeing your own message is
-      // worse than losing scrollback — while a peer message sticks to the
-      // bottom only if the reader was already there, otherwise it feeds the
-      // unread pill with their place held by _captureFollow /
-      // onContentHeightChanged.
-      property int _lastCount: 0
-      property var _lastChat: undefined
-      onModelChanged: {
-        if (root.chat !== _lastChat) {
-          _lastChat = root.chat;
-          _lastCount = count;
-          _follow = true;
-          if (count > 0) positionViewAtBeginning();
-          return;
-        }
-        if (count === 0) return;
-        if (count <= _lastCount) { _lastCount = count; return; }
-        _lastCount = count;
-        if (model[0]?.from === "me") { _follow = true; positionViewAtBeginning(); }
-        else if (!_follow) unseen++;
-      }
-    }
-
-    // Floating "N new ↓" pill. Appears only when scrolled up and
-    // messages arrived; tapping it jumps to the end and clears itself
-    // via the atBottom watcher.
-    Rectangle {
-      visible: history.unseen > 0
-      anchors.bottom: parent.bottom
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.bottomMargin: Style.marginM
-      radius: height / 2
-      color: Color.mPrimary
-      implicitWidth: pillRow.implicitWidth + Style.marginL * 2
-      implicitHeight: pillRow.implicitHeight + Style.marginS * 2
-      RowLayout {
-        id: pillRow
-        anchors.centerIn: parent
-        spacing: Style.marginXS
-        NText {
-          text: root.tr("panel.new-messages", { count: history.unseen })
-          color: Color.mOnPrimary
-          pointSize: Style.fontSizeS
-          font.bold: true
-        }
-        NIcon { icon: "chevron-down"; color: Color.mOnPrimary }
-      }
-      TapHandler { onTapped: { history.positionViewAtBeginning(); history._follow = true; } }
-      HoverHandler { cursorShape: Qt.PointingHandCursor }
-    }
-    } // history wrapper
-
-    // ── Compose ───────────────────────────────────────────────────────
-    // Reply context bar — shown when a bubble was tapped. Cleared on
-    // send (Main.qml) or by the × here.
-    Rectangle {
-      visible: (root.chat?.replyTarget ?? null) !== null
-      Layout.fillWidth: true
-      implicitHeight: replyRow.implicitHeight + Style.marginS * 2
-      radius: Style.radiusS
-      color: Color.mSurfaceVariant
-      RowLayout {
-        id: replyRow
-        anchors.fill: parent
-        anchors.margins: Style.marginS
-        spacing: Style.marginS
-        NIcon { icon: "corner-down-right"; color: Color.mPrimary }
-        NText {
-          Layout.fillWidth: true
-          text: Txt.snippet(root.chat?.replyTarget?.text ?? "", 80)
-          elide: Text.ElideRight
-          pointSize: Style.fontSizeS
-          color: Color.mOnSurfaceVariant
-        }
-        NIconButton {
-          icon: "x"
-          baseSize: Style.baseWidgetSize * 0.7
-          onClicked: root.chat.replyTarget = null
-        }
-      }
-    }
-
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: Style.marginS
-
-      // Custom multiline compose box — NTextInput wraps a single-line
-      // TextField, but AI chat messages routinely carry code snippets and
-      // pasted logs. TextArea gives us newlines; we intercept Return
-      // so plain Enter still sends (chat-app convention) while
-      // Shift+Enter inserts a break.
-      Control {
-        id: input
-        Layout.fillWidth: true
-        // Grow with content up to ~5 lines, then scroll. Min matches
-        // the icon buttons so the row stays aligned when empty.
-        // TextArea.implicitHeight already includes its own padding.
-        Layout.preferredHeight: Math.min(
-          Math.max(inputArea.implicitHeight,
-                   Style.baseWidgetSize * 1.1 * Style.uiScaleRatio),
-          Style.baseWidgetSize * 4 * Style.uiScaleRatio)
-
-        property alias text: inputArea.text
-        signal accepted
-
-        function forceActiveFocus() { inputArea.forceActiveFocus(); }
-
-        onAccepted: {
-          if (!root.chat) return;
-          // Send regardless of streaming state — the daemon's outbox
-          // queues it and retries when relays come back.
-          root.chat.send(inputArea.text);
-          inputArea.clear();
-        }
-
-        background: Rectangle {
-          radius: Style.iRadiusM
-          color: Color.mSurface
-          border.color: inputArea.activeFocus ? Color.mSecondary : Color.mOutline
-          border.width: Style.borderS
-          Behavior on border.color { ColorAnimation { duration: Style.animationFast } }
-        }
-
-        contentItem: ScrollView {
-          clip: true
-          ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-          TextArea {
-            id: inputArea
-            placeholderText: root.chat?.streaming ? root.tr("panel.compose-placeholder", { name: root.peerName }) : root.tr("panel.compose-waiting")
-            placeholderTextColor: Qt.alpha(Color.mOnSurfaceVariant, 0.6)
-            color: Color.mOnSurface
-            wrapMode: TextEdit.Wrap
-            selectByMouse: true
-            background: null
-            topPadding: Style.marginS
-            bottomPadding: Style.marginS
-            leftPadding: Style.marginM
-            rightPadding: Style.marginM
-            font.family: Settings.data.ui.fontDefault
-            font.pointSize: Style.fontSizeS * Style.uiScaleRatio
-
-            // Esc clears the reply target without reaching for the ×.
-            Keys.onEscapePressed: if (root.chat?.replyTarget) root.chat.replyTarget = null
-
-            // Ctrl+V: if the clipboard holds an image, dump it to
-            // $XDG_RUNTIME_DIR and hand the path to the daemon with
-            // unlink=true (same path as the screenshot keybind). Text
-            // falls through to TextArea's own paste. canPaste reflects
-            // text/plain availability, so it doubles as the "is this
-            // an image?" probe without a wl-paste roundtrip.
-            Keys.onPressed: e => {
-              if (e.matches(StandardKey.Paste) && !canPaste) {
-                e.accepted = true;
-                pasteImage.running = true;
-                return;
-              }
-              handleReturn(e);
-            }
-
-            // Enter sends, Shift+Enter newlines. Split out so the
-            // paste interceptor above can share Keys.onPressed.
-            function handleReturn(event) {
-              if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return;
-              if ((event.modifiers & Qt.ShiftModifier)
-                  && !(event.modifiers & Qt.ControlModifier)) {
-                event.accepted = false;  // Shift+Enter → newline
-              } else {
-                event.accepted = true;
-                if (text.trim().length > 0) input.accepted();
+              NButton {
+                text: "Send"
+                onClicked: root.backend?.signalApprove?.(signalDelegate.modelData.token)
               }
             }
           }
         }
       }
-      // Voice-to-text. Mirrors the Mod+Space shortcut. Refocus the
-      // input area before spawning so voxtype's typed output lands in
-      // the compose box rather than whatever stole focus on click.
-      NIconButton {
-        id: voiceButton
-        icon: root.voiceRecording ? "microphone-mute" : "microphone"
-        tooltipText: root.voiceRecording
-          ? root.tr("panel.voice-stop-tooltip")
-          : root.tr("panel.voice-tooltip")
-        baseSize: Style.baseWidgetSize * 1.1 * Style.uiScaleRatio
-        Layout.alignment: Qt.AlignBottom
-        colorBg: root.voiceRecording ? Color.mError : Color.smartAlpha(Color.mSurfaceVariant)
-        colorFg: root.voiceRecording ? Color.mOnError : Color.mPrimary
-        colorBgHover: root.voiceRecording ? Color.mError : Color.mHover
-        colorFgHover: root.voiceRecording ? Color.mOnError : Color.mOnHover
-        onClicked: {
-          inputArea.forceActiveFocus();
-          voxtypeProcess.running = true;
-          root.voiceRecording = !root.voiceRecording;
-        }
-      }
-      NIconButton {
-        icon: "paperclip"
-        tooltipText: root.tr("panel.attach-image-tooltip")
-        // Fixed size + bottom-align — the input now grows with
-        // multiline content and we don't want 4×-tall buttons.
-        baseSize: Style.baseWidgetSize * 1.1 * Style.uiScaleRatio
-        Layout.alignment: Qt.AlignBottom
-        onClicked: filePicker.openFilePicker()
-      }
-      NIconButton {
-        icon: "send"
-        baseSize: Style.baseWidgetSize * 1.1 * Style.uiScaleRatio
-        Layout.alignment: Qt.AlignBottom
-        enabled: input.text.trim().length > 0
-        onClicked: input.accepted()
-      }
-    }
-
-    Process {
-      id: voxtypeProcess
-      command: ["voxtype", "record", "toggle"]
-    }
-
-    // Noctalia's in-panel Popup file picker — QtQuick.Dialogs.FileDialog
-    // spawns a regular toplevel that layer-shell either occludes or
-    // orphans. This one renders inside the panel overlay.
-    NFilePicker {
-      id: filePicker
-      title: root.tr("panel.attach-image-title")
-      selectionMode: "files"
-      nameFilters: ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp"]
-      initialPath: Quickshell.env("HOME") + "/Pictures"
-      onAccepted: paths => { if (paths.length > 0) root.chat?.sendFile(paths[0]); }
-    }
-
-    Process {
-      id: pasteImage
-      property string tmp: ""
-      command: ["sh", "-c",
-        `f="$XDG_RUNTIME_DIR/pi-chat-paste-$$"; ` +
-        `wl-paste --type image > "$f" && printf %s "$f"`]
-      stdout: StdioCollector { onStreamFinished: pasteImage.tmp = text }
-      onExited: code => { if (code === 0 && tmp) root.chat?.sendFile(tmp, true); tmp = ""; }
-    }
-
-    NText {
-      visible: (root.chat?.lastError ?? "") !== ""
-      text: root.chat?.lastError ?? ""
-      color: Color.mError
-      pointSize: Style.fontSizeS
-      Layout.fillWidth: true
-      wrapMode: Text.Wrap
     }
   }
 
-  // Drag-and-drop from file managers. Most offer text/uri-list; take
-  // the first local file and let the daemon reject non-images. Lives
-  // at the root scope so it covers the whole panel rather than only
-  // the ColumnLayout's footprint.
-  DropArea {
-    anchors.fill: parent
-    onDropped: d => {
-      if (!d.hasUrls) return;
-      const u = d.urls[0].toString();
-      if (u.startsWith("file://")) root.chat?.sendFile(decodeURIComponent(u.slice(7)));
-    }
-  }
-
-  // Focus the compose box when the panel surface gains keyboard focus.
-  // The shell requests Exclusive keyboard focus while visible, so the
-  // layer-shell `active` flag flips true as soon as the panel opens —
-  // no click needed. `active` is the moment Qt can actually take focus;
-  // doing it earlier (e.g. on Component.onCompleted) races the grab.
   Connections {
     target: root.Window.window
     ignoreUnknownSignals: true
     function onActiveChanged() {
-      if (root.Window.window?.active) inputArea.forceActiveFocus();
-    }
-  }
-
-  // Refresh the model list on every open so the dropdown reflects the
-  // current backend state, and snap the history to the newest bubble.
-  // The plugin Item is reinstantiated per open (SmartPanel's content
-  // Loader has `active: isPanelOpen`), so Component.onCompleted is the
-  // open hook.
-  Component.onCompleted: {
-    root.chat?.listModels();
-    if (history) { history.positionViewAtBeginning(); history._follow = true; }
-  }
-
-  // Ctrl+F from anywhere in the panel. Shortcut rather than Keys so it
-  // fires regardless of which TextArea currently has focus.
-  Shortcut {
-    sequences: [StandardKey.Find]
-    enabled: root.visible
-    onActivated: { searchBar.visible = true; searchField.forceActiveFocus(); }
-  }
-
-  // ── Options popup ("more" menu) ────────────────────────────────────
-  // The header's overflow menu: per-session actions (search, long-term
-  // memory toggle, wipe, restart) on top, then the persisted display
-  // toggles. Popup keeps close-on-outside-click for free.
-
-  // One clickable menu strip: leading icon, label, optional trailing
-  // check. `active` tints the icon (e.g. an enabled toggle); `showCheck`
-  // renders the ✓ when active. Emits activated() on tap — callers wire
-  // the behaviour, so this stays a dumb presentational row.
-  component OptionRow: Item {
-    id: optRow
-    property string iconName: ""
-    property string label: ""
-    property bool active: false
-    property bool showCheck: false
-    signal activated()
-
-    Layout.fillWidth: true
-    implicitHeight: Style.baseWidgetSize
-
-    Rectangle {
-      anchors.fill: parent
-      color: optRowHover.hovered ? Color.mHover : "transparent"
-      radius: Style.radiusS
-      Behavior on color {
-        ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
-      }
-    }
-
-    RowLayout {
-      anchors.fill: parent
-      anchors.leftMargin: Style.marginS
-      anchors.rightMargin: Style.marginS
-      spacing: Style.marginS
-
-      NIcon {
-        icon: optRow.iconName
-        pointSize: Style.fontSizeL
-        color: optRowHover.hovered
-          ? Color.mOnHover
-          : (optRow.active ? Color.mPrimary : Color.mOnSurfaceVariant)
-      }
-      NText {
-        Layout.fillWidth: true
-        text: optRow.label
-        pointSize: Style.fontSizeS
-        color: optRowHover.hovered ? Color.mOnHover : Color.mOnSurface
-        elide: Text.ElideRight
-      }
-      NText {
-        text: (optRow.showCheck && optRow.active) ? "✓" : ""
-        pointSize: Style.fontSizeS
-        color: optRowHover.hovered ? Color.mOnHover : Color.mPrimary
-      }
-    }
-
-    HoverHandler { id: optRowHover; cursorShape: Qt.PointingHandCursor }
-    TapHandler { onTapped: optRow.activated() }
-  }
-
-  Popup {
-    id: optionsPopup
-    objectName: "optionsPopup"
-    // Parent to the button so x/y live in its own coordinate space and
-    // track it directly — mapping into root's space misplaced the popup.
-    // Right edges align; the menu opens just below the button.
-    parent: optionsButton
-    x: optionsButton.width - implicitWidth
-    y: optionsButton.height + Style.marginXS
-    padding: Style.marginXS
-    implicitWidth: 320
-    closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-
-    background: Rectangle {
-      color: Color.mSurfaceVariant
-      radius: Style.iRadiusM
-      border.color: Color.mOutline
-      border.width: Style.borderS
-    }
-
-    contentItem: ColumnLayout {
-      spacing: 0
-
-      // Search: toggle the inline search bar and focus its field.
-      OptionRow {
-        iconName: "search"
-        label: root.tr("panel.search-tooltip")
-        onActivated: {
-          optionsPopup.close();
-          searchBar.visible = !searchBar.visible;
-          if (searchBar.visible) searchField.forceActiveFocus();
-        }
-      }
-      // Long-term-memory toggle. Backed by chat.memoryEnabled (the backend
-      // persists + writes the marker file pi reads), so it stays open to
-      // show the ✓ flip rather than closing like the action rows.
-      OptionRow {
-        readonly property bool memOn: root.chat?.memoryEnabled ?? true
-        iconName: memOn ? "brain" : "database-off"
-        label: root.tr("panel.options-memory")
-        active: memOn
-        showCheck: true
-        onActivated: {
-          const id = root.backend?.activeSessionId;
-          if (!id) return;
-          root.backend.setSessionMemoryEnabled(id, !memOn);
-        }
-      }
-      // Wipe all memory: destructive, so just reveal the confirm strip.
-      OptionRow {
-        iconName: "eraser"
-        label: root.tr("panel.memory-wipe-tooltip")
-        onActivated: {
-          optionsPopup.close();
-          wipeConfirmBar.visible = true;
-        }
-      }
-      // Restart: clear local bubbles and ask pi for a fresh session.
-      OptionRow {
-        iconName: "rotate"
-        label: root.tr("panel.reset-tooltip")
-        onActivated: {
-          optionsPopup.close();
-          if (root.chat) root.chat.restart();
-        }
-      }
-
-      NDivider {
-        Layout.fillWidth: true
-        Layout.topMargin: Style.marginXS
-        Layout.bottomMargin: Style.marginXS
-      }
-
-      // Persisted display toggles (UI-only Settings flags).
-      Repeater {
-        model: [
-          {
-            key: "showThinking",
-            iconOn: "eye",
-            iconOff: "eye-off",
-            labelOn: "panel.options-thinking-hide",
-            labelOff: "panel.options-thinking-show",
-          },
-          {
-            key: "showInferenceSpeed",
-            iconOn: "gauge",
-            iconOff: "gauge",
-            labelOn: "panel.options-tps-hide",
-            labelOff: "panel.options-tps-show",
-          },
-        ]
-        delegate: OptionRow {
-          id: toggleRow
-          required property var modelData
-          readonly property bool on: Settings.data[toggleRow.modelData.key] === true
-          iconName: on ? toggleRow.modelData.iconOn : toggleRow.modelData.iconOff
-          label: root.tr(on ? toggleRow.modelData.labelOn : toggleRow.modelData.labelOff)
-          active: on
-          showCheck: true
-          onActivated: {
-            Settings.data[toggleRow.modelData.key] = !on;
-            Settings.persist();
-          }
-        }
-      }
-    }
-  }
-
-  // ── New-session executor picker ────────────────────────────────────
-  // Multi-homing: when more than one executor is configured the + button
-  // opens this to pin a new session to a chosen executor (one executor =>
-  // create directly, see newSessionButton). Rows show the executor id, so
-  // no new translatable string is introduced (mirrors the tab's · label).
-  Popup {
-    id: executorPickerPopup
-    objectName: "executorPickerPopup"
-    x: newSessionButton ? newSessionButton.mapToItem(root, 0, 0).x : 0
-    y: newSessionButton ? newSessionButton.mapToItem(root, 0, 0).y + newSessionButton.height + Style.marginXS : 0
-    padding: Style.marginXS
-    implicitWidth: 200
-    closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-
-    background: Rectangle {
-      color: Color.mSurfaceVariant
-      radius: Style.iRadiusM
-      border.color: Color.mOutline
-      border.width: Style.borderS
-    }
-
-    contentItem: ColumnLayout {
-      spacing: 0
-
-      Repeater {
-        model: root.backend?.executors || []
-        delegate: Item {
-          id: execRow
-          required property var modelData
-          Layout.fillWidth: true
-          implicitHeight: Style.baseWidgetSize
-
-          Rectangle {
-            anchors.fill: parent
-            color: execTap.hovered ? Color.mHover : "transparent"
-            radius: Style.radiusS
-            Behavior on color {
-              ColorAnimation { duration: Style.animationFast; easing.type: Easing.InOutQuad }
-            }
-          }
-
-          RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: Style.marginS
-            anchors.rightMargin: Style.marginS
-            spacing: Style.marginS
-
-            NIcon {
-              icon: "plus"
-              pointSize: Style.fontSizeL
-              color: execTap.hovered ? Color.mOnHover : Color.mOnSurfaceVariant
-            }
-            NText {
-              Layout.fillWidth: true
-              text: execRow.modelData.id
-              pointSize: Style.fontSizeS
-              color: execTap.hovered ? Color.mOnHover : Color.mOnSurface
-              elide: Text.ElideRight
-            }
-          }
-
-          HoverHandler { id: execTap; cursorShape: Qt.PointingHandCursor }
-          TapHandler {
-            onTapped: {
-              root.backend?.newSession?.("", execRow.modelData.id);
-              executorPickerPopup.close();
-            }
-          }
-        }
-      }
+      if (root.Window.window?.active && root.inChat) inputArea.forceActiveFocus();
     }
   }
 }

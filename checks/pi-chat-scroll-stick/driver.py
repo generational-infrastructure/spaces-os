@@ -15,7 +15,7 @@ This guards both halves of the fix:
     (the gap from the top of content, contentY - originY, is invariant).
   * FOLLOW — pinned to the newest message: streaming must keep it pinned
     (`atYEnd` stays true), and a message arriving while scrolled up must
-    feed the unread pill (`unseen` increments) instead of snapping down.
+    be appended without snapping down.
 
 Headless quickshell, offscreen platform. No compositor, no pi, no LLM.
 """
@@ -210,20 +210,20 @@ def main():
             f"PASS: streaming holds the scrolled-up view (atYEnd=false, drift={drift:.1f}px)\n"
         )
 
-        # ── PILL: a new message while scrolled up counts, never snaps ───
-        before = int(float(call("unseen")))
+        # ── APPEND: a new message while scrolled up never snaps ─────────
+        before = int(float(call("count")))
         call("appendMsg")
         time.sleep(0.3)
         settle()
         if call("atYEnd") == "true":
             die("an appended message yanked the scrolled-up reader to the bottom")
-        after = int(float(call("unseen")))
-        if after <= before:
+        after = int(float(call("count")))
+        if after != before + 1:
             die(
-                f"unread pill did not count the appended message (unseen {before} -> {after})"
+                f"appended message did not reach history model (count {before} -> {after})"
             )
         sys.stderr.write(
-            f"PASS: a message arriving while scrolled up counts ({before} -> {after}) and holds position\n"
+            f"PASS: a message arriving while scrolled up appends ({before} -> {after}) and holds position\n"
         )
     finally:
         qs_proc.terminate()

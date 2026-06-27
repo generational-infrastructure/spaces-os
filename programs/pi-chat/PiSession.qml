@@ -28,7 +28,6 @@
 // the index. Conversation history lives daemon-side in session.jsonl,
 // replayed via get_messages on every (re)attach.
 import QtQuick
-import Quickshell
 import Quickshell.Io
 import qs.Commons
 
