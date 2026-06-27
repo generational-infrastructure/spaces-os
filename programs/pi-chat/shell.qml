@@ -18,7 +18,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import qs.Commons
 
 
 PanelWindow {
@@ -32,12 +31,9 @@ PanelWindow {
     right: true
     bottom: true
   }
-  // Width follows the screen: the golden-ratio minor portion (1/phi^2 =
-  // 0.382), so the app left visible behind the panel gets the major 61.8%.
-  // screen.width is logical (post-HiDPI) pixels, so the proportion already
-  // adapts across resolutions; the clamp keeps it usable on small laptops
-  // and from sprawling on ultrawides.
-  implicitWidth: Math.round(Math.min(900, Math.max(440, screen.width * 0.382)))
+  // Kin's chat surface is a floating 408px card with a small transparent
+  // layer-shell gutter around it, not a full-height sidebar.
+  implicitWidth: Math.round(Math.min(448, Math.max(360, screen.width - 24)))
   exclusiveZone: 0
   // Layer-shell layer choice: Top is enough for "above normal
   // windows, below screen-edge OSDs/lockscreens". Overlay would
@@ -50,7 +46,7 @@ PanelWindow {
   // flip flips `active`, which fires the focus handler in Panel.qml.
   WlrLayershell.keyboardFocus: shell.visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
-  color: Color.mSurface
+  color: "transparent"
   visible: false
 
   // Tell the backend when we're showing so it can spawn pi on first
