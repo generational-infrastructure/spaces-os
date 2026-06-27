@@ -1,0 +1,76 @@
+/* ============================================================
+   Kin / Spaces OS — Color system (native design-system tokens)
+   Vendored from the Spaces OS design system. The UI kits author
+   against these names directly (--clan-* / --ink-* / --kin-* and
+   the ergonomic --surface-* / --text-* aliases).
+   ============================================================ */
+
+:root {
+  /* ---- Clan primary (teal-slate) — the product UI anchor ---- */
+  --clan-primary-50:  rgb(244, 249, 249);
+  --clan-primary-600: rgb(75, 103, 103);
+  --clan-primary-700: rgb(52, 82, 83);
+  --clan-primary-800: rgb(43, 70, 71);
+  --clan-primary-900: rgb(32, 54, 55);
+  --clan-primary-950: rgb(22, 35, 36);
+
+  /* ---- Clan secondary (cool sage-grey) — surfaces, borders, text ---- */
+  --clan-secondary-50:  rgb(247, 249, 250);
+  --clan-secondary-100: rgb(231, 242, 244);
+  --clan-secondary-200: rgb(216, 232, 235);
+  --clan-secondary-300: rgb(175, 198, 202);
+  --clan-secondary-400: rgb(144, 178, 183);
+  --clan-secondary-500: rgb(123, 155, 159);
+  --clan-secondary-600: rgb(79, 116, 122);
+  --clan-secondary-700: rgb(65, 94, 99);
+  --clan-secondary-800: rgb(68, 96, 101);
+  --clan-secondary-900: rgb(44, 67, 71);
+  --clan-secondary-950: rgb(13, 20, 22);
+
+  /* ---- Semantic accents ---- */
+  --clan-info-500:    rgb(6, 170, 241);   /* link / focus blue */
+  --clan-error-500:   rgb(215, 93, 159);  /* destructive magenta */
+  --clan-error-600:   rgb(196, 62, 129);
+  --clan-error-700:   rgb(168, 46, 103);
+  --clan-success-500: rgb(23, 178, 57);   /* toggle / online green */
+  --clan-success-600: rgb(0, 150, 46);
+
+  /* ---- True neutrals (UI chrome paints near-black on white) ---- */
+  --ink-900: rgb(23, 23, 23);   /* primary text / black pill buttons */
+  --ink-700: rgb(50, 50, 50);
+  --ink-500: rgb(107, 107, 107);
+  --ink-400: rgb(158, 163, 158);
+  --ink-300: rgb(217, 217, 217);
+  --ink-200: rgb(235, 235, 235);
+  --ink-100: rgb(243, 243, 243);
+  --ink-50:  rgb(250, 250, 250);
+  --off-white: rgb(255, 255, 255);
+  --off-black: rgb(0, 0, 0);
+
+  /* ---- Brand (the "Kin" world) ---- */
+  --kin-sage:      #8a9b6f;   /* generational-green headline ink */
+  --kin-sage-soft: #a6b58e;
+  --kin-sky:       #bae6ff;   /* signature light blue (folders, fills) */
+  --kin-cream:     #f8f8f6;   /* warm off-white page */
+
+  /* Arlo (the AI agent) iridescent gradient */
+  --arlo-from: rgb(249, 50, 141);  /* pink  */
+  --arlo-to:   rgb(85, 35, 235);   /* indigo */
+  --grad-arlo: linear-gradient(143deg, var(--arlo-from) 14%, var(--arlo-to) 103%);
+
+  /* Warm CTA (orange → pink) */
+  --grad-warm: linear-gradient(105deg, #ff9d2e 0%, #f9328d 100%);
+
+  /* ---- Ergonomic semantic aliases (light surface defaults) ---- */
+  --surface-page:   var(--off-white);
+  --surface-sunken: var(--ink-100);
+  --surface-card:   var(--off-white);
+  --surface-inset:  var(--ink-50);
+  --text-primary:   var(--ink-900);
+  --text-secondary: var(--ink-500);
+  --text-tertiary:  var(--ink-400);
+  --text-on-dark:   var(--off-white);
+  --border-subtle:  var(--ink-200);
+  --border-default: var(--ink-300);
+  --focus-ring:     var(--clan-info-500);
+}

@@ -1,0 +1,12 @@
+module Components
+
+KinIcon 1.0 KinIcon.qml
+KinButton 1.0 KinButton.qml
+KinIconButton 1.0 KinIconButton.qml
+KinInput 1.0 KinInput.qml
+KinSegmentedControl 1.0 KinSegmentedControl.qml
+KinBadge 1.0 KinBadge.qml
+KinAvatar 1.0 KinAvatar.qml
+ArloOrb 1.0 ArloOrb.qml
+KinSidebarItem 1.0 KinSidebarItem.qml
+KinFileTile 1.0 KinFileTile.qml

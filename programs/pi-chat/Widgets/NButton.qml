@@ -25,7 +25,7 @@ Item {
   Rectangle {
     anchors.fill: parent
     color: hover.hovered && root.enabled ? Qt.lighter(root.bgColor, 1.1) : root.bgColor
-    radius: Style.iRadiusM
+    radius: Style.radiusPill
     border.color: Color.mOutline
     border.width: Style.borderS
     opacity: root.enabled ? 1.0 : 0.6

@@ -1,7 +1,12 @@
 # Spaces module bundle: every NixOS module Spaces ships, plus a
 # greetd auto-login into niri.
 { inputs, ... }:
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 {
   imports = [
     # AI chat Quickshell panel + loopback pi-sessiond executor
@@ -18,6 +23,17 @@
     inputs.self.nixosModules.vm-debug
     # nix daemon settings (flakes, experimental features)
     inputs.self.nixosModules.nix
+  ];
+
+  # Spaces OS design-system faces. Inter is the OS interface family (the
+  # design system's "Inter Tight" is a tighter cut of the same; nixpkgs has
+  # no standalone Inter Tight, and Inter is its documented fallback). DM Mono
+  # carries metadata / timestamps / shell commands. Installing them system-
+  # wide so the noctalia bar and the pi-chat panel render their real faces
+  # instead of a generic sans fallback.
+  fonts.packages = [
+    pkgs.inter
+    pkgs.dm-mono
   ];
 
   services.pi-chat.enable = lib.mkDefault true;

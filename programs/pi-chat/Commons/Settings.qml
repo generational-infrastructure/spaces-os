@@ -41,8 +41,12 @@ QtObject {
     + "/pi-chat"
 
   component UiPrefs : JsonObject {
+    // Spaces OS design-system faces: Inter for the UI (the system's
+    // "Inter Tight" is a tighter cut of the same; Inter is its documented
+    // fallback and what nixosModules.spaces installs), DM Mono for
+    // metadata / shell commands. Installed via fonts.packages in spaces.nix.
     property string fontDefault: "Inter"
-    property string fontFixed: "JetBrains Mono"
+    property string fontFixed: "DM Mono"
     property real fontDefaultScale: 1.0
   }
 
