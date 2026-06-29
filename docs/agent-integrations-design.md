@@ -22,7 +22,7 @@ through *integrations*, under these constraints:
    only provisioning surface.
 10. **No root, no rebuild to *use*.** A user builds, enables, launches,
     and configures integrations entirely from their own session
-    (home-manager-style) — no `nixos-rebuild switch`, no per-integration
+    (via a user-level materialiser, home-manager or otherwise) — no `nixos-rebuild switch`, no per-integration
     root action.
 11. **Agent-proposed, user-gated enablement.** The agent may *propose*
     enabling an integration; it can never enable one itself. The user
@@ -96,9 +96,11 @@ needed) into the unit's private credentials mount only. User-scope
 binding makes cross-user isolation intrinsic, so no central root broker
 is required.
 
-Enabling is **rootless and rebuild-free** (req 10): a home-manager module
-writes the `--user` units and their landlockconfig policies, the user
-provisions secrets into their own credstore, and `systemctl --user enable
+Enabling is **rootless and rebuild-free** (req 10): a trusted user-level
+materialiser — home-manager for first-party integrations, the broker (a
+runtime materialiser) for on-the-fly third-party ones — writes the
+`--user` units and their landlockconfig policies, the user provisions
+secrets into their own credstore, and `systemctl --user enable
 --now` starts them. There is **no system-level prerequisite** beyond a
 kernel with Landlock (ABI 6 — Linux 6.12+ — for full IPC scoping; older
 kernels keep the FS and ptrace walls and degrade only the
@@ -295,9 +297,10 @@ may be session- or user-scoped (§5.3).
 
 ### 5.1 Sandbox layer
 
-Manifest → **home-manager-generated `--user` systemd unit** (written to
-`~/.config/systemd/user/`, enabled rootless via `systemctl --user enable
---now` — req 10) whose `ExecStart` runs the integration through
+Manifest → a **user-level materialiser** writes a `--user` systemd unit
+(`~/.config/systemd/user/`, enabled rootless via `systemctl --user enable
+--now` — req 10; home-manager for first-party, the broker for on-the-fly
+third-party, §5.6) whose `ExecStart` runs the integration through
 `pi-landlock-exec` with a **landlockconfig policy lowered from the
 manifest** (§5.4, §7): a deny-by-default FS allowlist (the integration's
 `StateDirectory`, its credential mount, the per-pair shared dir, and
@@ -539,7 +542,8 @@ per-user codegen, no privileged "start units for users" hop:
   `StateDirectory`/`CacheDirectory` is integration-owned.
 - **Enabling needs neither root nor a rebuild (req 10).** The `--user`
   units, their landlockconfig policies, sockets, and the integration
-  packages are produced by a *home-manager* module into
+  packages are produced by a user-level materialiser (home-manager for
+  first-party, the broker for on-the-fly third-party — §5.6) into
   `~/.config/systemd/user/`; the user enables them with `systemctl --user
   enable --now` and provisions secrets into their own credstore. There is
   no system-level platform action: Landlock is on by default on the
@@ -552,14 +556,16 @@ only ever decrypt their own secrets, so no central root daemon is needed
 to partition secrets between users. GUI-only provisioning (req 9) is
 unchanged.
 
-> **Server-side / multi-tenant executors.** Where a single host runs
-> sessions for many principals under root supervision (the system
-> `pi-sessiond` executor, which already drops each session to the
-> `pi-session` uid), the `DynamicUser=` system-unit tier (§2) is the
-> right belt-and-suspenders: a distinct *real* uid per integration adds a
-> second DAC layer under the Landlock domain. That path costs root + a
-> rebuild to add an integration, so it is **not** the desktop default
-> (req 10) — it applies only where root is already in the trust path.
+> **Server-side (multi-user).** A multi-user server is not a multi-tenant
+> daemon — it runs **one `--user` `pi-sessiond` per remote user, each at
+> that user's own uid**: the desktop mechanism replicated per
+> linger-enabled account. Within a user the wall is the Landlock domain
+> (above); between users it is plain DAC (distinct real uids), so a user
+> adds integrations on the fly exactly as on the desktop, rootlessly. This
+> retires the shared-`pi-session`-uid root executor —
+> [pi-sessiond-per-user-refactor.md](./pi-sessiond-per-user-refactor.md).
+> The `DynamicUser=` system-unit tier (§2) stays an *untrusted-integration*
+> option (orthogonal to desktop/server), not the server model.
 
 ---
 
@@ -608,9 +614,11 @@ unchanged.
 - Output screening catches verbatim leaks, not encodings (base64 of a
   token). Defence in depth, not a guarantee — the real guarantee is the
   Landlock domain boundary.
-- Remote executors: one broker + gateway per executor matches the "one
-  user per Harness" model; secrets entered through the GUI per executor,
-  no machine-provisioning channel for integration secrets.
+- Remote executors: one `--user` `pi-sessiond` per remote user — each its
+  own broker + gateway at that user's uid (the per-user refactor,
+  [pi-sessiond-per-user-refactor.md](./pi-sessiond-per-user-refactor.md)),
+  secrets entered through the GUI per user, no machine-provisioning
+  channel for integration secrets.
 
 ---
 
@@ -634,7 +642,7 @@ the shipped sandboxed pi runtime + supervisor gateway
 
 ### 9.1 Components
 
-1. **home-manager module** `modules/home-manager/spaces-integrations.nix`
+1. **Materialiser (home-manager module for the demo)** `modules/home-manager/spaces-integrations.nix`
    (new): takes manifests as Nix attrsets and writes, per integration,
    into `~/.config/systemd/user/` a **`--user` service**
    `spaces-integration-<name>.service` whose `ExecStart` is

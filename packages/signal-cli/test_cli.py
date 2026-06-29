@@ -418,9 +418,7 @@ class TestSandboxHomeRemap(unittest.TestCase):
         for child in self.store.iterdir():
             os.chmod(child, 0o400)
         os.chmod(self.store, 0o500)
-        self.addCleanup(
-            lambda: [os.chmod(c, 0o600) for c in self.store.iterdir()]
-        )
+        self.addCleanup(lambda: [os.chmod(c, 0o600) for c in self.store.iterdir()])
         self.addCleanup(lambda: os.chmod(self.store, 0o700))
         os.environ["SPACES_SIGNAL_DB"] = str(self.real_db)
         rc, out, err = _run(["threads", "--json"])
