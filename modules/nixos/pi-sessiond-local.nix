@@ -1,19 +1,27 @@
-# pi-sessiond-local — the desktop's per-user loopback executor.
+# pi-sessiond-local — the per-user `--user` pi-sessiond executor.
 #
-# The same pi-sessiond binary as modules/nixos/pi-sessiond, but run as a
-# systemd *user* service (it lives in the user's manager and dies at logout,
-# like the per-session pi units the panel used to spawn). The daemon runs as
-# the local user, hardened with ProtectHome=tmpfs so the supervisor (and any
-# in-process extension) never sees $HOME; each per-session pi child is then
-# spawned through the
-# Landlock launcher (pi-landlock-exec), which applies a self-applied, deny-by-
-# default Landlock domain (FS allowlist + egress port allowlist + IPC scoping)
-# plus a seccomp denylist before exec'ing pi (docs/landlock-sandbox-design.md).
+# The single executor shape, run as a systemd *user* service in the user's own
+# manager at the user's own uid. Two deployments, one module:
+#   - desktop: loopback (host 127.0.0.1), a per-login random token the panel
+#     reads locally, dies at logout.
+#   - server:  a remote linger-enabled user binds publicly (host "0.0.0.0"/"::"
+#     + openFirewall) with an explicit provisioned token/tokenFile a remote
+#     client holds; linger keeps it up without a login.
 #
-# Auth: a oneshot sibling unit generates a per-login token at
+# The daemon runs as the user, hardened with ProtectHome=tmpfs so the supervisor
+# (and any in-process extension) never sees $HOME; each per-session pi child is
+# spawned through the Landlock launcher (pi-landlock-exec), which applies a
+# self-applied, deny-by-default Landlock domain (FS allowlist + egress port
+# allowlist + IPC scoping) plus a seccomp denylist before exec'ing pi
+# (docs/landlock-sandbox-design.md). Cross-user isolation on a server is plain
+# DAC: distinct real uids, 0700 state dirs, user-scoped credentials.
+#
+# Auth: with neither `token` nor `tokenFile` set (the desktop default) a oneshot
+# sibling unit generates a per-login token at
 # $XDG_RUNTIME_DIR/pi-sessiond-local/token (0600); the daemon reads it via
-# LoadCredential and the panel reads the same file directly — no secret ever
-# touches the store.
+# LoadCredential and the panel reads the same file directly — no secret touches
+# the store. A server sets `token` (dev/test; lands in the store) or `tokenFile`
+# (LoadCredential) to a provisioned secret instead.
 { inputs, ... }:
 {
   config,
@@ -72,12 +80,20 @@ let
     f="$XDG_RUNTIME_DIR/pi-sessiond-local/token"
     [ -s "$f" ] || ${pkgs.openssl}/bin/openssl rand -hex 32 > "$f"
   '';
+
+  # Fleet topology surfaced to PWA clients via GET /executors (see main.ts
+  # loadPeers). Materialized as a tracked store path so nix pins it to the unit.
+  peersFile = jsonFormat.generate "pi-sessiond-local-peers.json" cfg.peers;
+
+  # Desktop default: with no provisioned token, generate a per-login random one
+  # (the panel reads the same file). A server sets token/tokenFile instead.
+  useGeneratedToken = cfg.token == null && cfg.tokenFile == null;
 in
 {
   options.services.pi-sessiond-local = {
     enable = lib.mkEnableOption (
-      "pi-sessiond-local: a per-user loopback pi-sessiond user service — the "
-      + "desktop's default executor (replaces the panel's local pi spawn)"
+      "pi-sessiond-local: the per-user `--user` pi-sessiond executor — the "
+      + "desktop's loopback default and the server's per-user remote executor"
     );
 
     package = lib.mkOption {
@@ -91,6 +107,116 @@ in
       type = lib.types.port;
       default = 8768;
       description = "Loopback TCP port for the token-authenticated WebSocket listener.";
+    };
+
+    host = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1";
+      description = ''
+        Address the WebSocket listener binds. The default keeps a desktop
+        executor reachable only on `localhost`; a server user sets
+        `"0.0.0.0"`/`"::"` (with `openFirewall`) so remote clients attach.
+      '';
+    };
+
+    openFirewall = lib.mkEnableOption "opening `port` in the firewall (a server executor reachable by remote clients)";
+
+    token = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Pre-shared token checked on `hello`, passed inline via the unit env.
+        Convenient for tests/dev, but lands in the world-readable Nix store —
+        prefer `tokenFile` in production. With neither `token` nor `tokenFile`
+        set, a per-login random token is generated (the desktop default).
+      '';
+    };
+
+    tokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Path to a file holding the pre-shared token, loaded via systemd
+        `LoadCredential` (never copied into the store). The file must be
+        readable by this user's manager. Mutually exclusive with `token`.
+      '';
+    };
+
+    idleTimeoutMs = lib.mkOption {
+      type = lib.types.int;
+      default = 1800000;
+      description = ''
+        Dispose a live-idle session's pi rpc child after this many ms with no
+        attached clients. The committed session.jsonl persists, so the next
+        attach resurrects it. 0 disables idle-GC.
+      '';
+    };
+
+    maxLive = lib.mkOption {
+      type = lib.types.int;
+      default = 0;
+      description = ''
+        Ceiling on resident live pi rpc-child sessions; the least-recently-active
+        idle session is evicted past it (resurrected on next attach). 0 = unlimited.
+      '';
+    };
+
+    notifyCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.either lib.types.str lib.types.path);
+      default = null;
+      description = ''
+        Executable run when a side-channel request parks with zero clients
+        attached (design §6/§7), so the user is reached out-of-band. Receives
+        SPACES_NOTIFY_SESSION_ID / _SESSION_NAME / _METHOD / _TITLE / _EXECUTOR.
+        null disables it.
+      '';
+    };
+
+    serveWebUi = lib.mkEnableOption (
+      "serving the pi-web PWA client from this executor's WebSocket port "
+      + "(same origin as the protocol)"
+    );
+
+    webUiPackage = lib.mkOption {
+      type = lib.types.package;
+      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-web;
+      defaultText = lib.literalExpression "inputs.self.packages.\${system}.pi-web";
+      description = "The pi-web PWA assets served when `serveWebUi` is enabled.";
+    };
+
+    peers = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            id = lib.mkOption {
+              type = lib.types.str;
+              description = "Peer executor's stable id (matches its own `executorId`).";
+            };
+            host = lib.mkOption {
+              type = lib.types.str;
+              description = "Public hostname fronting the peer's WS (the PWA opens `wss://<host>/`).";
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = ''
+        Every executor in this clan instance, surfaced verbatim to PWA clients
+        via the unauthenticated `GET /executors` discovery endpoint. Include
+        this executor too. Empty = clan-of-one fleet.
+      '';
+    };
+
+    llmApiKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Path to a file holding the API key for `llmUrl` (this executor's
+        llama-swap), loaded via systemd `LoadCredential`. When set, the daemon
+        sends it as a Bearer token on discovery and every completion — required
+        when llama-swap is configured with `apiKeys`. null sends the historical
+        `"dummy"` key, which a default-allow llama-swap ignores.
+      '';
     };
 
     executorId = lib.mkOption {
@@ -220,6 +346,17 @@ in
       '';
     };
 
+    openrouter.apiKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Path to a file holding the OpenRouter API key, loaded via systemd
+        `LoadCredential`. null (the default) falls back to the pi-chat-staged
+        /run/spaces-secrets/openrouter-api-key (desktop). Set explicitly (e.g.
+        a clan var) for a server executor.
+      '';
+    };
+
     memory.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -232,10 +369,19 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !(cfg.token != null && cfg.tokenFile != null);
+        message = "services.pi-sessiond-local: set at most one of `token` or `tokenFile`.";
+      }
+    ];
+
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+
     # Per-login token, shared between the daemon (LoadCredential) and the
     # panel (reads the file directly). RuntimeDirectoryPreserve keeps the
     # token across unit restarts; logout still wipes it with %t.
-    systemd.user.services.pi-sessiond-local-token = {
+    systemd.user.services.pi-sessiond-local-token = lib.mkIf useGeneratedToken {
       description = "pi-sessiond-local token — per-login shared secret at %t/pi-sessiond-local/token";
       wantedBy = [ "default.target" ];
       serviceConfig = {
@@ -250,10 +396,10 @@ in
     systemd.user.services.pi-sessiond-local = {
       description = "pi-sessiond-local — per-user loopback pi executor (WebSocket transport + one Landlock-confined pi rpc child per session)";
       wantedBy = [ "default.target" ];
-      requires = [ "pi-sessiond-local-token.service" ];
-      after = [ "pi-sessiond-local-token.service" ];
+      requires = lib.optional useGeneratedToken "pi-sessiond-local-token.service";
+      after = lib.optional useGeneratedToken "pi-sessiond-local-token.service";
       environment = {
-        SPACES_SESSIOND_HOST = "127.0.0.1";
+        SPACES_SESSIOND_HOST = cfg.host;
         SPACES_SESSIOND_PORT = toString cfg.port;
         SPACES_SESSIOND_EXECUTOR_ID = cfg.executorId;
         SPACES_SESSIOND_DEFAULT_MODEL = cfg.defaultModel;
@@ -290,6 +436,14 @@ in
         # the real one is hidden, so point HOME at the state dir (specifiers
         # expand in Environment=).
         HOME = "%S/pi-sessiond-local";
+        SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
+        SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
+        SPACES_SESSIOND_NOTIFY_CMD = lib.optionalString (cfg.notifyCommand != null) (
+          toString cfg.notifyCommand
+        );
+        SPACES_SESSIOND_PWA_DIR = lib.optionalString cfg.serveWebUi (toString cfg.webUiPackage);
+        # Fleet topology: read by main.ts loadPeers, exposed via GET /executors.
+        SPACES_SESSIOND_PEERS_FILE = toString peersFile;
       }
       // lib.optionalAttrs cfg.memory.enable {
         # Memory extension (in-process): the LanceDB tree lives inside the
@@ -297,6 +451,9 @@ in
         # visible through ProtectHome without a bind.
         SEDIMENT_DB = "%h/${memoryDbRel}/data";
         HF_HOME = toString sedimentPkg.modelCache;
+      }
+      // lib.optionalAttrs (cfg.token != null) {
+        SPACES_SESSIOND_TOKEN = cfg.token;
       };
       serviceConfig = {
         ExecStart = lib.getExe' cfg.package "pi-sessiond";
@@ -312,13 +469,27 @@ in
         # Per-session jsonl + the daemon-owned session index live here
         # (→ ~/.local/state/pi-sessiond-local for a user unit).
         StateDirectory = "pi-sessiond-local";
-        LoadCredential = [
-          "token:%t/pi-sessiond-local/token"
-        ]
-        # The OpenRouter key staged by the pi-chat module's system service
-        # (root:users 0640) — readable through the user manager, lands in
-        # $CREDENTIALS_DIRECTORY/openrouter-api-key for loadOpenRouterKey().
-        ++ lib.optional cfg.openrouter.enable "openrouter-api-key:/run/spaces-secrets/openrouter-api-key";
+        # Token: desktop reads the per-login generated file; a server reads its
+        # provisioned tokenFile. An inline `token` skips LoadCredential (it
+        # rides the unit env instead).
+        LoadCredential =
+          lib.optional useGeneratedToken "token:%t/pi-sessiond-local/token"
+          ++ lib.optional (cfg.tokenFile != null) "token:${toString cfg.tokenFile}"
+          # OpenRouter key: an explicit apiKeyFile (e.g. a clan var) or the
+          # pi-chat-staged desktop path (root:users 0640, readable via the user
+          # manager). Lands in $CREDENTIALS_DIRECTORY/openrouter-api-key.
+          ++ lib.optional cfg.openrouter.enable (
+            "openrouter-api-key:"
+            + (
+              if cfg.openrouter.apiKeyFile != null then
+                toString cfg.openrouter.apiKeyFile
+              else
+                "/run/spaces-secrets/openrouter-api-key"
+            )
+          )
+          # llama-swap key (loadLlamaSwapKey): server executors authenticating
+          # to a key-gated llama-swap. Desktop leaves it null.
+          ++ lib.optional (cfg.llmApiKeyFile != null) "llama-swap-api-key:${toString cfg.llmApiKeyFile}";
         # Sandbox the daemon process: ProtectHome=tmpfs empties /home, /root
         # AND /run/user so the supervisor (and any in-process extension, e.g.
         # memory) cannot see $HOME. Bind back (a) the state dir (it lives under
