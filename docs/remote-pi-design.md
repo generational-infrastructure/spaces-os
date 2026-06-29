@@ -264,7 +264,7 @@ The hub emits to an abstract **transport adapter**:
   bubbles, inline confirms, model switching, tps.
 
 The notifier — for a request that parks with zero clients attached — is an
-operator-supplied hook (`services.pi-sessiond.notifyCommand`), run with the
+operator-supplied hook (`services.pi-sessiond-local.notifyCommand`), run with the
 parked request's `SPACES_NOTIFY_*` identity to push via ntfy / a webhook / etc.
 There is no built-in Signal/Matrix/ntfy chat adapter: the only clients are the
 quickshell panel and the PWA, both on this native WebSocket transport.
@@ -300,7 +300,7 @@ quickshell panel and the PWA, both on this native WebSocket transport.
 
 ---
 
-## 9. Multi-user (deferred): more executors, not a multi-tenant daemon
+## 9. Multi-user (server: implemented): more executors, not a multi-tenant daemon
 
 Per the architecture's own decision — *"one user per Harness; if users want to
 share LLMs, each brings their own Pi"* — multi-user is **not** a multi-tenant
@@ -315,8 +315,10 @@ share LLMs, each brings their own Pi"* — multi-user is **not** a multi-tenant
   *its* user. An optional front router could later add a single endpoint +
   SSO, but it isn't required — clients can address per-user executors directly.
 
-Do **not** build this now; it's recorded so nothing in the single-user design
-blocks it (and nothing does — the daemon is already single-user-scoped).
+This is **implemented on the server** (docs/pi-sessiond-per-user-refactor.md):
+the root multiplexer is gone and a server runs one `--user` `pi-sessiond` per
+remote linger-enabled user — the same module the desktop runs on loopback. The
+only deferred piece is an optional single front-router endpoint + SSO across them.
 
 ---
 

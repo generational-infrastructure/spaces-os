@@ -356,17 +356,13 @@ scheme.
   per-session policy file, and invokes `systemd-run … pi-landlock-exec --json
   <policy> -- pi …`. The session's private agent dir (`HOME`) and `TMPDIR` nest
   under the session-dir grant; the rpc pipe and `cwd` need no grant of their own.
-- **`modules/nixos/pi-sessiond-local.nix`** — the desktop user service. Skill
+- **`modules/nixos/pi-sessiond-local/`** — the single `--user` executor (desktop loopback + each server user). Skill
   paths arrive through `allowedPaths` and fold into each session's Landlock FS
   allowlist by mode; `pi-landlock-exec`'s absolute path is handed over via
   `SPACES_SESSIOND_LANDLOCK_EXEC`. The supervisor daemon is hardened with
   `ProtectHome=tmpfs` (so it — and any in-process extension — never sees `$HOME`)
   and binds back its state dir plus the user-manager IPC endpoints (`%t/systemd`,
   `%t/bus`) it needs to spawn each session via `systemd-run --user`.
-- **`modules/nixos/pi-sessiond/default.nix`** — the system/remote service. The
-  root supervisor spawns each session through the same launcher with
-  `systemd-run --uid=pi-session`, chowns the session dirs to that uid, and sets
-  `StateDirectoryMode=0711` so the uid can traverse to its chowned leaf (§14).
 - **`packages/pi-landlock-exec/`** — the landlockconfig sandboxer, built in the
   flake against a pinned `landlockconfig` revision.
 
@@ -543,31 +539,32 @@ allowlist tuning.
 
 ## 14. Beyond the POC
 
-Both executors are now Landlock-only — no `landlock.enable` toggle, no
+The single `--user` executor is Landlock-only — no `landlock.enable` toggle, no
 managed-userns path anywhere. The `managed` builder, the `trusted`/`binds`
 config, the `ProtectHome`/`TemporaryFileSystem` block, and `nsresourced.nix`
 (with its BTF systemd-package override) are all **deleted**. What was done:
 
 1. **Done — local executor cutover.** Every desktop pi child (a uid-1000 user
    service) is spawned through pi-landlock-exec.
-2. **Done — system/remote executor cutover.** `services.pi-sessiond` (a root
-   system service) spawns each session through the same launcher via
-   `systemd-run --uid=pi-session`, dropping the unit to a dedicated non-root uid
-   (Landlock does not drop privilege). The root daemon `chown`s each session's
-   `workspaces/<id>` + `sessions/<id>` to that uid and reads the committed jsonl
-   back as root; `StateDirectoryMode=0711` lets the uid traverse to its leaf. All
-   sessions share the one `pi-session` uid — cross-session isolation is the same
-   Landlock `scoped` + seccomp wall as the desktop, not a distinct-uid namespace.
-   One mechanism, one policy emitter, one launcher for both executors.
-   Pinned by `checks/pi-sessiond-session-uid`: the spawned `pi-session-<id>`
-   service runs as the non-root `pi-session` uid (the supervisor stays root) and
-   the session dirs are chowned to it.
-3. **Optional, later — nspawn uid backstop.** If a genuinely *multi-user* server
-   (distinct humans, not just distinct sessions), or the policy-mistake
-   forgiveness of a per-session distinct uid (§11), is later judged worth the
-   container machinery, wrap the unit in nspawn for idmapped binds + namespace
-   isolation *on top of* Landlock+seccomp. Not needed for the single-user desktop
-   or the current single-user server, and explicitly out of scope until then.
+2. **Done — root executor retired (per-user cutover).** The root system service
+   is gone (docs/pi-sessiond-per-user-refactor.md). Desktop and server now run
+   the *same* `--user` executor (`modules/nixos/pi-sessiond-local/`): the
+   supervisor and every per-session pi child run as the user's own uid — no root
+   daemon, no `--uid=`/chown, no shared `pi-session` uid. Cross-session isolation
+   within a user is the Landlock `scoped` + seccomp wall (as before); cross-user
+   isolation on a multi-user server is plain DAC (distinct real uids). One
+   mechanism, one policy emitter, one launcher, one module.
+   Pinned by `checks/pi-sessiond-session-uid`: the spawned `pi-session-<id>` user
+   unit runs as the same unprivileged uid as the supervisor, nothing runs as
+   root, and the session dirs are owned by that user.
+3. **Optional, later — nspawn / VM uid backstop.** Cross-*user* isolation on the
+   per-user server is already plain DAC (distinct real uids). If the
+   policy-mistake forgiveness of a per-*session* distinct uid (§11), or a tier for
+   genuinely hostile integration code, is later judged worth the container
+   machinery, wrap the unit in nspawn (idmapped binds + namespaces) or escalate to
+   the munix microVM tier *on top of* Landlock+seccomp — see
+   [agent-integrations-design.md](./agent-integrations-design.md). Out of scope
+   here until then.
 
 ---
 

@@ -249,8 +249,10 @@ path** only.
   transient unit (`ProtectHome=tmpfs` when untrusted, narrowed `BindPaths`, the
   kernel/namespace protection set). Unit-tested by `checks/pi-sessiond-sandbox`;
   `checks/pi-remote-session` confirms pi still functions under the real sandbox.
-- [ ] Run the sandboxed unit as a dedicated non-root uid (the daemon is root, so
-  pi runs root-inside-sandbox). Needs state-dir ownership / `--uid=` wiring.
+- [x] Run the sandboxed unit as a non-root uid — **done via the per-user
+  cutover** (docs/pi-sessiond-per-user-refactor.md): there is no root daemon; the
+  supervisor and every per-session pi child run as the user's own uid (no
+  `--uid=`/chown), on the desktop and on each server user alike.
 - [~] **Reconnect-with-history** (stage 3) — **partly done.** The daemon keeps
   a capped per-session event ring buffer and replays events with seq > lastSeq
   on `attach` (`packages/pi-sessiond/main.ts`), so a reconnecting/mirroring
@@ -329,7 +331,7 @@ path** only.
   tells the other clients to collapse via `sidechannel_resolved` (the **panel
   now renders that** — the loser's confirm collapses); a request that fires with
   zero clients **parks** (idle-GC leaves it resident; replays on next attach)
-  **and fires a notifier** (`services.pi-sessiond.notifyCommand`) so the user is
+  **and fires a notifier** (`services.pi-sessiond-local.notifyCommand`) so the user is
   reached out-of-band. Verified by `checks/pi-sessiond-sidechannel` (dedupe +
   park + notifier, real daemon + fake pi) and `checks/pi-session-ws`
   (panel collapse on `sidechannel_resolved`). Remaining:

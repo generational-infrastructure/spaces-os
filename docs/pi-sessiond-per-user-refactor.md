@@ -1,11 +1,11 @@
 # Design: per-user `pi-sessiond` (retiring the root remote executor)
 
-**Status:** accepted design; **implementation pending**. The server executor
-today is the root system service `modules/nixos/pi-sessiond/default.nix`; this
-document specifies its replacement by one `--user` `pi-sessiond` per remote
-user. Until it lands, treat the per-user model as the target — the integration
-design ([agent-integrations-design.md](./agent-integrations-design.md)) is
-written against it as a prerequisite.
+**Status:** **implemented.** The root system executor
+`modules/nixos/pi-sessiond/default.nix` (and `users.users.pi-session`) is gone;
+the single generalized `--user` module `modules/nixos/pi-sessiond-local/` is the
+only executor — desktop loopback and each server user alike. The integration
+design ([agent-integrations-design.md](./agent-integrations-design.md)) builds
+on this per-user shape. See "As built" (§4) for the deltas from the plan.
 
 **Goal:** a multi-user server runs **one `pi-sessiond` per remote user, each as
 that user's own uid**, structurally identical to the desktop's per-user
@@ -133,8 +133,36 @@ flowchart TB
    and `landlock-sandbox-design.md` §8/§14 (the system-executor uid-drop bullet)
    are updated to the per-user model when the code lands.
 
-The whole refactor is **one commit** — removing the root daemon without
-rewiring its dependents leaves a non-building tree.
+Removing the root daemon without rewiring its dependents leaves a non-building
+tree, so the cutover (delete + module restructure + every dependent) is one
+atomic change. It landed as a short series of reviewable commits — daemon strip
+→ module generalization → cutover → docs — only the cutover being non-building
+in isolation.
+
+### As built (deltas from the plan above)
+
+- **The surviving module is a directory**, `modules/nixos/pi-sessiond-local/`
+  (`default.nix` + the shared `lib.nix` moved in from `pi-sessiond/`). An orphan
+  `pi-sessiond/` dir would make blueprint emit a broken
+  `nixosModules.pi-sessiond`; the name `pi-sessiond-local` was kept (rename
+  deferred — it would churn every consumer and the on-disk state dir).
+- **The clan `pi` service** (`clan-service-modules/pi/`) executor role enables
+  `services.pi-sessiond-local` (host / firewall / token / llmApiKeyFile /
+  serveWebUi / peers; memory off). It does **not** create the account: the host
+  provisions the lingering user that runs it (a dual-role desktop machine runs it
+  as the human user; a headless executor as a dedicated linger user) and must
+  make the token / llama-swap-key clan vars readable by that user. True
+  N-users-per-machine addressing stays the deferred front-router (§5).
+- **A shared module `key`** on pi-chat's and the clan executor's imports of
+  `pi-sessiond-local` collapses the two into one on a dual-role machine
+  (blueprint wraps the module as an attrset, so identical-path imports do not
+  otherwise dedupe).
+- **More dependents than §4.5 listed** were rewired: also
+  `checks/pi-sessiond-lifecycle`, `checks/pi-sessiond-session-tmpdir`, and
+  `checks/pi-sessiond-session-uid` (the last rewritten to assert the per-user
+  invariant — supervisor and child share the unprivileged uid, no root, no
+  chown). New cheap check `pi-sessiond-local-knobs-nix-eval` pins the
+  desktop/server token + bind knobs.
 
 ---
 
@@ -155,7 +183,6 @@ rewiring its dependents leaves a non-building tree.
 
 ## 6. Status
 
-Accepted; implementation pending. The integration design treats the per-user
-model as shipped (its server story depends on it). When this refactor lands,
-the root executor is gone and the server runs only `--user` `pi-sessiond`
-instances — one per remote user.
+Implemented. The root executor is gone; the server runs only `--user`
+`pi-sessiond` instances — one per remote linger-enabled user — the same module
+the desktop runs on loopback. The integration design builds on this shape.
