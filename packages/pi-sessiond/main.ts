@@ -19,7 +19,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  chownSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -73,24 +72,6 @@ if (!LANDLOCK_EXEC) {
     "pi-sessiond: SPACES_SESSIOND_LANDLOCK_EXEC is required (the per-session Landlock launcher)",
   );
 }
-// System/remote executor: the root daemon drops each per-session unit to this
-// fixed non-root user and chowns the session's dirs to it (Landlock confines
-// but does not drop privilege). Resolved to uid/gid from /etc/passwd. Empty on
-// the desktop user service, whose unit already runs as the daemon's own uid.
-const SESSION_USER = process.env.SPACES_SESSIOND_SESSION_USER ?? "";
-function resolveUser(name: string): { uid: number; gid: number } {
-  const line = readFileSync("/etc/passwd", "utf8")
-    .split("\n")
-    .find((l) => l.startsWith(`${name}:`));
-  if (!line) {
-    throw new Error(
-      `pi-sessiond: SPACES_SESSIOND_SESSION_USER=${name} not in /etc/passwd`,
-    );
-  }
-  const fields = line.split(":");
-  return { uid: Number(fields[2]), gid: Number(fields[3]) };
-}
-const SESSION_IDS = SESSION_USER ? resolveUser(SESSION_USER) : undefined;
 // pi binary spawned per session in rpc-mode (or a stub, in tests).
 const PI_BIN = process.env.SPACES_SESSIOND_PI_BIN ?? "pi";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
@@ -476,7 +457,7 @@ function agentDirOf(id: string): string {
   return `${sessionDirOf(id)}/agent`;
 }
 // Each session's private TMPDIR, nested under its session dir (so the one rw
-// grant on sessions/<id> covers it, and chownTree reaches it in system scope).
+// grant on sessions/<id> covers it).
 // The host's shared /tmp is absent from the allowlist and thus denied; tools
 // that ignore $TMPDIR and write /tmp/... would otherwise EACCES, so point them
 // here instead (design §5.1).
@@ -496,18 +477,6 @@ function seedAgentDir(id: string): string {
     stageFile(BASH_CONFIRM_TEMPLATE, `${dir}/bash-confirm.json`);
   }
   return dir;
-}
-// Recursively chown a session's dir tree to the unit's uid/gid. System scope
-// only: the root daemon creates these dirs root-owned, but the per-session unit
-// runs as a fixed non-root uid that must own them to write. The daemon (root)
-// still reads them back for the session list.
-function chownTree(path: string, ids: { uid: number; gid: number }): void {
-  chownSync(path, ids.uid, ids.gid);
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    const child = `${path}/${entry.name}`;
-    if (entry.isDirectory()) chownTree(child, ids);
-    else chownSync(child, ids.uid, ids.gid);
-  }
 }
 // The TCP port a base URL dials (explicit port, else the scheme default). Used
 // to grant the child connect_tcp to its model endpoint(s) under Landlock.
@@ -747,14 +716,6 @@ function registerSession(
   // (and the launcher) at passthrough stubs, so this one argv path serves both.
   const unitName = `pi-session-${id}.service`;
   const policyPath = writeLandlockPolicy(id);
-  // System scope (root daemon): the unit runs as a fixed non-root uid, so the
-  // session's dirs — created root-owned above — must be chowned to it before the
-  // unit can write them (the launcher also reads the policy as that uid). No-op
-  // on the desktop user service, where the unit runs as the daemon's own uid.
-  if (SESSION_IDS) {
-    chownTree(sessionDirOf(id), SESSION_IDS);
-    chownTree(workdirOf(id), SESSION_IDS);
-  }
   const argv = buildLandlockUnitArgv(
     {
       systemdRun: SYSTEMD_RUN,
@@ -764,7 +725,6 @@ function registerSession(
       workdir: workdirOf(id),
       memoryHigh: MEMORY_HIGH,
       env: childEnv,
-      ...(SESSION_IDS ? { uid: SESSION_IDS.uid, gid: SESSION_IDS.gid } : {}),
     },
     piArgv,
   );

@@ -156,24 +156,3 @@ test("the landlock unit runs the launcher then the child, no userns machinery", 
   expect(argv[sep + 4]).toBe("--");
   expect(argv.slice(sep + 5)).toEqual(CHILD);
 });
-
-test("a configured uid/gid drops the session unit to that user (system scope)", () => {
-  const argv = buildLandlockUnitArgv(
-    { ...landlockUnit, uid: 989, gid: 989 },
-    CHILD,
-  );
-  // The system/remote executor's root daemon spawns each session as a fixed
-  // non-root uid (Landlock does not drop privilege); local omits these and runs
-  // as the daemon's own uid.
-  expect(argv).toContain("--uid=989");
-  expect(argv).toContain("--gid=989");
-  // Still the launcher then the child, unchanged.
-  const sep = argv.indexOf("--");
-  expect(argv[sep + 1]).toBe(landlockUnit.landlockExec);
-});
-
-test("no uid/gid leaves the unit at the daemon's own uid (user scope)", () => {
-  const argv = buildLandlockUnitArgv(landlockUnit, CHILD);
-  expect(argv.some((a) => a.startsWith("--uid="))).toBe(false);
-  expect(argv.some((a) => a.startsWith("--gid="))).toBe(false);
-});

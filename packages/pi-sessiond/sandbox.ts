@@ -7,9 +7,9 @@
 // confinement unit. The model loop, every tool, `bash`, the file tools, and any
 // extension all run there; the unit's only outward channel is the rpc pipe
 // (`--pipe --wait` wires its stdio back to the supervisor's driver). `bash` is
-// not special-cased — it inherits the session's domain. The runtime stays a
-// real uid (the daemon's own, or a fixed non-root uid the root system daemon
-// drops it to) and is confined by a self-applied Landlock domain, not a userns:
+// not special-cased — it inherits the session's domain. The runtime stays the
+// user's own real uid and is confined by a self-applied Landlock domain, not a
+// userns:
 // no nsresourced, no idmap, no reboot. Kept pure (no process/fs access) so the
 // argv + policy contracts are unit-testable.
 
@@ -158,12 +158,6 @@ export interface LandlockUnitConfig {
   workdir: string; // pi's cwd (the session workspace)
   memoryHigh: string; // MemoryHigh= for the unit
   env: Record<string, string>; // --setenv entries (the unit gets a fresh env)
-  // System/remote executor only: the root daemon spawns each session via
-  // system-scope systemd-run and must drop the unit to a fixed non-root uid
-  // (Landlock does not drop privilege). Omitted by the desktop user service,
-  // whose unit already runs as the daemon's own uid 1000.
-  uid?: number;
-  gid?: number;
 }
 
 // The kernel/seccomp hardening carried on the Landlock session unit. No
@@ -206,8 +200,6 @@ export function buildLandlockUnitArgv(
     "--wait",
     "--service-type=exec",
     `--unit=${c.unitName}`,
-    ...(c.uid !== undefined ? [`--uid=${c.uid}`] : []),
-    ...(c.gid !== undefined ? [`--gid=${c.gid}`] : []),
     `--working-directory=${c.workdir}`,
     ...Object.entries(c.env).map(([k, v]) => `--setenv=${k}=${v}`),
     ...landlockHardeningProps(c.memoryHigh),
