@@ -37,15 +37,12 @@ the per-session pi runtime it is the wrong tool, for structural reasons:
   owns the namespace, so the daemon cannot read the session dirs back. The only
   internally-consistent "supervisor owns the ns **and** reads the dirs" shape is
   user scope, the exact scope that cannot idmap.
-- **`managed` needs a patched systemd** (BTF/`vmlinux.h` so `nsresourced`'s
-  `userns-restrict` BPF-LSM attaches) — a PID 1 + user-manager re-exec, i.e. a
-  **reboot on every deploy**.
 
 Landlock is access control on the *real files at the real uid* — no uid mapping
 — so all of the above dissolves:
 
 - **Writability is a non-issue:** the runtime stays uid 1000 and owns its dirs.
-  No `nobody`, no idmap, no `nsresourced`, no BTF patch, no reboot.
+  No `nobody`, no idmap, no `nsresourced`, no systemd rebuild.
 - The security goal becomes a direct **allowlist**: the runtime may read/write
   its workspace/session/agent dirs, read `/nix/store`, reach the proxy port,
   talk to the granted skill sockets — nothing else. A more precise statement of
@@ -137,11 +134,11 @@ flowchart LR
   supervisor over the inherited rpc pipe (`--pipe --wait` stdio) — no FS/socket
   needed for the control channel.
 
-Removed relative to a userns sandbox: `PrivateUsers=managed`, the `nsresourced`
-BTF/systemd override and its reboot, `PrivateDevices`/`PrivateTmp` (incompatible
-with `--user` userns anyway), and the `ProtectHome=tmpfs` + same-path
-`BindPaths` dance — Landlock denies non-granted paths directly, so nothing needs
-hiding-then-binding-back.
+The per-session unit carries none of the userns machinery: no
+`PrivateUsers=managed`, no `nsresourced`/idmap, no `PrivateDevices`/`PrivateTmp`,
+and no `ProtectHome=tmpfs` + same-path `BindPaths` — Landlock denies non-granted
+paths directly, so nothing is hidden then bound back. The supervisor daemon is a
+separate unit with its own hardening (§8).
 
 ---
 
@@ -345,30 +342,33 @@ scheme.
 
 ## 8. Code integration
 
-- **`packages/pi-sessiond/sandbox.ts`** — repurpose from the userns unit builder
-  to a `systemd-run --user` argv builder **plus** a landlockconfig policy
-  emitter. `SessionUnitConfig` → `SandboxPolicy` (workspace, sessionDir,
-  agentDir, extra rw dirs, ro paths, socket grants, proxy port, scope flags).
-  Two pure, unit-tested outputs: the `systemd-run` argv (cgroup + seccomp
-  denylist + kernel hardening) and the policy JSON. Drops `PrivateUsers=managed`,
-  `PrivateDevices`, `PrivateTmp`, `ProtectHome`, the `TemporaryFileSystem` +
-  same-path `BindPaths` block, and the `trusted` flag.
-- **`packages/pi-sessiond/main.ts`** — the spawn call passes the allowlist
-  (workspace/session/agent + `ALLOWED_PATHS` sources as grants + proxy port)
-  instead of `stateDir`/`trusted`/`binds`-as-binds; writes the policy to a
-  per-session file; invokes `systemd-run … pi-landlock-exec --json <policy> --
-  pi …`. The rpc pipe and `cwd` are unchanged.
-- **`modules/nixos/pi-sessiond-local.nix`** — `bashBinds` becomes `allowedPaths`
-  (same data, now an allowlist not a bind list); drop the `nsresourced` import
-  and the `%t/systemd`+`%t/bus` bind-back (no userns → no user-manager IPC bind
-  for the session unit). Add `pi-landlock-exec` to the daemon's PATH / pass its
-  absolute path via `SPACES_SESSIOND_LANDLOCK_EXEC`.
-- **`flake.nix` / `packages/`** — add the `pi-landlock-exec` package (the
-  landlockconfig sandboxer) and pin the `landlockconfig` revision.
-- **Delete `modules/nixos/nsresourced.nix`** (the systemd BTF override) once
-  neither executor uses `managed` — removing the patched-systemd rebuild and the
-  deploy reboot. Keep it only if the system/remote executor opts into
-  nspawn+managed (§10).
+- **`packages/pi-sessiond/sandbox.ts`** — a `systemd-run --user` argv builder
+  **plus** a landlockconfig policy emitter. A `SandboxPolicy` (rw dirs —
+  workspace + session dir, ro/rw paths, socket grants, model-endpoint port[s],
+  scope flags) yields two pure, unit-tested outputs: the `systemd-run` argv
+  (cgroup + seccomp denylist + kernel hardening) and the policy JSON. The
+  per-session unit carries no `PrivateUsers`, `PrivateDevices`, `PrivateTmp`,
+  `ProtectHome`, `TemporaryFileSystem`, or `BindPaths` — the allowlist is the
+  whole confinement.
+- **`packages/pi-sessiond/main.ts`** — the spawn call assembles the allowlist
+  (workspace + session dir, the `ALLOWED_PATHS` skill sources, the memory store
+  when enabled, the credential-proxy and/or llama-swap port), writes it to a
+  per-session policy file, and invokes `systemd-run … pi-landlock-exec --json
+  <policy> -- pi …`. The session's private agent dir (`HOME`) and `TMPDIR` nest
+  under the session-dir grant; the rpc pipe and `cwd` need no grant of their own.
+- **`modules/nixos/pi-sessiond-local.nix`** — the desktop user service. Skill
+  paths arrive through `allowedPaths` and fold into each session's Landlock FS
+  allowlist by mode; `pi-landlock-exec`'s absolute path is handed over via
+  `SPACES_SESSIOND_LANDLOCK_EXEC`. The supervisor daemon is hardened with
+  `ProtectHome=tmpfs` (so it — and any in-process extension — never sees `$HOME`)
+  and binds back its state dir plus the user-manager IPC endpoints (`%t/systemd`,
+  `%t/bus`) it needs to spawn each session via `systemd-run --user`.
+- **`modules/nixos/pi-sessiond/default.nix`** — the system/remote service. The
+  root supervisor spawns each session through the same launcher with
+  `systemd-run --uid=pi-session`, chowns the session dirs to that uid, and sets
+  `StateDirectoryMode=0711` so the uid can traverse to its chowned leaf (§14).
+- **`packages/pi-landlock-exec/`** — the landlockconfig sandboxer, built in the
+  flake against a pinned `landlockconfig` revision.
 
 ---
 
@@ -454,7 +454,7 @@ same-uid `ptrace`, fully closable but must-not-forget.
 
 **Recommendation for `amy` (single-user desktop, model-steered-tool threat):**
 ship **Landlock + a tight seccomp profile** as the primary control — on-target,
-unprivileged, and free of the BTF/nsresourced/managed/reboot machinery. Treat
+unprivileged, and free of the nsresourced/managed-userns machinery. Treat
 **nspawn as optional belt-and-suspenders** (nspawn *does* support idmapped binds,
 unlike service units — issue #34695) for the system/remote (multi-tenant)
 executor, or if the uid backstop is later deemed worth the container machinery.
@@ -545,8 +545,8 @@ allowlist tuning.
 
 Both executors are now Landlock-only — no `landlock.enable` toggle, no
 managed-userns path anywhere. The `managed` builder, the `trusted`/`binds`
-config, the `ProtectHome`/`TemporaryFileSystem` block, `nsresourced.nix`, and the
-BTF/systemd override are all **deleted**. What was done:
+config, the `ProtectHome`/`TemporaryFileSystem` block, and `nsresourced.nix`
+(with its BTF systemd-package override) are all **deleted**. What was done:
 
 1. **Done — local executor cutover.** Every desktop pi child (a uid-1000 user
    service) is spawned through pi-landlock-exec.

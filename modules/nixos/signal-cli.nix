@@ -51,21 +51,22 @@ let
   # %t in user-systemd specifier-speak):
   #
   #   %t/spaces-signal/                  (parent, host-only)
-  #     ├── sandbox/                     (bind-mounted into pi-chat)
+  #     ├── sandbox/                     (granted into the pi-chat sandbox)
   #     │     └── enqueue.sock           (sandbox ↔ bridge: agent sends)
   #     └── panel.sock                   (bridge ↔ chat panel: approval)
   #
-  # The pi-chat sandbox bind-mounts the inner `sandbox/` directory
-  # (not individual files); sockets the bridge later creates inside it
-  # become visible to the sandbox automatically — same dentry from
-  # both sides — so we don't depend on the bridge being up at sandbox
-  # spawn time. Both dirs are created unconditionally by the
-  # user-tmpfiles rules below; they stay empty on unlinked systems.
+  # The pi-chat sandbox is granted the inner `sandbox/` directory (the
+  # whole dir, not individual files); sockets the bridge later creates
+  # inside it are reachable from the sandbox automatically — the grant
+  # is on the directory, not its current contents — so we don't depend
+  # on the bridge being up at sandbox spawn time. Both dirs are created
+  # unconditionally by the user-tmpfiles rules below; they stay empty on
+  # unlinked systems.
   #
-  # `panel.sock` deliberately lives one level *outside* the
-  # sandbox-bound directory: that's the security boundary. A
-  # prompt-injected agent can write into enqueue.sock but cannot
-  # reach panel.sock to mint its own approval.
+  # `panel.sock` deliberately lives one level *outside* the granted
+  # directory: that's the security boundary. A prompt-injected agent can
+  # write into enqueue.sock but cannot reach panel.sock to mint its own
+  # approval.
   runtimeRoot = "spaces-signal";
   runtimeSandboxSubdir = "${runtimeRoot}/sandbox";
 
@@ -135,17 +136,17 @@ in
       # signal-cli will create it itself on first link; we pre-create
       # so the mode is correct from the start.
       "d %h/${identityRel} 0700 - - -"
-      # spaces-side store dir: holds messages.db (the bridge writes,
-      # the agent's `signal` CLI reads via a bind-mounted RW path).
+      # spaces-side store dir: holds messages.db (the bridge writes it
+      # from outside; the agent's `signal` CLI gets a read-only grant).
       "d %h/${storeRel} 0700 - - -"
       # Signal runtime dirs. Both created unconditionally at session
-      # start, so the pi-chat sandbox can bind-mount the inner dir as
-      # a mandatory path even before the user has linked a Signal
-      # account. The bridge later creates the sockets inside; a
-      # directory bind-mount exposes new entries to both sides without
-      # the sandbox having to be respawned. The parent dir is host-
-      # only — that's where panel.sock lives, kept out of the sandbox
-      # so a prompt-injected agent can't mint its own send approvals.
+      # start, so the pi-chat sandbox can be granted the inner dir as a
+      # mandatory path even before the user has linked a Signal account.
+      # The bridge later creates the sockets inside; the grant is on the
+      # directory, so new entries are reachable from both sides without
+      # the sandbox having to be respawned. The parent dir is host-only
+      # — that's where panel.sock lives, kept out of the sandbox so a
+      # prompt-injected agent can't mint its own send approvals.
       "d %t/${runtimeRoot} 0700 - - -"
       "d %t/${runtimeSandboxSubdir} 0700 - - -"
     ];
@@ -189,7 +190,7 @@ in
 
     # Bridge: subscribes to the daemon, persists envelopes into
     # messages.db, and brokers the enqueue/approve flow over two
-    # separate sockets. The enqueue socket is bind-mounted into the
+    # separate sockets. The enqueue socket's dir is granted to the
     # pi-chat sandbox; the panel socket is NOT — that split is the
     # security boundary that keeps prompt-injected sends from
     # auto-approving themselves.
@@ -261,11 +262,11 @@ in
       {
         # The inner sandbox-visible dir, not a socket file: see the
         # layout comment near `runtimeRoot` at the top of this module.
-        # Mandatory bind — the tmpfiles rules guarantee the source
+        # Mandatory grant — the tmpfiles rules guarantee the source
         # exists at sandbox spawn time. The bridge later creates
-        # enqueue.sock inside it; that socket becomes visible inside
-        # the sandbox automatically because directory bind-mounts
-        # share the same dentry. Critically: panel.sock lives one
+        # enqueue.sock inside it; that socket is reachable from the
+        # sandbox automatically because the grant is on the directory,
+        # not its current contents. Critically: panel.sock lives one
         # level *up* and is therefore never exposed here.
         source = "%t/${runtimeSandboxSubdir}";
         mode = "rw";
