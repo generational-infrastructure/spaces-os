@@ -105,7 +105,7 @@ in
       {
         # The whole point of this module is to back the Signal skill
         # the agent invokes through the pi-chat sandbox. Without
-        # pi-chat enabled, the sandboxBinds we publish below are dead
+        # pi-chat enabled, the sandboxAllowedPaths we publish below are dead
         # weight and the user almost certainly misconfigured.
         assertion = config.services.pi-chat.enable;
         message = ''
@@ -246,7 +246,7 @@ in
     # sandbox via direct filesystem access, the sandbox can only read.
     # That stops a compromised agent from forging inbound messages or
     # rewriting `pending_sends.state = 'sent'` to fake approval.
-    services.pi-chat.sandboxBinds = [
+    services.pi-chat.sandboxAllowedPaths = [
       {
         source = "%h/${storeRel}";
         mode = "ro";

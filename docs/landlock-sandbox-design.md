@@ -164,25 +164,32 @@ Paths are the ones the runtime uses today (`main.ts`): `STATE_DIR =
 
 | access | path | why |
 |---|---|---|
-| **rw** | `workspaces/<id>` | pi's cwd / scratch |
-| **rw** | `sessions/<id>` | committed `session.jsonl`, the policy, and this session's private `agent/` (its `HOME`) |
-| **rw** | `sessions/<id>/agent` | per-session `HOME`/`PI_CODING_AGENT_DIR`: copied `settings.json`/`bash-confirm.json`, `auth.json`, `*.lock` (under the `sessions/<id>` grant) |
-| **rw** | `$SEDIMENT_DB` dir (`%h/<memoryDbRel>`) | long-term memory store — the **one** writable dir shared across sessions (when `memory.enable`) |
-| **rw** | a private `TMPDIR` (`RuntimeDirectory` or a fresh `/tmp/pi-<id>`) | tool scratch |
-| **ro+x** | `/nix/store` | the runtime image, `pi`, node, skill CLIs, `HF_HOME` model cache |
-| **ro** | `/etc/resolv.conf`, `/etc/ssl`, `/etc/static/ssl`, `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf` | DNS, TLS, name resolution |
-| **rw** | `/dev/null`, `/dev/zero`, `/dev/urandom`, `/dev/random`, `/dev/tty` | device essentials |
-| **rw** | the granted skill sockets (`SKILL_CONFIG_SOCKET`, the Signal `enqueue.sock`, notifications, open-url) — concrete `/run/user/<uid>/…` paths | the in-sandbox `bash` tool reaches skills/integrations through these |
+| **rw** (dir) | `workspaces/<id>` | pi's cwd / scratch |
+| **rw** (dir) | `sessions/<id>` | committed `session.jsonl`, the policy, the session's private `agent/` (its `HOME`/`PI_CODING_AGENT_DIR`) and `tmp/` (`TMPDIR`) — both nest under this one grant |
+| **rw** (dir) | `$SEDIMENT_DB` dir (`%h/<memoryDbRel>`) | long-term memory store — the **one** writable dir shared across sessions (when `memory.enable`) |
+| **ro+x** (dir) | `/nix/store` | the runtime image, `pi`, node, skill CLIs, `HF_HOME` model cache |
+| **ro** (dir) | `/etc/ssl`, `/etc/static/ssl` | TLS CA dirs (read + list) |
+| **ro** (file) | `/etc/resolv.conf`, `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf` | DNS / name resolution |
+| **rw** (file) | `/dev/null`, `/dev/zero`, `/dev/urandom`, `/dev/random`, `/dev/tty` | device essentials |
+| **rw**/**ro** | granted skill paths — `SKILL_CONFIG_SOCKET`, the Signal `enqueue.sock`, the open-url socket (files); the skill-config store, `skills-defs`, notifications (dirs) | the in-sandbox tools reach skills/integrations through these, published per-skill via `services.pi-chat.sandboxAllowedPaths` |
+
+Each grant takes exactly the access class its inode supports: a **directory**
+gets the directory rights (`read_dir`, plus `read_write`'s create/remove for
+`rw`); a **file**, socket, or device node gets only the file rights
+(`read_file`/`write_file`). This split is load-bearing — a directory right on a
+file, or a file-only grant on a directory the runtime must list, is inert and
+downgrades the ruleset to *partially enforced*, which must mean "the kernel
+lacks an ABI", never "a rule was mis-shaped". A skill grant ending in `.sock` is
+treated as a file; any other skill path as a directory.
 
 Everything else — the rest of `$HOME`, other users, other `/run/user` sockets,
 other sessions' `workspaces/`/`sessions/` — is **denied** by absence from the
 allowlist. Rules are **leaf-scoped** (grant `sessions/<id>`, not `$STATE_DIR`) so
 siblings stay both unreadable and unlistable.
 
-This is the same set the old per-command `bash` sandbox bound; under Landlock it
-is an allowlist rather than a bind list. The Signal regression cannot recur:
-there is no `/run/user` tmpfs to hide the `enqueue.sock`, the socket path is
-simply granted.
+Skill sockets are named directly in the allowlist — there is no `/run/user`
+tmpfs hiding them — so a tool's reach to a skill or integration is exactly the
+set the allowlist grants, and nothing more.
 
 ### 5.2 Network (`netPort`, ABI 4)
 
@@ -218,11 +225,13 @@ Landlock policy format covers syscalls, so this stays on the unit, where
 `SystemCallFilter=@system-service` baseline, then **deny**: `ptrace`,
 `process_vm_readv`, `process_vm_writev`, `keyctl`, `request_key`, `add_key`,
 `shmget`, `shmat`, `shmdt`, `shmctl`, `mq_*`, `bpf`, `io_uring_setup`,
-`userfaultfd`, `perf_event_open`, `kcmp`. Also ensure
-`kernel.yama.ptrace_scope ≥ 1`.
+`userfaultfd`, `perf_event_open`, `kcmp`.
 
-The denylist is load-bearing (§10 flags same-uid `ptrace` as the sharpest edge),
-so it is encoded in one place — the unit builder (§8) — and tested.
+Denying the `ptrace` syscall outright fully closes same-uid `ptrace` from the
+sandbox — the runtime cannot trace any process, so no `kernel.yama.ptrace_scope`
+sysctl is needed on top. The denylist is load-bearing (§11 names same-uid
+`ptrace` as the sharpest edge), so it is encoded in one place — the unit builder
+(§8) — and tested.
 
 Blocked calls return **`EPERM`** (`SystemCallErrorNumber=EPERM`), not the systemd
 default of SIGSYS-killing the process. This is required, not cosmetic: node's
@@ -233,31 +242,34 @@ from fatal to a clean errno.
 
 ### 5.5 Worked example
 
-The supervisor emits, per session, a document of this shape (JSON; `${var}`
-interpolation keeps it concise):
+The supervisor emits, per session, a document of this shape — literal paths, one
+`pathBeneath` entry per access-class bucket (empty buckets dropped):
 
 ```json
 {
   "abi": 6,
-  "variable": [
-    { "name": "session_rw", "literal": ["/home/amy/.local/state/pi-sessiond-local/workspaces/<id>",
-                                         "/home/amy/.local/state/pi-sessiond-local/sessions/<id>"] },
-    { "name": "etc_ro", "literal": ["/etc/resolv.conf", "/etc/ssl", "/etc/static/ssl",
-                                     "/etc/passwd", "/etc/group", "/etc/nsswitch.conf"] }
-  ],
-  "ruleset": [
-    { "scoped": ["signal", "abstract_unix_socket"] }
-  ],
+  "ruleset": [{ "scoped": ["signal", "abstract_unix_socket"] }],
   "pathBeneath": [
-    { "allowedAccess": ["abi.read_write"],   "parent": ["${session_rw}"] },
+    { "allowedAccess": ["abi.read_write"], "parent": [
+        "/home/amy/.local/state/pi-sessiond-local/workspaces/<id>",
+        "/home/amy/.local/state/pi-sessiond-local/sessions/<id>" ] },
+    { "allowedAccess": ["read_file", "write_file"], "parent": [
+        "/dev/null", "/dev/zero", "/dev/urandom", "/dev/random", "/dev/tty" ] },
     { "allowedAccess": ["abi.read_execute"], "parent": ["/nix/store"] },
-    { "allowedAccess": ["read_file"],        "parent": ["${etc_ro}"] }
+    { "allowedAccess": ["read_file", "read_dir"], "parent": [
+        "/etc/ssl", "/etc/static/ssl" ] },
+    { "allowedAccess": ["read_file"], "parent": [
+        "/etc/resolv.conf", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf" ] }
   ],
   "netPort": [
     { "allowedAccess": ["connect_tcp"], "port": [<proxyPort>, <llamaSwapPort>] }
   ]
 }
 ```
+
+Skill grants (§5.1) fold into these same buckets by mode and inode: a `.sock`
+into the `read_file`/`write_file` entry, a directory into the matching `read_dir`
+group.
 
 `abi: 6` plus landlockconfig's best-effort compatibility modes mean an older
 kernel keeps the FS allowlist and drops `netPort`/`scoped` rather than failing.
@@ -342,11 +354,11 @@ scheme.
   `PrivateDevices`, `PrivateTmp`, `ProtectHome`, the `TemporaryFileSystem` +
   same-path `BindPaths` block, and the `trusted` flag.
 - **`packages/pi-sessiond/main.ts`** — the spawn call passes the allowlist
-  (workspace/session/agent + `BASH_BINDS` sources as grants + proxy port)
+  (workspace/session/agent + `ALLOWED_PATHS` sources as grants + proxy port)
   instead of `stateDir`/`trusted`/`binds`-as-binds; writes the policy to a
   per-session file; invokes `systemd-run … pi-landlock-exec --json <policy> --
   pi …`. The rpc pipe and `cwd` are unchanged.
-- **`modules/nixos/pi-sessiond-local.nix`** — `bashBinds` becomes `bashGrants`
+- **`modules/nixos/pi-sessiond-local.nix`** — `bashBinds` becomes `allowedPaths`
   (same data, now an allowlist not a bind list); drop the `nsresourced` import
   and the `%t/systemd`+`%t/bus` bind-back (no userns → no user-manager IPC bind
   for the session unit). Add `pi-landlock-exec` to the daemon's PATH / pass its
@@ -371,7 +383,7 @@ signalling or abstract-socket-connecting to B's processes. The only writable dir
 shared across sessions is the long-term memory store (`$SEDIMENT_DB`), by design.
 
 Same-uid caveat: A and B are both uid 1000, so absent seccomp they could
-`ptrace` each other — closed by §5.4 (`ptrace` denied + `ptrace_scope ≥ 1`).
+`ptrace` each other — closed by §5.4, which denies the `ptrace` syscall outright.
 
 ---
 
@@ -430,7 +442,7 @@ misuse of granted scope, exfil over the allowed proxy channel.
 | Landlock-only residual | severity | mitigable without nspawn? |
 |---|---|---|
 | **policy gap** (over-grant a path / forget a seccomp entry) → reachable as uid 1000 | high | only by getting allowlist + seccomp exactly right |
-| **ptrace into the user's other processes** → session takeover | high | yes: seccomp-deny `ptrace`/`process_vm_*` + `ptrace_scope ≥ 1` |
+| **ptrace into the user's other processes** → session takeover | high | yes: seccomp-deny `ptrace`/`process_vm_*` |
 | keyring (`keyctl`) read | medium | yes: seccomp-deny |
 | SysV/POSIX shm & mqueue | low–med | yes: seccomp-deny |
 | filesystem *structure* enumeration | low | mostly, with leaf-scoped rules |
@@ -450,7 +462,7 @@ A kernel 0-day defeats both — that is a microVM, separately.
 
 ---
 
-## 12. Verification plan
+## 12. Verification
 
 - **Cheap focused check** (`checks/pi-sessiond-landlock/`, a small `runNixOSTest`
   — Landlock needs a real kernel, so not a bare `runCommand`): run
@@ -461,13 +473,19 @@ A kernel 0-day defeats both — that is a microVM, separately.
   - **cannot** `connect()` a non-proxy TCP port;
   - **cannot** `kill()` an outside-domain pid (ABI 6);
   - effective ABI level logged (assert ≥ 4, ideally 6).
-- **VM test** (`checks/test-machine.nix`, the local executor / `amy` path): real
-  chat round-trip still works; the "bash runs sandboxed: `HOME` hidden" subtest
-  holds (now via Landlock deny, not `ProtectHome`); a **Signal** end-to-end
-  (`signal threads`) succeeds through the granted `enqueue.sock`.
+- **VM test** (`checks/test-machine.nix`, the local executor / `amy` path): a
+  real chat round-trip works, and the "bash runs sandboxed: `HOME` hidden"
+  subtest confirms a tool command cannot read the login `$HOME` — Landlock deny,
+  with no `ProtectHome` on the session unit.
 - **Unit** (`sandbox.test.ts`, run by `checks/pi-sessiond-sandbox/`): the emitted
   landlockconfig policy contains the expected grants/scope and excludes
   `$HOME`/sibling sessions; the `systemd-run` argv carries the seccomp denylist.
+- **Signal skill** — the allowlist + forwarding contract is pinned by
+  `checks/spaces-signal-nix-eval` (the signal-cli daemon socket is **never**
+  granted, the message store is `ro`, the bridge's `sandbox/` dir holding
+  `enqueue.sock` is `rw`); the send-approval round-trip is pinned by
+  `checks/pi-session-signal-confirm` (a queued send blocks until approved on the
+  panel, which the sandbox cannot reach).
 
 ---
 
@@ -506,7 +524,7 @@ green and the `managed` path is untouched.
 
 **Phase 3 — wire main.ts + module.** `main.ts` writes the per-session policy file
 and spawns through the launcher; `pi-sessiond-local.nix` turns `bashBinds` into
-`bashGrants` and puts `pi-landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
+`allowedPaths` and puts `pi-landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
 `nsresourced` stays imported. *Done when* a session starts under the launcher in
 the VM.
 
@@ -555,25 +573,13 @@ BTF/systemd override are all **deleted**. What was done:
 
 ## 15. Open questions
 
-- **Allowlist completeness for a real `pi` turn** — the node `pi` runtime touches paths
-  beyond the table (`/proc/self`, `/sys/devices/system/cpu`, `/etc/...`); needs
-  empirical tuning (POC Phase 4). Over-granting erodes the benefit — keep a
+- **Allowlist completeness for a real `pi` turn** — the node `pi` runtime touches
+  paths beyond the table (`/proc/self`, `/sys/devices/system/cpu`, `/etc/...`);
+  the set is tuned empirically. Over-granting erodes the benefit — keep a
   reviewed minimal set.
 - **landlockconfig stability** — the schema is explicitly pre-1.0/unstable. Pin a
   revision; the kernel-maintainer backing and small surface keep the risk low,
   but track it.
-- **`TMPDIR`** — RESOLVED: each session's `TMPDIR` is a private `sessions/<id>/tmp`
-  dir, created up front in `registerSession` and carried into the child via
-  `--setenv`. It nests under the `sessions/<id>` rw grant (so no extra rule, and
-  `chownTree` reaches it in system scope); the host's shared `/tmp` stays denied
-  by absence from the allowlist. Pinned by `checks/pi-sessiond-session-tmpdir`
-  (child env carries the private `TMPDIR`; replaying the emitted policy, a write
-  into it succeeds while a write to `/tmp` is denied).
 - **Network granularity** — port-granular only (§5.2). Accept (the proxy bounds
-  the upstream host), or add a loopback-only net namespace later (needs its own
-  mechanism since the userns is dropped).
-- **System/remote executor** — RESOLVED: uniform Landlock, no distinct-uid wall.
-  The server runs the same launcher, dropping each session to a shared
-  `pi-session` uid; sessions are walled by Landlock `scoped` + seccomp, as on the
-  desktop. A distinct-uid backstop, if ever wanted for a multi-user server, is
-  nspawn-on-top (§11/§14.3), never the deleted managed-userns path.
+  the upstream host), or add a loopback-only net namespace later (it would need
+  its own mechanism, since the sandbox uses no userns).

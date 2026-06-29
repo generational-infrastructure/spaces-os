@@ -33,7 +33,7 @@ import type { ServerWebSocket } from "bun";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { RpcDriver, type RpcFrame } from "./rpc-driver";
 import {
-  type SandboxBind,
+  type AllowedPath,
   buildLandlockPolicy,
   buildLandlockUnitArgv,
 } from "./sandbox";
@@ -94,13 +94,13 @@ const SESSION_IDS = SESSION_USER ? resolveUser(SESSION_USER) : undefined;
 // pi binary spawned per session in rpc-mode (or a stub, in tests).
 const PI_BIN = process.env.SPACES_SESSIOND_PI_BIN ?? "pi";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
-// Skill plumbing for the session's bash tool (NixOS module → JSON env).
-// SPACES_SESSIOND_BASH_ENV: { VAR: value } --setenv'd into the session unit
-// (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_BASH_BINDS:
-// [{ source, mode }] folded into the session's Landlock FS allowlist (bash
-// inherits the session domain — it is not a separate unit). Paths arrive
-// pre-expanded — systemd resolves %h/%t in the module's Environment= lines
-// before the daemon ever sees them.
+// Skill plumbing for the per-session pi runtime (NixOS module → JSON env).
+// SPACES_SESSIOND_SESSION_ENV: { VAR: value } --setenv'd into the session unit
+// (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_ALLOWED_PATHS:
+// [{ source, mode }] folded into the session's Landlock FS allowlist — the
+// whole domain, inherited by every tool/bash/extension, not a separate bash
+// sandbox. Paths arrive pre-expanded — systemd resolves %h/%t in the module's
+// Environment= lines before the daemon ever sees them.
 function jsonEnv<T>(name: string, fallback: T): T {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -111,11 +111,14 @@ function jsonEnv<T>(name: string, fallback: T): T {
     return fallback;
   }
 }
-const BASH_ENV = jsonEnv<Record<string, string>>(
-  "SPACES_SESSIOND_BASH_ENV",
+const SESSION_ENV = jsonEnv<Record<string, string>>(
+  "SPACES_SESSIOND_SESSION_ENV",
   {},
 );
-const BASH_BINDS = jsonEnv<SandboxBind[]>("SPACES_SESSIOND_BASH_BINDS", []);
+const ALLOWED_PATHS = jsonEnv<AllowedPath[]>(
+  "SPACES_SESSIOND_ALLOWED_PATHS",
+  [],
+);
 // bash-confirm allow-list template, staged next to settings.json (the
 // bash-confirm extension reads $PI_CODING_AGENT_DIR/bash-confirm.json).
 const BASH_CONFIRM_TEMPLATE = process.env.SPACES_SESSIOND_BASH_CONFIRM ?? "";
@@ -476,7 +479,7 @@ function agentDirOf(id: string): string {
 // grant on sessions/<id> covers it, and chownTree reaches it in system scope).
 // The host's shared /tmp is absent from the allowlist and thus denied; tools
 // that ignore $TMPDIR and write /tmp/... would otherwise EACCES, so point them
-// here instead (design §5.1 / §15).
+// here instead (design §5.1).
 function tmpDirOf(id: string): string {
   return `${sessionDirOf(id)}/tmp`;
 }
@@ -527,10 +530,11 @@ function writeLandlockPolicy(id: string): string {
   const rwFiles: string[] = [];
   const roDirs: string[] = [];
   const roFiles: string[] = [];
-  // A bind source ending in `.sock` is a unix socket (a file); everything else
-  // is a directory the bash tool reads/writes/lists. Splitting them keeps
-  // directory rights off socket inodes (which would downgrade enforcement).
-  for (const b of BASH_BINDS) {
+  // An allowed-path source ending in `.sock` is a unix socket (a file);
+  // everything else is a directory the runtime reads/writes/lists. Splitting
+  // them keeps directory rights off socket inodes (which would downgrade
+  // enforcement).
+  for (const b of ALLOWED_PATHS) {
     const isSocket = b.source.endsWith(".sock");
     if (b.mode === "rw") (isSocket ? rwFiles : rwDirs).push(b.source);
     else (isSocket ? roFiles : roDirs).push(b.source);
@@ -735,7 +739,7 @@ function registerSession(
     // proxy; it never sees the real key (openrouter-proxy extension reads this).
     ...(OPENROUTER_PROXY_URL ? { OPENROUTER_PROXY_URL } : {}),
     ...childPassthroughEnv(),
-    ...BASH_ENV,
+    ...SESSION_ENV,
   };
   // Wrap the child in its per-session Landlock unit (sandbox.ts): systemd-run
   // applies kernel + seccomp hardening, then pi-landlock-exec self-applies the

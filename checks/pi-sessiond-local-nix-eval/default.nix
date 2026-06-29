@@ -110,10 +110,10 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
       if panelOnlySystem.config.services.pi-sessiond-local.enable then "yes" else "no";
     panelOnlyHasDaemonUnit = if panelDaemon == null then "no" else "yes";
     # The forwarding contract is engaged, not just the enable bit: the
-    # daemon's per-bash env carries the skill-config socket only when
-    # pi-chat's localExecutor wiring populated bashEnv.
-    panelOnlyBashEnv =
-      if panelDaemon == null then "{}" else panelDaemon.environment.SPACES_SESSIOND_BASH_ENV;
+    # daemon's per-session env carries the skill-config socket only when
+    # pi-chat's localExecutor wiring populated sessionEnv.
+    panelOnlySessionEnv =
+      if panelDaemon == null then "{}" else panelDaemon.environment.SPACES_SESSIOND_SESSION_ENV;
     panelOnlyDefaultExecutor = panelOnlySystem.config.services.pi-chat.defaultExecutor;
   }
   ''
@@ -171,7 +171,7 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
       || fail "pi-chat-only import left services.pi-sessiond-local.enable false"
     [ "$panelOnlyHasDaemonUnit" = "yes" ] \
       || fail "pi-chat-only import generated no pi-sessiond-local unit"
-    jq -e '.SKILL_CONFIG_SOCKET == "%t/spaces-skill-config.sock"' <<<"$panelOnlyBashEnv" >/dev/null \
+    jq -e '.SKILL_CONFIG_SOCKET == "%t/spaces-skill-config.sock"' <<<"$panelOnlySessionEnv" >/dev/null \
       || fail "pi-chat-only import did not forward the skill env into the daemon"
     [ "$panelOnlyDefaultExecutor" = "host" ] \
       || fail "pi-chat-only import did not default-pin sessions at the loopback executor"

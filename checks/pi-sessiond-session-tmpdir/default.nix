@@ -1,6 +1,6 @@
 # Focused check: each session gets a private TMPDIR under its session-dir grant,
-# and the host's shared /tmp stays denied (docs/landlock-sandbox-design.md §5.1
-# row "private TMPDIR" / §15). Without this, a tool that ignores $TMPDIR and
+# and the host's shared /tmp stays denied (docs/landlock-sandbox-design.md §5.1,
+# the sessions/<id> row). Without this, a tool that ignores $TMPDIR and
 # writes /tmp/... would EACCES against the deny-by-default allowlist.
 #
 # Boots services.pi-sessiond, drives one turn against a mock LLM so a pi child is

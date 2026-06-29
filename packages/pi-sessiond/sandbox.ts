@@ -13,15 +13,16 @@
 // no nsresourced, no idmap, no reboot. Kept pure (no process/fs access) so the
 // argv + policy contracts are unit-testable.
 
-// One skill-plumbing path the in-sandbox bash tool reaches (a socket, a
+// One skill-plumbing path the sandboxed pi runtime reaches (a socket, a
 // skills-def dir, the skill-config store), mirroring the NixOS module option
-// services.pi-sessiond-local.bashBinds. Paths arrive pre-expanded (systemd
-// resolves %h/%t in the Environment= the module hands the daemon) and are
-// folded into the session's Landlock FS allowlist by access mode. Landlock
-// grants the real path in place (no remapping) and pi-landlock-exec skips a
-// missing path non-fatally — so the bind-mount-era `target`/`optional` fields
-// are gone.
-export interface SandboxBind {
+// services.pi-sessiond-local.allowedPaths. The grant applies to the whole
+// per-session Landlock domain — every tool/bash/extension inherits it, not a
+// standalone bash sandbox. Paths arrive pre-expanded (systemd resolves %h/%t
+// in the Environment= the module hands the daemon) and are folded into the
+// session's Landlock FS allowlist by access mode. Landlock grants the real
+// path in place (no remapping) and pi-landlock-exec skips a missing path
+// non-fatally — so the bind-mount-era `target`/`optional` fields are gone.
+export interface AllowedPath {
   source: string;
   mode: "ro" | "rw";
 }

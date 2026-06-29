@@ -109,12 +109,12 @@ Parity ports that made the deletion possible:
 
 - **Skill plumbing** — the daemon stages skills (settings.json) and the
   bash-confirm allow-list (`SPACES_SESSIOND_BASH_CONFIRM`); each per-bash
-  sandbox gets the skill env (`SPACES_SESSIOND_BASH_ENV`: skill-config /
+  sandbox gets the skill env (`SPACES_SESSIOND_SESSION_ENV`: skill-config /
   open-url sockets, state dir, notifications file) and binds
-  (`SPACES_SESSIOND_BASH_BINDS`: sockets, skills-defs, skill-config store,
+  (`SPACES_SESSIOND_ALLOWED_PATHS`: sockets, skills-defs, skill-config store,
   notifications) plus `SPACES_SESSION_ID` and the daemon's PATH via
-  `--setenv`. `services.pi-chat.sandboxBinds` keeps its module contract and
-  forwards into `services.pi-sessiond-local.bashBinds`.
+  `--setenv`. `services.pi-chat.sandboxAllowedPaths` keeps its module contract and
+  forwards into `services.pi-sessiond-local.allowedPaths`.
 - **Per-session memory toggle** — new `set_memory` command writes/removes the
   `memory-off` marker in the daemon-side session dir; the memory extension
   resolves it via `ctx.sessionManager.getSessionDir()` (env-based resolution
@@ -138,7 +138,7 @@ Checks: `pi-session-{quick-launch,quick-launch-model-directive,idle-reap,
 attach-image,restart-preserves-model}` migrated to executor harnesses (real
 daemon or mock); `pi-session-sandbox-{env,binds}` deleted (argv contract lives
 in `pi-sessiond-sandbox` bun tests); nix-eval checks repointed at
-`SPACES_SESSIOND_BASH_BINDS`; `test-machine` asserts NO `pi-chat-<sid>.service`
+`SPACES_SESSIOND_ALLOWED_PATHS`; `test-machine` asserts NO `pi-chat-<sid>.service`
 units exist (cutover regression guard).
 
 ---

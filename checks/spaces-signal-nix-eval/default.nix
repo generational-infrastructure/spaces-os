@@ -6,8 +6,8 @@
 #      daemon args we promise; RuntimeDirectory is set).
 #   2. The module publishes the message store (read-only) and the
 #      bridge's sandbox runtime dir (read-write) into
-#      services.pi-chat.sandboxBinds, which pi-chat forwards into the
-#      daemon's SPACES_SESSIOND_BASH_BINDS env JSON (the per-session
+#      services.pi-chat.sandboxAllowedPaths, which pi-chat forwards into the
+#      daemon's SPACES_SESSIOND_ALLOWED_PATHS env JSON (the per-session
 #      sandbox bind list of pi-sessiond-local) — and crucially does NOT
 #      publish the signal-cli daemon socket or panel.sock, so a
 #      prompt-injected agent can read messages and queue sends but can
@@ -109,22 +109,23 @@ let
   bridge = enabledSystem.config.systemd.user.services.spaces-signal-bridge;
   pathUnit = enabledSystem.config.systemd.user.paths.spaces-signal-link;
   # The bind list the daemon folds into every per-session sandbox.
-  # services.pi-chat.sandboxBinds forwards into
-  # services.pi-sessiond-local.bashBinds, serialized as JSON into the
+  # services.pi-chat.sandboxAllowedPaths forwards into
+  # services.pi-sessiond-local.allowedPaths, serialized as JSON into the
   # daemon user unit's environment.
-  bindsEnv =
+  allowedPathsEnv =
     system:
-    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_BASH_BINDS;
+    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_ALLOWED_PATHS;
   # The env JSON the daemon --setenv's into every per-session sandbox.
-  # services.pi-chat.sandboxEnv forwards into pi-sessiond-local.bashEnv;
+  # services.pi-chat.sandboxEnv forwards into pi-sessiond-local.sessionEnv;
   # the in-sandbox `signal` CLI reads SPACES_SIGNAL_DB from here.
-  bashEnvJson =
-    system: system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_BASH_ENV;
+  sessionEnvJson =
+    system:
+    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_SESSION_ENV;
 in
 pkgs.runCommand "spaces-signal-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
-    bashBinds = bindsEnv enabledSystem;
+    allowedPaths = allowedPathsEnv enabledSystem;
     execStart = service.serviceConfig.ExecStart;
     runtimeDir = service.serviceConfig.RuntimeDirectory or "";
     runtimeDirMode = service.serviceConfig.RuntimeDirectoryMode or "";
@@ -164,9 +165,9 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       if builtins.elem "spaces-signal-cli" names then "yes" else "no";
     # Likewise the daemon bind list must not carry signal entries when
     # opted out — we surface the raw env JSON for a jq check.
-    disabledBashBinds = bindsEnv disabledSystem;
-    bashEnv = bashEnvJson enabledSystem;
-    disabledBashEnv = bashEnvJson disabledSystem;
+    disabledAllowedPaths = allowedPathsEnv disabledSystem;
+    sessionEnv = sessionEnvJson enabledSystem;
+    disabledSessionEnv = sessionEnvJson disabledSystem;
   }
   ''
     set -euo pipefail
@@ -199,35 +200,35 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       *) fail "unit must be wantedBy=default.target, got '$wantedBy'" ;;
     esac
 
-    # ── 2. sandbox bind integration (SPACES_SESSIOND_BASH_BINDS) ────
-    jq -e . >/dev/null <<<"$bashBinds" \
-      || fail "SPACES_SESSIOND_BASH_BINDS is not valid JSON: $bashBinds"
+    # ── 2. sandbox path-grant integration (SPACES_SESSIOND_ALLOWED_PATHS) ─
+    jq -e . >/dev/null <<<"$allowedPaths" \
+      || fail "SPACES_SESSIOND_ALLOWED_PATHS is not valid JSON: $allowedPaths"
     jq -e '
       all(.source != "%t/signal-cli/socket")
-    ' >/dev/null <<<"$bashBinds" \
-      || fail "signal-cli daemon socket MUST NOT be in the sandbox binds (security regression — agent would bypass the approval gate): $bashBinds"
+    ' >/dev/null <<<"$allowedPaths" \
+      || fail "signal-cli daemon socket MUST NOT be in the sandbox allowlist (security regression — agent would bypass the approval gate): $allowedPaths"
     jq -e '
       any(.source == "%h/.local/state/spaces/signal" and .mode == "ro")
-    ' >/dev/null <<<"$bashBinds" \
-      || fail "signal store dir must be RO in the sandbox binds (sandbox writes would forge messages / fake approvals): $bashBinds"
+    ' >/dev/null <<<"$allowedPaths" \
+      || fail "signal store dir must be RO in the sandbox allowlist (sandbox writes would forge messages / fake approvals): $allowedPaths"
     jq -e '
       any(.source == "%h/.local/share/signal-cli/attachments" and .mode == "ro")
-    ' >/dev/null <<<"$bashBinds" \
-      || fail "signal-cli attachments dir not in the sandbox binds: $bashBinds"
+    ' >/dev/null <<<"$allowedPaths" \
+      || fail "signal-cli attachments dir not in the sandbox allowlist: $allowedPaths"
 
     # ── 2*. The signal store's absolute path is published into the
-    # sandbox env (SPACES_SESSIOND_BASH_ENV → SPACES_SIGNAL_DB). The
+    # sandbox env (SPACES_SESSIOND_SESSION_ENV → SPACES_SIGNAL_DB). The
     # in-sandbox `signal` CLI resolves messages.db from this var; without
     # it the CLI falls back to $HOME/.local/state/spaces/signal, but the
     # sandbox $HOME is a private per-session agent dir, NOT the login home
     # where the RO bind above grants the store — so reads would hit a
     # nonexistent path. This couples the published env to the bind source.
-    jq -e . >/dev/null <<<"$bashEnv" \
-      || fail "SPACES_SESSIOND_BASH_ENV is not valid JSON: $bashEnv"
+    jq -e . >/dev/null <<<"$sessionEnv" \
+      || fail "SPACES_SESSIOND_SESSION_ENV is not valid JSON: $sessionEnv"
     jq -e '
       .SPACES_SIGNAL_DB == "%h/.local/state/spaces/signal/messages.db"
-    ' >/dev/null <<<"$bashEnv" \
-      || fail "signal store path not published to the sandbox env (the in-sandbox CLI would resolve messages.db under the remapped sandbox HOME and miss the RO-granted store): $bashEnv"
+    ' >/dev/null <<<"$sessionEnv" \
+      || fail "signal store path not published to the sandbox env (the in-sandbox CLI would resolve messages.db under the remapped sandbox HOME and miss the RO-granted store): $sessionEnv"
 
     # ── 2b. bridge unit shape ────────────────────────────────────────
     case "$bridgeExecStart" in
@@ -254,8 +255,8 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     # silently skips a grant whose source path is missing).
     jq -e '
       any(.source == "%t/spaces-signal/sandbox" and .mode == "rw")
-    ' >/dev/null <<<"$bashBinds" \
-      || fail "spaces-signal sandbox subdir must be in the sandbox binds (rw): $bashBinds"
+    ' >/dev/null <<<"$allowedPaths" \
+      || fail "spaces-signal sandbox subdir must be in the sandbox allowlist (rw): $allowedPaths"
 
     # ── 2d. The panel socket — and the parent dir that contains it —
     # MUST stay out of the sandbox. That's the security boundary: a
@@ -269,8 +270,8 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
             and .source != "%t/spaces-signal/sandbox/panel.sock"
             and .source != "%t/spaces-signal-panel.sock"
             and .source != "%t/spaces-signal-enqueue.sock")
-    ' >/dev/null <<<"$bashBinds" \
-      || fail "sandbox binds expose the panel socket or its parent dir (security regression — agent could self-approve sends): $bashBinds"
+    ' >/dev/null <<<"$allowedPaths" \
+      || fail "sandbox allowlist exposes the panel socket or its parent dir (security regression — agent could self-approve sends): $allowedPaths"
 
     # ── 2e. Both runtime dirs are created unconditionally by user-
     # tmpfiles, so the mandatory bind above succeeds even on hosts
@@ -341,10 +342,10 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       all(.source | startswith("%t/signal-cli/") | not)
       and all(.source | startswith("%h/.local/state/spaces/signal") | not)
       and all(.source | startswith("%t/spaces-signal") | not)
-    ' >/dev/null <<<"$disabledBashBinds" \
-      || fail "daemon sandbox binds still carry signal-cli entries after explicit enable = false: $disabledBashBinds"
-    jq -e '.SPACES_SIGNAL_DB == null' >/dev/null <<<"$disabledBashEnv" \
-      || fail "sandbox env still publishes SPACES_SIGNAL_DB after explicit enable = false: $disabledBashEnv"
+    ' >/dev/null <<<"$disabledAllowedPaths" \
+      || fail "daemon sandbox allowlist still carries signal-cli entries after explicit enable = false: $disabledAllowedPaths"
+    jq -e '.SPACES_SIGNAL_DB == null' >/dev/null <<<"$disabledSessionEnv" \
+      || fail "sandbox env still publishes SPACES_SIGNAL_DB after explicit enable = false: $disabledSessionEnv"
 
     # ── 3. spaces-signal without pi-chat must fail eval ──────────────
     if [ "$brokenSucceeded" = "yes" ]; then

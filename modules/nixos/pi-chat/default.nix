@@ -450,7 +450,7 @@ in
       '';
     };
 
-    sandboxBinds = lib.mkOption {
+    sandboxAllowedPaths = lib.mkOption {
       type = lib.types.listOf (
         lib.types.submodule {
           options = {
@@ -497,7 +497,7 @@ in
 
         NixOS modules that add a skill **MUST** publish their required
         host paths through this option. Forwarded into
-        `services.pi-sessiond-local.bashBinds` after the pi-chat-owned
+        `services.pi-sessiond-local.allowedPaths` after the pi-chat-owned
         baseline binds; the daemon folds them into each session's Landlock
         FS allowlist.
       '';
@@ -517,10 +517,10 @@ in
         path a skill CLI must resolve independently of the sandbox's
         remapped `$HOME`: each session runs under a private per-session
         agent dir as `$HOME`, so a `~`-relative default no longer points at
-        a host path granted via `sandboxBinds`. May contain systemd
+        a host path granted via `sandboxAllowedPaths`. May contain systemd
         specifiers `%h` / `%t`, expanded in the daemon unit's Environment=.
-        Forwarded into `services.pi-sessiond-local.bashEnv` after the
-        pi-chat-owned baseline — same contract as `sandboxBinds`.
+        Forwarded into `services.pi-sessiond-local.sessionEnv` after the
+        pi-chat-owned baseline — same contract as `sandboxAllowedPaths`.
       '';
     };
 
@@ -677,14 +677,14 @@ in
       # Skill plumbing for the per-session sandboxes — same env + binds the
       # panel used to assemble per session, now applied daemon-side.
       # %h/%t expand in the daemon unit's Environment=.
-      bashEnv = {
+      sessionEnv = {
         SKILL_CONFIG_SOCKET = "%t/spaces-skill-config.sock";
         SPACES_OPEN_URL_SOCKET = "%t/spaces-pi-open-url.sock";
         SPACES_PI_CHAT_STATE_DIR = "%h/${stateRel}";
         SPACES_NOTIFICATIONS_FILE = "%h/${notificationsRel}/history.json";
       }
       // cfg.sandboxEnv;
-      bashBinds = [
+      allowedPaths = [
         # A missing socket is fine: pi-landlock-exec skips an absent grant
         # non-fatally, and the CLIs degrade gracefully when the skill-config
         # daemon / panel listener is down.
@@ -705,7 +705,7 @@ in
         }
         { source = "%h/${notificationsRel}"; }
       ]
-      ++ cfg.sandboxBinds;
+      ++ cfg.sandboxAllowedPaths;
     };
 
     # llama-swap supplies the default LLM endpoint; enable by default

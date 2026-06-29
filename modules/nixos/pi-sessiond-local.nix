@@ -164,20 +164,20 @@ in
       '';
     };
 
-    bashEnv = lib.mkOption {
+    sessionEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = ''
         Extra environment variables --setenv'd into each per-session pi unit
-        (skill plumbing: SKILL_CONFIG_SOCKET, …); the in-domain bash tool
-        inherits them. Values may
+        (skill plumbing: SKILL_CONFIG_SOCKET, …); the whole runtime — every
+        tool/bash/extension in the session domain — inherits them. Values may
         use systemd specifiers `%h` / `%t` — they are expanded by systemd in
         the daemon unit's Environment= before the daemon reads them. Literal
         `%` characters are NOT escaped; avoid them.
       '';
     };
 
-    bashBinds = lib.mkOption {
+    allowedPaths = lib.mkOption {
       type = lib.types.listOf (
         lib.types.submodule {
           options = {
@@ -202,10 +202,11 @@ in
       );
       default = [ ];
       description = ''
-        Skill-plumbing paths granted into each per-session pi sandbox's
-        Landlock FS allowlist by access mode. NixOS modules that ship a skill
-        publish their host paths here — same contract as the panel-era
-        `services.pi-chat.sandboxBinds`, which forwards into this option.
+        Skill-plumbing paths granted into each per-session pi runtime's
+        Landlock FS allowlist by access mode (the whole domain, inherited by
+        every tool/bash/extension). NixOS modules that ship a skill publish
+        their host paths here — same contract as the panel-era
+        `services.pi-chat.sandboxAllowedPaths`, which forwards into this option.
       '';
     };
 
@@ -274,8 +275,10 @@ in
         # Skill plumbing for the per-session sandboxes. systemd expands the
         # %h/%t specifiers inside these JSON strings before the daemon
         # parses them, so sandbox.ts only ever sees absolute paths.
-        SPACES_SESSIOND_BASH_ENV = builtins.toJSON cfg.bashEnv;
-        SPACES_SESSIOND_BASH_BINDS = builtins.toJSON (map (b: { inherit (b) source mode; }) cfg.bashBinds);
+        SPACES_SESSIOND_SESSION_ENV = builtins.toJSON cfg.sessionEnv;
+        SPACES_SESSIOND_ALLOWED_PATHS = builtins.toJSON (
+          map (b: { inherit (b) source mode; }) cfg.allowedPaths
+        );
         # PATH for the daemon AND (via main.ts --setenv forwarding) every
         # per-session sandbox is set through serviceConfig.Environment below —
         # NixOS pins environment.PATH for user units, so it can't be
