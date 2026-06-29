@@ -129,7 +129,7 @@
       #   };
       #
       # The service module captures spaces-os's `self` here so its
-      # `nixosModules.pi-sessiond` / `nixosModules.pi-chat` references
+      # `nixosModules.pi-sessiond-local` / `nixosModules.pi-chat` references
       # resolve to spaces-os's pinned modules (and, transitively, its
       # pinned llm-agents pi), independent of which consumer flake
       # evaluates the inventory.

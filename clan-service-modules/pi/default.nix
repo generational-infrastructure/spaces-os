@@ -340,7 +340,9 @@
           in
           {
             imports = [
-              flake-self.nixosModules.pi-sessiond
+              # Keyed identically to pi-chat's import so a dual-role machine
+              # (executor + client) collapses the two into one module.
+              (flake-self.nixosModules.pi-sessiond-local // { key = "spaces/nixosModules/pi-sessiond-local"; })
               # llama-swap = the LLM endpoint pi-sessiond.llmUrl points at.
               # Defaults serve gemma4/qwen2.5 on a Vulkan-accelerated llama.cpp
               # at 127.0.0.1:8012 (matching pi-sessiond.llmUrl's default).
@@ -405,7 +407,18 @@
               "${instanceName}-openrouter".prompts."api-key".persist = true;
             };
 
-            services.pi-sessiond = {
+            # The per-user `--user` executor (docs/pi-sessiond-per-user-refactor.md).
+            # No root daemon: this runs in a user manager at that user's own uid.
+            # The host provisions the lingering account that runs it (a real user
+            # with `users.users.<name>.linger = true`) and makes the token /
+            # llama-swap-key clan vars readable by that user — user onboarding is
+            # the host action; only integration enablement is on-the-fly. On a
+            # dual-role (executor + client) desktop machine the executor *is* the
+            # human user's daemon, bound publicly; on a headless executor the host
+            # provisions a dedicated lingering user. memory.enable stays off (the
+            # prior root executor carried no sediment — keep it out of the server
+            # closure).
+            services.pi-sessiond-local = {
               enable = true;
               host = effectiveHost;
               inherit (settings)
@@ -430,6 +443,7 @@
               };
               serveWebUi = settings.webUi.enable;
               peers = peersList;
+              memory.enable = false;
             };
 
             # Caddy reverse-proxies fronting the executor's two optional

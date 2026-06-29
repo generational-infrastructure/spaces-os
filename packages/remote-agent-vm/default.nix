@@ -3,7 +3,7 @@
 # desktop chat panel against a real REMOTE pi-sessiond executor, the same way
 # agent-vm drives a single desktop:
 #
-#   server  — services.pi-sessiond executor + a deterministic mock LLM,
+#   server  — the per-user `--user` pi-sessiond executor + a deterministic mock LLM,
 #             192.0.2.1, ssh on host :2223. No desktop.
 #   client  — the full test-machine desktop (greetd -> niri -> pi-chat),
 #             192.0.2.2, ssh on host :2224, with services.pi-chat.wsUrl
@@ -91,7 +91,6 @@ else
     # Server: pi-sessiond executor + mock LLM, no desktop.
     serverModules = [
       inputs.self.nixosModules.test-support
-      inputs.self.nixosModules.pi-sessiond
       (netNode {
         ip = "192.0.2.1";
         mac = "52:54:00:ab:cd:01";
@@ -103,7 +102,10 @@ else
         {
           services.greetd.enable = lib.mkForce false;
           services.llama-swap.enable = lib.mkForce false;
-          services.pi-sessiond = {
+          # The per-user `--user` executor runs under the (linger-enabled) test
+          # user's manager — no root daemon. docs/pi-sessiond-per-user-refactor.md.
+          users.users.test.linger = true;
+          services.pi-sessiond-local = {
             enable = true;
             executorId = "server";
             host = "0.0.0.0";

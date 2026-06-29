@@ -1,11 +1,10 @@
-# Shared child-process wiring for the two pi-sessiond deployment modules.
+# Shared child-process wiring for the pi-sessiond-local executor module.
 #
-# Both modules — the system/remote executor (./default.nix) and the desktop
-# loopback user service (../pi-sessiond-local.nix) — run the SAME daemon
-# binary: a supervisor that spawns one `pi --mode rpc` child per session and
-# confines it with the pi-landlock-exec launcher. Only the systemd shape
-# (system vs user manager, uid handling, supervisor hardening) and the option
-# surface differ; this factors out the bits that are identical between them.
+# Factored out of ./default.nix so the option surface and the child/settings
+# composition stay separable. The one module runs the daemon as a `--user`
+# service (the desktop loopback default or a server's per-user remote
+# executor); this builds the per-session pi child's extension list + the
+# settings.json it reads, and resolves the Landlock launcher.
 #
 #   - `materialize` copies each extension to its OWN tracked store path. A
 #     bare `toString` of a flake-relative path embeds the whole-flake
@@ -41,11 +40,11 @@ in
 {
   inherit jsonFormat;
 
-  # The per-session Landlock launcher (docs/landlock-sandbox-design.md §6):
-  # the sole sandbox path for BOTH executors. It self-applies the deny-by-
-  # default Landlock domain before exec'ing pi — no userns, no nsresourced,
-  # no reboot. The system executor additionally drops the unit to the
-  # pi-session uid via systemd-run --uid; the desktop runs it as the user.
+  # The per-session Landlock launcher (docs/landlock-sandbox-design.md §6): the
+  # sole sandbox path. It self-applies the deny-by-default Landlock domain
+  # before exec'ing pi — no userns, no nsresourced, no reboot. The child runs
+  # as the user (the supervisor's own uid); Landlock confines but never drops
+  # privilege.
   landlockExec = lib.getExe inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-landlock-exec;
 
   # Compose a session child's extension list + the settings.json it reads.

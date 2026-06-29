@@ -4,7 +4,7 @@
 # Two nodes, mirroring docs/remote-pi-design.md's topology (a client machine
 # attaching to the always-on server executor):
 #
-#   server  — runs `services.pi-sessiond` bound on 0.0.0.0 (the remote
+#   server  — runs the per-user `--user` pi-sessiond executor (a linger-enabled
 #             executor), backed by a deterministic mock llama-swap so the
 #             in-process pi (embedded SDK) replies offline with "Hello, world!".
 #   client  — no executor of its own; reaches the server over the test
@@ -39,9 +39,18 @@ pkgs.testers.runNixOSTest {
   nodes.server =
     { lib, pkgs, ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond ];
+      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
 
-      services.pi-sessiond = {
+      # A real linger-enabled account runs the per-user `--user` executor (the
+      # server replica of the desktop mechanism) — no root daemon, no shared
+      # uid. docs/pi-sessiond-per-user-refactor.md.
+      users.users.agent = {
+        isNormalUser = true;
+        uid = 1001;
+        linger = true;
+      };
+
+      services.pi-sessiond-local = {
         enable = true;
         executorId = "server";
         host = "0.0.0.0";
@@ -51,6 +60,8 @@ pkgs.testers.runNixOSTest {
         defaultModel = "mock-model";
         defaultProvider = "local";
         openFirewall = true;
+        # No sediment memory in the test closure.
+        memory.enable = false;
         openrouter = {
           enable = true;
           apiKeyFile = pkgs.writeText "or-test-key" "sk-or-dummy-test";
@@ -88,7 +99,9 @@ pkgs.testers.runNixOSTest {
 
     with subtest("server executor comes up and listens"):
         server.wait_for_unit("pi-remote-mock-llm.service")
-        server.wait_for_unit("pi-sessiond.service")
+        server.wait_for_unit("user@1001.service")
+        server.wait_until_succeeds(
+            "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
         server.wait_for_open_port(${toString wsPort})
 
     client.wait_for_unit("multi-user.target")
@@ -111,7 +124,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("session is persisted to disk as jsonl"):
         server.wait_until_succeeds(
-            "find /var/lib/pi-sessiond/sessions -name '*.jsonl' | grep -q .",
+            "find /home/agent/.local/state/pi-sessiond-local/sessions -name '*.jsonl' | grep -q .",
             timeout=15,
         )
 
@@ -141,7 +154,7 @@ pkgs.testers.runNixOSTest {
         # Restarting the daemon drops every in-process AgentSession; the
         # session is cold on disk (session.jsonl) and the SDK SessionManager
         # reloads it on the next attach.
-        server.systemctl("restart pi-sessiond.service")
+        server.succeed("systemctl --user --machine=agent@.host restart pi-sessiond-local.service")
         server.wait_for_open_port(${toString wsPort})
         client.succeed(
             "${clientPython}/bin/python3 ${driver} resume "

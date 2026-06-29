@@ -30,9 +30,15 @@ pkgs.testers.runNixOSTest {
   nodes.machine =
     { ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond ];
+      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
 
-      services.pi-sessiond = {
+      users.users.agent = {
+        isNormalUser = true;
+        uid = 1001;
+        linger = true;
+      };
+
+      services.pi-sessiond-local = {
         enable = true;
         host = "127.0.0.1";
         port = wsPort;
@@ -42,6 +48,7 @@ pkgs.testers.runNixOSTest {
         defaultProvider = "local";
         # Keep the live-idle session up long enough to inspect it.
         idleTimeoutMs = 1800000;
+        memory.enable = false;
       };
 
       systemd.services.pi-tmpdir-mock-llm = {
@@ -62,7 +69,9 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     start_all()
     machine.wait_for_unit("pi-tmpdir-mock-llm.service")
-    machine.wait_for_unit("pi-sessiond.service")
+    machine.wait_for_unit("user@1001.service")
+    machine.wait_until_succeeds(
+        "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
     machine.wait_for_open_port(${toString wsPort})
 
     ws = "ws://127.0.0.1:${toString wsPort}"
@@ -75,18 +84,19 @@ pkgs.testers.runNixOSTest {
         if line.startswith("SESSION_ID=")
     )
 
-    session_dir = f"/var/lib/pi-sessiond/sessions/{sid}"
+    session_dir = f"/home/agent/.local/state/pi-sessiond-local/sessions/{sid}"
     tmp_dir = f"{session_dir}/tmp"
     policy = f"{session_dir}/landlock.json"
     ll = f"${landlock}/bin/pi-landlock-exec --json {policy} --"
 
     with subtest("the child's TMPDIR is the private session scratch dir"):
         unit = f"pi-session-{sid}.service"
+        show = "systemctl --user --machine=agent@.host show -p MainPID --value"
         machine.wait_until_succeeds(
-            f"systemctl show -p MainPID --value {unit} | grep -qE '^[1-9][0-9]*$'",
+            f"{show} {unit} | grep -qE '^[1-9][0-9]*$'",
             timeout=30,
         )
-        spid = machine.succeed(f"systemctl show -p MainPID --value {unit}").strip()
+        spid = machine.succeed(f"{show} {unit}").strip()
         environ = machine.succeed(f"tr '\\0' '\\n' < /proc/{spid}/environ")
         assert f"TMPDIR={tmp_dir}" in environ.splitlines(), \
             f"child TMPDIR is not {tmp_dir}; environ was:\n{environ}"

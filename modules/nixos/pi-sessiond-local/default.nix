@@ -33,7 +33,7 @@
 let
   cfg = config.services.pi-sessiond-local;
 
-  sessiondLib = import ./pi-sessiond/lib.nix { inherit pkgs lib inputs; };
+  sessiondLib = import ./lib.nix { inherit pkgs lib inputs; };
   inherit (sessiondLib) jsonFormat landlockExec;
 
   # Long-term memory (sediment) — same store the local spawn pattern used
@@ -41,7 +41,7 @@ let
   # executor switch. The extension runs in-process, so the *daemon*
   # namespace gets the DB bind; the sandboxed pi children never see it.
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
-  memoryExtensionPkg = pkgs.callPackage ./pi-chat/extensions/memory { sediment = sedimentPkg; };
+  memoryExtensionPkg = pkgs.callPackage ../pi-chat/extensions/memory { sediment = sedimentPkg; };
   memoryDbRel = ".local/state/spaces/pi/sediment";
 
   child = sessiondLib.mkChild {
@@ -98,8 +98,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = import ../../packages/pi-sessiond { inherit pkgs inputs; };
-      defaultText = lib.literalExpression "import ../../packages/pi-sessiond { inherit pkgs inputs; }";
+      default = import ../../../packages/pi-sessiond { inherit pkgs inputs; };
+      defaultText = lib.literalExpression "import ../../../packages/pi-sessiond { inherit pkgs inputs; }";
       description = "The pi-sessiond daemon package (the WebSocket transport + session registry).";
     };
 
@@ -251,8 +251,8 @@ in
 
     extensions = lib.mkOption {
       type = lib.types.listOf lib.types.path;
-      default = [ ./pi-chat/extensions/bash-confirm.ts ];
-      defaultText = lib.literalExpression "[ ./pi-chat/extensions/bash-confirm.ts ]";
+      default = [ ../pi-chat/extensions/bash-confirm.ts ];
+      defaultText = lib.literalExpression "[ ../pi-chat/extensions/bash-confirm.ts ]";
       description = ''
         Extra pi extensions loaded into every pi rpc child via its settings.json.
         Defaults to bash-confirm, which gates `bash` behind the confirm

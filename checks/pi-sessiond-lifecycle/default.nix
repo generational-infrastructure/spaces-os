@@ -26,9 +26,15 @@ let
     { idleTimeoutMs, maxLive }:
     { ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond ];
+      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
 
-      services.pi-sessiond = {
+      users.users.agent = {
+        isNormalUser = true;
+        uid = 1001;
+        linger = true;
+      };
+
+      services.pi-sessiond-local = {
         enable = true;
         host = "127.0.0.1";
         port = wsPort;
@@ -37,6 +43,7 @@ let
         defaultModel = "mock-model";
         defaultProvider = "local";
         inherit idleTimeoutMs maxLive;
+        memory.enable = false;
       };
 
       # Deterministic offline LLM so the spawned pi streams a fixed reply.
@@ -98,7 +105,9 @@ pkgs.testers.runNixOSTest {
 
     for node in (gc, cap):
         node.wait_for_unit("pi-lifecycle-mock-llm.service")
-        node.wait_for_unit("pi-sessiond.service")
+        node.wait_for_unit("user@1001.service")
+        node.wait_until_succeeds(
+            "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
         node.wait_for_open_port(${toString wsPort})
 
     with subtest("idle-GC disposes a detached session; attach resurrects it"):

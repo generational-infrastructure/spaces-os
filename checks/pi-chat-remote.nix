@@ -1,8 +1,9 @@
 # Two-VM full-system test: a desktop chat panel drives a session on a REMOTE
 # pi-sessiond executor over WebSocket.
 #
-#   server  — services.pi-sessiond on 0.0.0.0 + a deterministic mock LLM. No
-#             desktop; this is the always-on executor.
+#   server  — the per-user `--user` pi-sessiond executor on 0.0.0.0 (a linger-
+#             enabled account) + a deterministic mock LLM. No desktop; this is
+#             the always-on executor.
 #   client  — the full test-machine desktop (greetd -> niri -> pi-chat panel),
 #             with services.pi-chat.wsUrl pointed at ws://server:8770 and no
 #             local executor or LLM.
@@ -30,9 +31,18 @@ pkgs.testers.runNixOSTest {
   nodes.server =
     { pkgs, ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond ];
+      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
 
-      services.pi-sessiond = {
+      # A real linger-enabled account runs the per-user `--user` executor (the
+      # server replica of the desktop mechanism) — no root daemon, no shared
+      # uid. docs/pi-sessiond-per-user-refactor.md.
+      users.users.agent = {
+        isNormalUser = true;
+        uid = 1001;
+        linger = true;
+      };
+
+      services.pi-sessiond-local = {
         enable = true;
         executorId = "server";
         host = "0.0.0.0";
@@ -42,6 +52,8 @@ pkgs.testers.runNixOSTest {
         defaultModel = "mock-model";
         defaultProvider = "local";
         openFirewall = true;
+        # No sediment memory in the test closure.
+        memory.enable = false;
       };
 
       # The executor's "llama-swap": a deterministic, offline mock so the
@@ -110,7 +122,9 @@ pkgs.testers.runNixOSTest {
 
       with subtest("server executor is up"):
           server.wait_for_unit("pi-remote-mock-llm.service")
-          server.wait_for_unit("pi-sessiond.service")
+          server.wait_for_unit("user@1001.service")
+          server.wait_until_succeeds(
+              "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
           server.wait_for_open_port(${toString wsPort})
 
       with subtest("client desktop + panel come up"):
@@ -144,7 +158,7 @@ pkgs.testers.runNixOSTest {
           client.log("== client quickshell log ==\n" + qlog)
           _, cfg = client.execute("cat /etc/spaces/pi-chat.json 2>&1")
           client.log("== /etc/spaces/pi-chat.json ==\n" + cfg)
-          _, sj = server.execute("journalctl -u pi-sessiond.service -b --no-pager 2>&1 | tail -120")
+          _, sj = server.execute("journalctl --user-unit pi-sessiond-local.service _UID=1001 -b --no-pager 2>&1 | tail -120")
           server.log("== server pi-sessiond journal ==\n" + sj)
 
       with subtest("panel drives a session on the REMOTE executor"):

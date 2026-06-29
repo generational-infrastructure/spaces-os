@@ -291,8 +291,10 @@ in
     # enabled by the mere import.
     inputs.self.nixosModules.voxtype
     # The per-user loopback executor the panel attaches to by default
-    # (services.pi-chat.localExecutor enables + port-syncs it).
-    inputs.self.nixosModules.pi-sessiond-local
+    # (services.pi-chat.localExecutor enables + port-syncs it). Keyed so a
+    # dual-role clan machine (this client + the executor role, which imports
+    # the same module) collapses the two imports into one.
+    (inputs.self.nixosModules.pi-sessiond-local // { key = "spaces/nixosModules/pi-sessiond-local"; })
   ];
 
   options.services.pi-chat = {

@@ -188,9 +188,9 @@ let
     (mkRoleModule "executor" "traube")
   ];
 
-  kiwiSessiond = kiwiSystem.config.services.pi-sessiond;
+  kiwiSessiond = kiwiSystem.config.services.pi-sessiond-local;
   kiwiChat = kiwiSystem.config.services.pi-chat;
-  traubeSessiond = traubeSystem.config.services.pi-sessiond;
+  traubeSessiond = traubeSystem.config.services.pi-sessiond-local;
   traubeCaddy = traubeSystem.config.services.caddy;
   kiwiCaddy = kiwiSystem.config.services.caddy;
 in
@@ -232,6 +232,14 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
     kiwiLlmApiKeyFile = toString kiwiSessiond.llmApiKeyFile;
     traubeLlamaListen = traubeSystem.config.services.llama-swap.listenAddress;
     traubeLlmApiKeyFile = toString traubeSessiond.llmApiKeyFile;
+
+    # Per-user model: each executor is a `--user` service, no root daemon.
+    kiwiUserUnit =
+      if kiwiSystem.config.systemd.user.services ? pi-sessiond-local then "true" else "false";
+    kiwiNoRootDaemon = if kiwiSystem.config.systemd.services ? pi-sessiond then "false" else "true";
+    traubeUserUnit =
+      if traubeSystem.config.systemd.user.services ? pi-sessiond-local then "true" else "false";
+    traubeNoRootDaemon = if traubeSystem.config.systemd.services ? pi-sessiond then "false" else "true";
   }
   ''
     set -euo pipefail
@@ -247,6 +255,18 @@ pkgs.runCommand "pi-clan-service-nix-eval-test"
       || { echo "FAIL: kiwi exec firewall = $kiwiSessiondFirewall (expected false)"; exit 1; }
     echo "$kiwiTokenFile" | grep -q "pi-pi-sessiond-token" \
       || { echo "FAIL: kiwi tokenFile = $kiwiTokenFile"; exit 1; }
+
+    # Per-user model: each executor is a systemd `--user` service at the user's
+    # own uid — no root systemd.services.pi-sessiond daemon survives.
+    # docs/pi-sessiond-per-user-refactor.md.
+    [ "$kiwiUserUnit" = "true" ] \
+      || { echo "FAIL: kiwi has no systemd.user.services.pi-sessiond-local"; exit 1; }
+    [ "$kiwiNoRootDaemon" = "true" ] \
+      || { echo "FAIL: kiwi still defines a root systemd.services.pi-sessiond"; exit 1; }
+    [ "$traubeUserUnit" = "true" ] \
+      || { echo "FAIL: traube has no systemd.user.services.pi-sessiond-local"; exit 1; }
+    [ "$traubeNoRootDaemon" = "true" ] \
+      || { echo "FAIL: traube still defines a root systemd.services.pi-sessiond"; exit 1; }
 
     # Kiwi client: defaultExecutor = local; kiwi (loopback) + traube
     # (via meta.domain) both listed; both share the same token file.
