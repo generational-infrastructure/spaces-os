@@ -173,7 +173,7 @@ denies both — neither path is granted — but keep it explicit.
 | system unit, `DynamicUser=` | distinct *real* host uid + ns | **Multi-tenant / belt-and-suspenders tier.** A genuine second (DAC) layer, but `DynamicUser` is root-only (system unit) → a rebuild to add an integration and a root broker: violates req 10. Reserve for an untrusted-third-party tier or a server-side executor where root is already in play. |
 | bubblewrap per call | ns only; same uid unless userns-mapped | Subsumed by the Landlock domain (declarative, inherited across exec, with cgroup limits from the unit). Skip. |
 | OCI container (podman quadlet) | uid + ns + image | **Packaging tier**: third-party MCP servers often ship as containers; rootless podman quadlets keep req 10. The manifest still drives the unit. |
-| microVM (microvm.nix / firecracker) | kernel boundary | **Escape-hatch tier** for genuinely untrusted code. RAM per VM, no Wayland/GPU, files via virtiofs — not the default (desktop integrations impossible inside it). |
+| microVM (microvm.nix / firecracker; **muvm/libkrun**) | kernel boundary | **Escape-hatch / untrusted tier.** Strongest boundary (own kernel), historically impractical for desktop integrations: RAM per VM, no Wayland/GPU, files only via virtiofs. A muvm/libkrun runner — **munix** (clan.lol) — closes most of that gap (GPU acceleration, Wayland, PipeWire, host `--bind`/`--expose` paths, per-VM uid/gid), making a genuinely-untrusted tier practical. Kept for a later iteration (§8); needs `/dev/kvm` + a recent kernel, so not the v1 default. |
 | WASM/WASI components | capability-true | Ecosystem mismatch (integrations are Python/Node CLIs). Rejected for now. |
 
 Two execution shapes, both needed:
@@ -578,6 +578,16 @@ unchanged.
   Landlock ABI floor; keep `RestrictNamespaces=` + the seccomp filter so
   the sandbox can't unshare its way out; offer the `DynamicUser` /
   container / microVM tiers (§2) for higher-trust needs.
+- **microVM untrusted tier via muvm/libkrun (later iteration).** The §2
+  microVM objections — no GPU/Wayland, awkward virtiofs file exchange,
+  heavy per-VM cost — are largely answered by a desktop-integration
+  microVM runner, **munix** (`git.clan.lol/clan/munix`, muvm/libkrun):
+  GPU + Wayland + PipeWire passthrough, host `--bind`/`--ro-bind`/`--expose`
+  paths, and a per-VM uid/gid. It is WIP and needs `/dev/kvm` + a recent
+  kernel (6.13+ for GPU), so it is not the v1 mechanism — but it is the
+  leading candidate for a genuinely-untrusted integration tier (mcpmarket
+  servers; a kernel-boundary backstop above the same-uid Landlock wall)
+  in a later iteration. Keep it in mind.
 - **Landlock ABI availability.** Abstract-unix-socket and signal scoping
   need ABI 6 (Linux 6.12+). On older kernels `pi-landlock-exec` degrades
   best-effort: FS and ptrace/mem walls hold; an integration's abstract
