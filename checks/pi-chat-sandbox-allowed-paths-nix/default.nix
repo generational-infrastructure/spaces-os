@@ -2,7 +2,7 @@
 #
 # NixOS modules that ship a skill publish their host paths via
 # services.pi-chat.sandboxAllowedPaths; pi-chat forwards them into
-# services.pi-sessiond-local.allowedPaths AFTER its own five baseline
+# services.pi-sessiond.allowedPaths AFTER its own five baseline
 # grants (skill-config socket, open-url socket, skills-defs, the
 # skill-config store, notifications). The daemon module serializes
 # that list as JSON into the user unit env var
@@ -75,8 +75,7 @@ let
   defaultSystem = mkSystem "sandbox-allowed-paths-default" { };
 
   allowedPathsEnv =
-    system:
-    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_ALLOWED_PATHS;
+    system: system.config.systemd.user.services.pi-sessiond.environment.SPACES_SESSIOND_ALLOWED_PATHS;
 in
 pkgs.runCommand "pi-chat-sandbox-allowed-paths-nix-test"
   {

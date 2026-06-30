@@ -342,7 +342,7 @@
             imports = [
               # Keyed identically to pi-chat's import so a dual-role machine
               # (executor + client) collapses the two into one module.
-              (flake-self.nixosModules.pi-sessiond-local // { key = "spaces/nixosModules/pi-sessiond-local"; })
+              (flake-self.nixosModules.pi-sessiond // { key = "spaces/nixosModules/pi-sessiond"; })
               # llama-swap = the LLM endpoint pi-sessiond.llmUrl points at.
               # Defaults serve gemma4/qwen2.5 on a Vulkan-accelerated llama.cpp
               # at 127.0.0.1:8012 (matching pi-sessiond.llmUrl's default).
@@ -418,7 +418,7 @@
             # provisions a dedicated lingering user. memory.enable stays off (the
             # prior root executor carried no sediment — keep it out of the server
             # closure).
-            services.pi-sessiond-local = {
+            services.pi-sessiond = {
               enable = true;
               host = effectiveHost;
               inherit (settings)

@@ -214,19 +214,19 @@ let
             )
 
         with subtest("daemon agent config is staged (settings + skills + allowlist)"):
-            # pi-sessiond-local seeds its own agent dir from the module's
+            # pi-sessiond seeds its own agent dir from the module's
             # settings template at startup; skills ride settings.json and
             # the bash-confirm allow-list is a sibling file. The legacy
             # panel-side ~/.local/state/spaces/pi/pi-agent dir is gone.
             machine.wait_until_succeeds(
-                "test -f /home/test/.local/state/pi-sessiond-local/pi-agent/settings.json",
+                "test -f /home/test/.local/state/pi-sessiond/pi-agent/settings.json",
                 timeout=60,
             )
             machine.succeed(
-                "grep -q 'skills' /home/test/.local/state/pi-sessiond-local/pi-agent/settings.json"
+                "grep -q 'skills' /home/test/.local/state/pi-sessiond/pi-agent/settings.json"
             )
             machine.succeed(
-                "test -f /home/test/.local/state/pi-sessiond-local/pi-agent/bash-confirm.json"
+                "test -f /home/test/.local/state/pi-sessiond/pi-agent/bash-confirm.json"
             )
 
         with subtest("llama-swap is up"):
@@ -294,10 +294,10 @@ let
                 # run rather than via timeout.
                 _, j = machine.execute(
                     sudo_env
-                    + "journalctl --user -b --no-pager -u pi-sessiond-local.service "
+                    + "journalctl --user -b --no-pager -u pi-sessiond.service "
                     "2>&1 | tail -100"
                 )
-                machine.log("== pi-sessiond-local journal ==\n" + j)
+                machine.log("== pi-sessiond journal ==\n" + j)
                 _, qs_log = machine.execute(
                     "tail -n 80 /run/user/${uid}/quickshell/by-id/*/log.log 2>&1"
                 )
@@ -358,10 +358,10 @@ let
                 machine.log("== sediment stats ==\n" + sed_stats)
                 _, mem_units = machine.execute(
                     sudo_env
-                    + "journalctl --user -b --no-pager -u pi-sessiond-local.service "
+                    + "journalctl --user -b --no-pager -u pi-sessiond.service "
                     "2>&1 | tail -120"
                 )
-                machine.log("== pi-sessiond-local journal (memory) ==\n" + mem_units)
+                machine.log("== pi-sessiond journal (memory) ==\n" + mem_units)
                 _, qs_log = machine.execute(
                     "for f in /run/user/${uid}/quickshell/by-id/*/log.log; do "
                     "  echo === $f ===; tail -n 400 \"$f\" 2>&1; "
@@ -377,19 +377,19 @@ let
                     "memory e2e failed (exit={}):\n{}".format(code, mem_out)
                 )
 
-        # ── Loopback executor (pi-sessiond-local): security invariants ──
+        # ── Loopback executor (pi-sessiond): security invariants ──
         # Folded in from the former local-executor-machine check: these
         # depend on the same full boot path (greetd → user manager →
         # daemon) this test already pays for. The sandbox probe drives
         # the mock LLM, so it stays local-mode only.
         with subtest("loopback daemon runs in the user manager, not as root"):
             machine.wait_until_succeeds(
-                "systemctl --user --machine=test@.host is-active pi-sessiond-local.service",
+                "systemctl --user --machine=test@.host is-active pi-sessiond.service",
                 timeout=120,
             )
             pid = machine.succeed(
                 "systemctl --user --machine=test@.host show -p MainPID --value "
-                "pi-sessiond-local.service"
+                "pi-sessiond.service"
             ).strip()
             assert pid != "0", "daemon has no main pid"
             daemon_uid = machine.succeed(f"stat -c %u /proc/{pid}").strip()
@@ -409,7 +409,7 @@ let
             machine.succeed(
                 "su - test -c 'XDG_RUNTIME_DIR=/run/user/${uid} "
                 "${pyWs}/bin/python3 ${wsProbe} 8768 "
-                "/run/user/${uid}/pi-sessiond-local/token auth'"
+                "/run/user/${uid}/pi-sessiond/token auth'"
             )
 
         ${lib.optionalString (!useOpenrouter) ''
@@ -417,7 +417,7 @@ let
               out = machine.succeed(
                   "su - test -c 'XDG_RUNTIME_DIR=/run/user/${uid} "
                   "${pyWs}/bin/python3 ${wsProbe} 8768 "
-                  "/run/user/${uid}/pi-sessiond-local/token sandbox'"
+                  "/run/user/${uid}/pi-sessiond/token sandbox'"
               )
               assert "HOME-DENIED" in out
               assert "home-marker-secret" not in out

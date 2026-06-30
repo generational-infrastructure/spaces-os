@@ -3,7 +3,7 @@
 // The templates come from the Nix store (mode 0444). A naive copy
 // preserves that mode, so the second staging onto the leftover
 // read-only file fails EACCES and the daemon crash-loops (observed
-// in production: pi-sessiond-local restart counter 88). The contract:
+// in production: pi-sessiond restart counter 88). The contract:
 // staging is idempotent, and re-staging replaces stale content even
 // over pre-existing read-only residue.
 import { expect, test } from "bun:test";

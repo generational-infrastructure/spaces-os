@@ -26,7 +26,7 @@ let
     { idleTimeoutMs, maxLive }:
     { ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
+      imports = [ inputs.self.nixosModules.pi-sessiond ];
 
       users.users.agent = {
         isNormalUser = true;
@@ -34,7 +34,7 @@ let
         linger = true;
       };
 
-      services.pi-sessiond-local = {
+      services.pi-sessiond = {
         enable = true;
         host = "127.0.0.1";
         port = wsPort;
@@ -107,7 +107,7 @@ pkgs.testers.runNixOSTest {
         node.wait_for_unit("pi-lifecycle-mock-llm.service")
         node.wait_for_unit("user@1001.service")
         node.wait_until_succeeds(
-            "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
+            "systemctl --user --machine=agent@.host is-active pi-sessiond.service", timeout=60)
         node.wait_for_open_port(${toString wsPort})
 
     with subtest("idle-GC disposes a detached session; attach resurrects it"):

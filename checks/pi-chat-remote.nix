@@ -31,7 +31,7 @@ pkgs.testers.runNixOSTest {
   nodes.server =
     { pkgs, ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
+      imports = [ inputs.self.nixosModules.pi-sessiond ];
 
       # A real linger-enabled account runs the per-user `--user` executor (the
       # server replica of the desktop mechanism) — no root daemon, no shared
@@ -42,7 +42,7 @@ pkgs.testers.runNixOSTest {
         linger = true;
       };
 
-      services.pi-sessiond-local = {
+      services.pi-sessiond = {
         enable = true;
         executorId = "server";
         host = "0.0.0.0";
@@ -97,7 +97,7 @@ pkgs.testers.runNixOSTest {
       environment.systemPackages = [ pkgs.python3 ];
 
       # Point the panel at the remote executor; no local LLM needed (the
-      # server has the mock). The per-user pi-sessiond-local is disabled and
+      # server has the mock). The per-user pi-sessiond is disabled and
       # the default pinned so the session demonstrably routes to the server.
       services.pi-chat = {
         skills = lib.mkForce { };
@@ -124,7 +124,7 @@ pkgs.testers.runNixOSTest {
           server.wait_for_unit("pi-remote-mock-llm.service")
           server.wait_for_unit("user@1001.service")
           server.wait_until_succeeds(
-              "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
+              "systemctl --user --machine=agent@.host is-active pi-sessiond.service", timeout=60)
           server.wait_for_open_port(${toString wsPort})
 
       with subtest("client desktop + panel come up"):
@@ -158,7 +158,7 @@ pkgs.testers.runNixOSTest {
           client.log("== client quickshell log ==\n" + qlog)
           _, cfg = client.execute("cat /etc/spaces/pi-chat.json 2>&1")
           client.log("== /etc/spaces/pi-chat.json ==\n" + cfg)
-          _, sj = server.execute("journalctl --user-unit pi-sessiond-local.service _UID=1001 -b --no-pager 2>&1 | tail -120")
+          _, sj = server.execute("journalctl --user-unit pi-sessiond.service _UID=1001 -b --no-pager 2>&1 | tail -120")
           server.log("== server pi-sessiond journal ==\n" + sj)
 
       with subtest("panel drives a session on the REMOTE executor"):

@@ -44,7 +44,7 @@ import { fetchModels } from "./provider";
 
 const HOST = process.env.SPACES_SESSIOND_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.SPACES_SESSIOND_PORT ?? "8770");
-const EXECUTOR_ID = process.env.SPACES_SESSIOND_EXECUTOR_ID ?? "local";
+const EXECUTOR_ID = process.env.SPACES_SESSIOND_EXECUTOR_ID ?? "host";
 const DEFAULT_MODEL = process.env.SPACES_SESSIOND_DEFAULT_MODEL ?? "";
 const DEFAULT_PROVIDER =
   process.env.SPACES_SESSIOND_DEFAULT_PROVIDER ?? "local";
@@ -58,8 +58,8 @@ const STATE_DIR = resolve(
 );
 // systemd-run that wraps each per-session pi child in its Landlock confinement
 // unit (sandbox.ts). The runtime is always sandboxed. Production points this at
-// the real `systemd-run` (`--user` for the desktop user service, system scope
-// for the server); the cheap checks point it at a passthrough stub that strips
+// the real `systemd-run` (always `--user` — every executor, desktop and server,
+// runs as the user); the cheap checks point it at a passthrough stub that strips
 // the unit flags, applies --setenv, and execs the launcher + child directly.
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
 // pi-landlock-exec, the per-session Landlock launcher (sandbox.ts / design §6):

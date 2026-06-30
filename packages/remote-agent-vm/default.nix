@@ -105,7 +105,7 @@ else
           # The per-user `--user` executor runs under the (linger-enabled) test
           # user's manager — no root daemon. docs/pi-sessiond-per-user-refactor.md.
           users.users.test.linger = true;
-          services.pi-sessiond-local = {
+          services.pi-sessiond = {
             enable = true;
             executorId = "server";
             host = "0.0.0.0";

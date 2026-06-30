@@ -1,10 +1,10 @@
-# NixOS option → user-unit wiring for the unified pi-sessiond-local executor's
+# NixOS option → user-unit wiring for the unified pi-sessiond executor's
 # server/remote knobs (docs/pi-sessiond-per-user-refactor.md §4.2).
 #
-# pi-sessiond-local is the single executor shape: a desktop loopback default and
+# pi-sessiond is the single executor shape: a desktop loopback default and
 # the server's per-user remote executor. This pins the knobs that distinguish
 # the two deployments, evaluating three NixOS systems and asserting the
-# resulting `systemd.user.services.pi-sessiond-local` unit:
+# resulting `systemd.user.services.pi-sessiond` unit:
 #
 #   - desktop (defaults): host 127.0.0.1, firewall closed, the per-login
 #     token-gen oneshot present, LoadCredential reads %t/.../token, no inline
@@ -27,7 +27,7 @@ let
         flake = inputs.self;
       };
       modules = [
-        inputs.self.nixosModules.pi-sessiond-local
+        inputs.self.nixosModules.pi-sessiond
         {
           nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = hostName;
@@ -39,18 +39,18 @@ let
           system.stateVersion = "26.05";
           # Keep the eval cheap: the sediment memory extension drags a model
           # cache into the closure and is irrelevant to the token/bind knobs.
-          services.pi-sessiond-local.memory.enable = false;
+          services.pi-sessiond.memory.enable = false;
         }
         extraConfig
       ];
     };
 
   desktop = mkSystem "knobs-desktop" {
-    services.pi-sessiond-local.enable = true;
+    services.pi-sessiond.enable = true;
   };
 
   server = mkSystem "knobs-server" {
-    services.pi-sessiond-local = {
+    services.pi-sessiond = {
       enable = true;
       host = "0.0.0.0";
       port = 9999;
@@ -67,7 +67,7 @@ let
   };
 
   serverFile = mkSystem "knobs-server-file" {
-    services.pi-sessiond-local = {
+    services.pi-sessiond = {
       enable = true;
       host = "::";
       openFirewall = true;
@@ -75,10 +75,10 @@ let
     };
   };
 
-  unit = system: system.config.systemd.user.services.pi-sessiond-local;
-  hasTokenGen = system: system.config.systemd.user.services ? pi-sessiond-local-token;
+  unit = system: system.config.systemd.user.services.pi-sessiond;
+  hasTokenGen = system: system.config.systemd.user.services ? pi-sessiond-token;
 in
-pkgs.runCommand "pi-sessiond-local-knobs-nix-eval-test"
+pkgs.runCommand "pi-sessiond-knobs-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
 
@@ -111,7 +111,7 @@ pkgs.runCommand "pi-sessiond-local-knobs-nix-eval-test"
       || { echo "FAIL: desktop missing per-login token-gen oneshot"; exit 1; }
     [ "$dHasTokenEnv" = "false" ] \
       || { echo "FAIL: desktop unexpectedly carries inline SPACES_SESSIOND_TOKEN"; exit 1; }
-    echo "$dLoadCred" | jq -e '.[] | select(. == "token:%t/pi-sessiond-local/token")' > /dev/null \
+    echo "$dLoadCred" | jq -e '.[] | select(. == "token:%t/pi-sessiond/token")' > /dev/null \
       || { echo "FAIL: desktop LoadCredential = $dLoadCred (missing per-login token)"; exit 1; }
     echo "$dPorts" | jq -e '. | index(8768) | not' > /dev/null \
       || { echo "FAIL: desktop firewall = $dPorts (8768 unexpectedly open)"; exit 1; }
@@ -125,7 +125,7 @@ pkgs.runCommand "pi-sessiond-local-knobs-nix-eval-test"
       || { echo "FAIL: server must NOT run the per-login token-gen oneshot"; exit 1; }
     echo "$sLoadCred" | jq -e '[.[] | select(startswith("token:"))] | length == 0' > /dev/null \
       || { echo "FAIL: server inline token leaked into LoadCredential = $sLoadCred"; exit 1; }
-    echo "$sRequires" | jq -e '. | index("pi-sessiond-local-token.service") | not' > /dev/null \
+    echo "$sRequires" | jq -e '. | index("pi-sessiond-token.service") | not' > /dev/null \
       || { echo "FAIL: server still requires the token-gen unit = $sRequires"; exit 1; }
     [ -n "$sPwaDir" ] \
       || { echo "FAIL: server serveWebUi did not set SPACES_SESSIOND_PWA_DIR"; exit 1; }
@@ -142,6 +142,6 @@ pkgs.runCommand "pi-sessiond-local-knobs-nix-eval-test"
     echo "$fLoadCred" | jq -e '.[] | select(startswith("token:")) | select(endswith("knobs-token"))' > /dev/null \
       || { echo "FAIL: tokenFile server LoadCredential = $fLoadCred (missing provisioned token)"; exit 1; }
 
-    echo "OK: pi-sessiond-local desktop/server token + bind knobs wired"
+    echo "OK: pi-sessiond desktop/server token + bind knobs wired"
     touch "$out"
   ''

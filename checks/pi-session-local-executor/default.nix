@@ -4,7 +4,7 @@
 #
 # Asserts the backend, pointed (via $SPACES_PI_CHAT_CONFIG) at a fixture
 # config carrying `localExecutor`, materializes a "host" executor entry
-# whose tokenPath is $XDG_RUNTIME_DIR/pi-sessiond-local/token, then
+# whose tokenPath is $XDG_RUNTIME_DIR/pi-sessiond/token, then
 # authenticates against a fake pi-sessiond with the token-file content
 # (hello -> welcome) — and, without `localExecutor`, keeps the executors
 # list empty (the transient no-executor state; spawns defer until an

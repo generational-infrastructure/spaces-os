@@ -50,16 +50,16 @@ landed:
   `settings.json` `extensions`, no longer `SPACES_SESSIOND_PI_EXTENSIONS`) and
   registers the `local` provider from the inherited `LLAMA_SWAP_BASE_URL`;
   `bash-confirm` + `memory` also move to the child via settings.json.
-- **Packaging** — the daemon package re-exports `pi` as a passthru attr; both
-  modules (`pi-sessiond`, `pi-sessiond-local`) wire `SPACES_SESSIOND_PI_BIN` to
-  that exact build (no child/supervisor skew) and drop `SPACES_SESSIOND_PI_EXTENSIONS`.
+- **Packaging** — the daemon package re-exports `pi` as a passthru attr; the
+  module (`pi-sessiond`) wires `SPACES_SESSIOND_PI_BIN` to that exact build
+  (no child/supervisor skew) and drops `SPACES_SESSIOND_PI_EXTENSIONS`.
 
 Verified GREEN: `pi-sessiond-rpc-driver` (driver unit test vs a stub pi),
 `pi-sessiond-drive-path` (real daemon drives a stub pi: turn + side-channel
 round-trip), `pi-sessiond-{cold-attach,sessions-push}` (stub pi),
 `pi-sessiond-sidechannel` (first-answer-wins + park + notifier, now stub-driven),
 `pi-session-attach-image` + `pi-web-e2e` (real pi child + mock LLM),
-`pi-sessiond-local-nix-eval`. End-to-end smoke against the real pi 0.78 binary
+`pi-sessiond-nix-eval`. End-to-end smoke against the real pi 0.78 binary
 confirmed a full turn streams back through the supervisor.
 
 ## Runtime isolation refactor — phase 2 (the sandbox) implemented, opt-in
@@ -102,7 +102,7 @@ in the supervisor; the child holds only the proxy URL + a dummy key
 The panel's legacy local execution path (`PiSession` spawning `pi --mode rpc`
 in a per-session `systemd-run --user` unit) is **deleted**. Every chat session
 now lives on a pi-sessiond executor; the desktop default is the per-user
-loopback daemon (`services.pi-sessiond-local`, enabled by
+loopback daemon (`services.pi-sessiond`, enabled by
 `services.pi-chat.localExecutor.enable = true`, which is now the default).
 
 Parity ports that made the deletion possible:
@@ -114,7 +114,7 @@ Parity ports that made the deletion possible:
   (`SPACES_SESSIOND_ALLOWED_PATHS`: sockets, skills-defs, skill-config store,
   notifications) plus `SPACES_SESSION_ID` and the daemon's PATH via
   `--setenv`. `services.pi-chat.sandboxAllowedPaths` keeps its module contract and
-  forwards into `services.pi-sessiond-local.allowedPaths`.
+  forwards into `services.pi-sessiond.allowedPaths`.
 - **Per-session memory toggle** — new `set_memory` command writes/removes the
   `memory-off` marker in the daemon-side session dir; the memory extension
   resolves it via `ctx.sessionManager.getSessionDir()` (env-based resolution
@@ -128,7 +128,7 @@ Parity ports that made the deletion possible:
 - **restart() over WS** — delete-old + create-new (create carries
   `model=modelPref`); pi's in-place `new_session` is no longer used by the
   panel.
-- **OpenRouter** — `services.pi-sessiond-local.openrouter.enable` LoadCredentials
+- **OpenRouter** — `services.pi-sessiond.openrouter.enable` LoadCredentials
   the staged key into the daemon.
 - **ProtectHome=tmpfs fix** — it empties `/run/user` too; the daemon binds back
   `%t/systemd` + `%t/bus` or `systemd-run --user` (the bash sandbox spawner)
@@ -293,7 +293,7 @@ path** only.
   was first validated by `checks/pi-chat-local-executor` (full desktop
   self-hosting `services.pi-sessiond` on `127.0.0.1`, panel attached over WS).
   The migration has since landed: the panel's local Process path is deleted,
-  every desktop self-hosts the per-user `pi-sessiond-local` executor by default
+  every desktop self-hosts the per-user `pi-sessiond` executor by default
   (`services.pi-chat.localExecutor`, default-on), and `checks/test-machine.nix`
   boots that shipping topology end-to-end — so the stage-1 check was removed as
   redundant (`pi-chat-remote` keeps covering panel → system `pi-sessiond`).
@@ -331,7 +331,7 @@ path** only.
   tells the other clients to collapse via `sidechannel_resolved` (the **panel
   now renders that** — the loser's confirm collapses); a request that fires with
   zero clients **parks** (idle-GC leaves it resident; replays on next attach)
-  **and fires a notifier** (`services.pi-sessiond-local.notifyCommand`) so the user is
+  **and fires a notifier** (`services.pi-sessiond.notifyCommand`) so the user is
   reached out-of-band. Verified by `checks/pi-sessiond-sidechannel` (dedupe +
   park + notifier, real daemon + fake pi) and `checks/pi-session-ws`
   (panel collapse on `sidechannel_resolved`). Remaining:

@@ -1,4 +1,4 @@
-# pi-sessiond-local — the per-user `--user` pi-sessiond executor.
+# pi-sessiond — the per-user `--user` pi-sessiond executor.
 #
 # The single executor shape, run as a systemd *user* service in the user's own
 # manager at the user's own uid. Two deployments, one module:
@@ -18,7 +18,7 @@
 #
 # Auth: with neither `token` nor `tokenFile` set (the desktop default) a oneshot
 # sibling unit generates a per-login token at
-# $XDG_RUNTIME_DIR/pi-sessiond-local/token (0600); the daemon reads it via
+# $XDG_RUNTIME_DIR/pi-sessiond/token (0600); the daemon reads it via
 # LoadCredential and the panel reads the same file directly — no secret touches
 # the store. A server sets `token` (dev/test; lands in the store) or `tokenFile`
 # (LoadCredential) to a provisioned secret instead.
@@ -31,7 +31,7 @@
 }:
 
 let
-  cfg = config.services.pi-sessiond-local;
+  cfg = config.services.pi-sessiond;
 
   sessiondLib = import ./lib.nix { inherit pkgs lib inputs; };
   inherit (sessiondLib) jsonFormat landlockExec;
@@ -51,7 +51,7 @@ let
       defaultModel
       extensions
       ;
-    name = "pi-sessiond-local";
+    name = "pi-sessiond";
     extra = lib.optional cfg.memory.enable memoryExtensionPkg;
     openrouter = cfg.openrouter.enable;
     baseSettings = cfg.piSettings;
@@ -63,36 +63,36 @@ let
 
   # bash-confirm allow-list, staged into the daemon's agent dir at boot
   # (the extension reads $PI_CODING_AGENT_DIR/bash-confirm.json).
-  bashConfirmJson = jsonFormat.generate "pi-sessiond-local-bash-confirm.json" {
+  bashConfirmJson = jsonFormat.generate "pi-sessiond-bash-confirm.json" {
     inherit (cfg.bashConfirm) allowPatterns;
   };
 
   # The per-session pi units must land in the *user* manager, not the system
   # one — wrap systemd-run so the daemon's every invocation carries --user.
-  systemdRunUser = pkgs.writeShellScript "pi-sessiond-local-systemd-run" ''
+  systemdRunUser = pkgs.writeShellScript "pi-sessiond-systemd-run" ''
     exec ${pkgs.systemd}/bin/systemd-run --user "$@"
   '';
 
   # Idempotent per-login token: keep an existing non-empty file so daemon
   # restarts within one login session don't invalidate attached clients.
-  tokenScript = pkgs.writeShellScript "pi-sessiond-local-gen-token" ''
+  tokenScript = pkgs.writeShellScript "pi-sessiond-gen-token" ''
     umask 077
-    f="$XDG_RUNTIME_DIR/pi-sessiond-local/token"
+    f="$XDG_RUNTIME_DIR/pi-sessiond/token"
     [ -s "$f" ] || ${pkgs.openssl}/bin/openssl rand -hex 32 > "$f"
   '';
 
   # Fleet topology surfaced to PWA clients via GET /executors (see main.ts
   # loadPeers). Materialized as a tracked store path so nix pins it to the unit.
-  peersFile = jsonFormat.generate "pi-sessiond-local-peers.json" cfg.peers;
+  peersFile = jsonFormat.generate "pi-sessiond-peers.json" cfg.peers;
 
   # Desktop default: with no provisioned token, generate a per-login random one
   # (the panel reads the same file). A server sets token/tokenFile instead.
   useGeneratedToken = cfg.token == null && cfg.tokenFile == null;
 in
 {
-  options.services.pi-sessiond-local = {
+  options.services.pi-sessiond = {
     enable = lib.mkEnableOption (
-      "pi-sessiond-local: the per-user `--user` pi-sessiond executor — the "
+      "pi-sessiond: the per-user `--user` pi-sessiond executor — the "
       + "desktop's loopback default and the server's per-user remote executor"
     );
 
@@ -372,7 +372,7 @@ in
     assertions = [
       {
         assertion = !(cfg.token != null && cfg.tokenFile != null);
-        message = "services.pi-sessiond-local: set at most one of `token` or `tokenFile`.";
+        message = "services.pi-sessiond: set at most one of `token` or `tokenFile`.";
       }
     ];
 
@@ -381,23 +381,23 @@ in
     # Per-login token, shared between the daemon (LoadCredential) and the
     # panel (reads the file directly). RuntimeDirectoryPreserve keeps the
     # token across unit restarts; logout still wipes it with %t.
-    systemd.user.services.pi-sessiond-local-token = lib.mkIf useGeneratedToken {
-      description = "pi-sessiond-local token — per-login shared secret at %t/pi-sessiond-local/token";
+    systemd.user.services.pi-sessiond-token = lib.mkIf useGeneratedToken {
+      description = "pi-sessiond token — per-login shared secret at %t/pi-sessiond/token";
       wantedBy = [ "default.target" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        RuntimeDirectory = "pi-sessiond-local";
+        RuntimeDirectory = "pi-sessiond";
         RuntimeDirectoryPreserve = "yes";
         ExecStart = tokenScript;
       };
     };
 
-    systemd.user.services.pi-sessiond-local = {
-      description = "pi-sessiond-local — per-user loopback pi executor (WebSocket transport + one Landlock-confined pi rpc child per session)";
+    systemd.user.services.pi-sessiond = {
+      description = "pi-sessiond — per-user pi executor (WebSocket transport + one Landlock-confined pi rpc child per session)";
       wantedBy = [ "default.target" ];
-      requires = lib.optional useGeneratedToken "pi-sessiond-local-token.service";
-      after = lib.optional useGeneratedToken "pi-sessiond-local-token.service";
+      requires = lib.optional useGeneratedToken "pi-sessiond-token.service";
+      after = lib.optional useGeneratedToken "pi-sessiond-token.service";
       environment = {
         SPACES_SESSIOND_HOST = cfg.host;
         SPACES_SESSIOND_PORT = toString cfg.port;
@@ -414,7 +414,7 @@ in
         SPACES_SESSIOND_PI_BIN = piBin;
         # Every pi child is spawned through the Landlock launcher (design §6):
         # main.ts writes the per-session policy and execs the child through it.
-        # The sole sandbox path for the desktop executor.
+        # The sole sandbox path for this executor.
         SPACES_SESSIOND_LANDLOCK_EXEC = landlockExec;
         SPACES_SESSIOND_MEMORY_HIGH = cfg.memoryHigh;
         SPACES_SESSIOND_BASH_CONFIRM = "${bashConfirmJson}";
@@ -435,7 +435,7 @@ in
         # Bun (and pi) want a writable HOME for caches; with ProtectHome=tmpfs
         # the real one is hidden, so point HOME at the state dir (specifiers
         # expand in Environment=).
-        HOME = "%S/pi-sessiond-local";
+        HOME = "%S/pi-sessiond";
         SPACES_SESSIOND_IDLE_TIMEOUT_MS = toString cfg.idleTimeoutMs;
         SPACES_SESSIOND_MAX_LIVE = toString cfg.maxLive;
         SPACES_SESSIOND_NOTIFY_CMD = lib.optionalString (cfg.notifyCommand != null) (
@@ -467,13 +467,13 @@ in
         # line pi-chat.service uses for the panel. Last Environment= wins.
         Environment = "PATH=/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
         # Per-session jsonl + the daemon-owned session index live here
-        # (→ ~/.local/state/pi-sessiond-local for a user unit).
-        StateDirectory = "pi-sessiond-local";
+        # (→ ~/.local/state/pi-sessiond for a user unit).
+        StateDirectory = "pi-sessiond";
         # Token: desktop reads the per-login generated file; a server reads its
         # provisioned tokenFile. An inline `token` skips LoadCredential (it
         # rides the unit env instead).
         LoadCredential =
-          lib.optional useGeneratedToken "token:%t/pi-sessiond-local/token"
+          lib.optional useGeneratedToken "token:%t/pi-sessiond/token"
           ++ lib.optional (cfg.tokenFile != null) "token:${toString cfg.tokenFile}"
           # OpenRouter key: an explicit apiKeyFile (e.g. a clan var) or the
           # pi-chat-staged desktop path (root:users 0640, readable via the user
@@ -501,7 +501,7 @@ in
         # pi child gets its own Landlock domain, independent of the daemon's view.
         ProtectHome = "tmpfs";
         BindPaths = [
-          "%S/pi-sessiond-local"
+          "%S/pi-sessiond"
           "%t/systemd"
           "%t/bus"
         ]
