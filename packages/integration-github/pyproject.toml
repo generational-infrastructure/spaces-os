@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "integration-github"
+version = "0.1.0"
+description = "GitHub MCP integration server (spaces integration POC)"
+license = "MIT"
+requires-python = ">=3.10"
+
+[project.scripts]
+integration-github = "integration_github:main"
