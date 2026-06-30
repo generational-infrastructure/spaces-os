@@ -1,3 +1,5 @@
+import denySyscalls from "./seccomp-denylist.json";
+
 // Builds the per-session sandbox: the `systemd-run` command that confines an
 // entire pi runtime, plus the landlockconfig policy it carries
 // (docs/landlock-sandbox-design.md §5/§6).
@@ -70,29 +72,10 @@ const LANDLOCK_DEV_FILES = [
 // `SystemCallFilter=` (no Landlock format covers syscalls). @system-service —
 // which keeps the landlock_* syscalls the launcher needs (@sandbox) — is the
 // allowlist baseline; this set is then subtracted.
-export const LANDLOCK_DENY_SYSCALLS = [
-  "ptrace",
-  "process_vm_readv",
-  "process_vm_writev",
-  "keyctl",
-  "request_key",
-  "add_key",
-  "shmget",
-  "shmat",
-  "shmdt",
-  "shmctl",
-  "mq_open",
-  "mq_unlink",
-  "mq_timedsend",
-  "mq_timedreceive",
-  "mq_notify",
-  "mq_getsetattr",
-  "bpf",
-  "io_uring_setup",
-  "userfaultfd",
-  "perf_event_open",
-  "kcmp",
-];
+// Single source: ./seccomp-denylist.json — also read by
+// modules/nixos/spaces-integrations/lib.nix so the integration units carry the
+// identical denylist (no drift between the two same-uid enforcement layers).
+export const LANDLOCK_DENY_SYSCALLS: string[] = denySyscalls;
 
 // The session's deny-by-default allowlist, bucketed by path type so each grant
 // carries exactly the access class its inode supports: a directory-only right

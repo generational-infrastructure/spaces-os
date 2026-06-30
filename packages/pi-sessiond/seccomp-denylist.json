@@ -1,0 +1,23 @@
+[
+  "ptrace",
+  "process_vm_readv",
+  "process_vm_writev",
+  "keyctl",
+  "request_key",
+  "add_key",
+  "shmget",
+  "shmat",
+  "shmdt",
+  "shmctl",
+  "mq_open",
+  "mq_unlink",
+  "mq_timedsend",
+  "mq_timedreceive",
+  "mq_notify",
+  "mq_getsetattr",
+  "bpf",
+  "io_uring_setup",
+  "userfaultfd",
+  "perf_event_open",
+  "kcmp"
+]
