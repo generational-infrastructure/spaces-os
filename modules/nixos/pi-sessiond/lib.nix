@@ -36,6 +36,10 @@ let
 
   llamaSwapDiscover = materialize ../pi-chat/extensions/llama-swap-discover.ts;
   openrouterProxyExt = materialize ../pi-chat/extensions/openrouter-proxy.ts;
+  # The agent-facing half of the integrations gateway (design §9): registers a
+  # forwarding tool per discovered integration tool from the per-session spec
+  # the supervisor stages. Always loaded; inert when no spec / no integrations.
+  spacesIntegrationsExt = materialize ../pi-chat/extensions/spaces-integrations.ts;
 in
 {
   inherit jsonFormat;
@@ -72,7 +76,10 @@ in
       childExtensions =
         (map materialize extensions)
         ++ extra
-        ++ [ llamaSwapDiscover ]
+        ++ [
+          llamaSwapDiscover
+          spacesIntegrationsExt
+        ]
         ++ lib.optional openrouter openrouterProxyExt;
     in
     {

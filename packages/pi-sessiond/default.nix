@@ -27,6 +27,7 @@ let
     cp ${./seccomp-denylist.json} "$out/seccomp-denylist.json"
     cp ${./provider.ts} "$out/provider.ts"
     cp ${./staging.ts} "$out/staging.ts"
+    cp ${./integrations.ts} "$out/integrations.ts"
     # Resolve @earendil-works/pi-coding-agent (and its deps) from the pinned pi.
     ln -s ${pi}/lib/node_modules "$out/node_modules"
   '';

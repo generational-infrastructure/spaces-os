@@ -39,6 +39,14 @@ import {
 import { startCredentialProxy } from "./proxy";
 import { stageFile } from "./staging";
 import { fetchModels } from "./provider";
+import {
+  buildRegistry,
+  callIntegrationTool,
+  INTEGRATION_CALL_TITLE,
+  type Registry,
+  type RegistryEntry,
+  writeSessionToolSpec,
+} from "./integrations";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -75,6 +83,16 @@ if (!LANDLOCK_EXEC) {
 // pi binary spawned per session in rpc-mode (or a stub, in tests).
 const PI_BIN = process.env.SPACES_SESSIOND_PI_BIN ?? "pi";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
+// Agent integrations (docs/agent-integrations-design.md §9). The gateway reads
+// the broker's enabled.json + the world-readable definitions and dials each
+// enabled integration's per-user MCP socket. All three empty ⇒ the gateway is
+// off and no integration tools are exposed.
+const INTEGRATIONS_ENABLED_PATH =
+  process.env.SPACES_SESSIOND_INTEGRATIONS_ENABLED ?? "";
+const INTEGRATIONS_DEFS_DIR =
+  process.env.SPACES_SESSIOND_INTEGRATIONS_DEFS ?? "";
+const INTEGRATIONS_SOCKET_DIR =
+  process.env.SPACES_SESSIOND_INTEGRATIONS_SOCKETS ?? "";
 // Skill plumbing for the per-session pi runtime (NixOS module → JSON env).
 // SPACES_SESSIOND_SESSION_ENV: { VAR: value } --setenv'd into the session unit
 // (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_ALLOWED_PATHS:
@@ -383,6 +401,12 @@ interface Session {
   pendingSidechannels: Map<string, string>;
   // id -> relay the panel's answer to the child as an extension_ui_response.
   resolvers: Map<string, (response: Record<string, unknown>) => void>;
+  // Integration tools the user granted "for this session" via the approval
+  // prompt (gateway, design §9); keyed by the LLM-facing tool name.
+  toolGrants: Set<string>;
+  // Open approval prompts (id -> resolve with the decision) awaiting the
+  // panel's verdict; mirrors pendingSidechannels but supervisor-initiated.
+  pendingApprovals: Map<string, (decision: string) => void>;
 }
 const sessions = new Map<string, Session>();
 // All authenticated websockets, regardless of which session(s) they're
@@ -593,6 +617,12 @@ function surfaceSideChannel(session: Session, frame: RpcFrame): void {
   const id = asString(frame.id);
   const method = asString(frame.method);
   if (!id || !method) return;
+  // An integration tool call forwarded by the spaces-integrations extension
+  // (gateway, design §9): not a UI dialog — consume it here, never broadcast.
+  if (method === "input" && asString(frame.title) === INTEGRATION_CALL_TITLE) {
+    void handleIntegrationCall(session, frame);
+    return;
+  }
   if (method === "notify") {
     if (session.subscribers.size === 0)
       fireNotifier(session, "notify", asString(frame.message) ?? "");
@@ -654,6 +684,122 @@ function resolveSidechannel(
   resolver(response);
 }
 
+// ---- integrations gateway (design §9) --------------------------------------
+
+// The enabled integrations' discovered tools, built once at startup (the
+// enabled.json is per-user and the daemon runs as the user). Empty ⇒ off.
+let integrationRegistry: Registry = new Map();
+
+async function initIntegrations(): Promise<void> {
+  if (
+    !INTEGRATIONS_ENABLED_PATH ||
+    !INTEGRATIONS_DEFS_DIR ||
+    !INTEGRATIONS_SOCKET_DIR
+  )
+    return;
+  integrationRegistry = await buildRegistry({
+    defsDir: INTEGRATIONS_DEFS_DIR,
+    enabledPath: INTEGRATIONS_ENABLED_PATH,
+    socketDir: INTEGRATIONS_SOCKET_DIR,
+  });
+  console.error(
+    `pi-sessiond: ${integrationRegistry.size} integration tool(s) registered`,
+  );
+}
+
+// Raise the per-call approval prompt to the panel and await the verdict
+// ("once" | "session" | "deny"). Buffered like a side-channel so a reconnecting
+// client replays it; parks + notifies when unattended.
+function raiseApproval(
+  session: Session,
+  entry: RegistryEntry,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const id = randomUUID();
+  const { promise, resolve } = Promise.withResolvers<string>();
+  session.pendingApprovals.set(id, resolve);
+  // A side-channel event payload (like extension_ui_request) routed by `type`;
+  // the panel renders {once, session, deny} and replies approval_response.
+  broadcast(session, {
+    type: "approval_request",
+    id,
+    integration: entry.integration,
+    tool: entry.tool,
+    toolName: entry.piName,
+    args,
+  });
+  if (session.subscribers.size === 0) {
+    session.parked = true;
+    fireNotifier(session, "approval", entry.piName);
+  }
+  return promise;
+}
+
+// The panel's verdict for a parked approval; unpark when the last one clears.
+function resolveApproval(
+  session: Session,
+  id: string | undefined,
+  decision: string | undefined,
+): void {
+  if (id === undefined) return;
+  const resolve = session.pendingApprovals.get(id);
+  if (!resolve) return;
+  session.pendingApprovals.delete(id);
+  if (
+    session.pendingApprovals.size === 0 &&
+    session.pendingSidechannels.size === 0
+  )
+    session.parked = false;
+  resolve(decision ?? "deny");
+}
+
+// A forwarded integration tool call (from the spaces-integrations extension):
+// enforce the autoRun allowlist / session grant / per-call approval, then make
+// the MCP call over the integration's socket and reply to the child's awaiting
+// ctx.ui.input with JSON { text, isError }. A Deny never reaches the server.
+async function handleIntegrationCall(
+  session: Session,
+  frame: RpcFrame,
+): Promise<void> {
+  const id = asString(frame.id);
+  if (!id) return;
+  const reply = (text: string, isError: boolean) =>
+    session.driver.send({
+      type: "extension_ui_response",
+      id,
+      value: JSON.stringify({ text, isError }),
+    });
+
+  let call: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(asString(frame.placeholder) ?? "{}");
+    if (!isRecord(parsed)) throw new Error("not an object");
+    call = parsed;
+  } catch {
+    reply("integration unavailable: bad call payload", true);
+    return;
+  }
+  const piName = `${asString(call.integration) ?? ""}_${asString(call.tool) ?? ""}`;
+  const entry = integrationRegistry.get(piName);
+  if (!entry) {
+    reply(`integration unavailable: unknown tool ${piName}`, true);
+    return;
+  }
+  const args = isRecord(call.args) ? call.args : {};
+
+  if (!entry.autoRun && !session.toolGrants.has(piName)) {
+    const decision = await raiseApproval(session, entry, args);
+    if (decision === "deny") {
+      reply("Denied by user.", true); // the server is never called
+      return;
+    }
+    if (decision === "session") session.toolGrants.add(piName);
+  }
+
+  const res = await callIntegrationTool(entry.socketPath, entry.tool, args);
+  reply(res.text, res.isError);
+}
+
 // ---- session lifecycle -----------------------------------------------------
 
 function peekBusy(session: Session, ev: RpcFrame): void {
@@ -691,6 +837,9 @@ function registerSession(
   // Each session gets its own writable agent dir (HOME / PI_CODING_AGENT_DIR);
   // concurrent instances share no writable dir except the long-term memory store.
   const agentDir = seedAgentDir(id);
+  // Stage the enabled integrations' tools for the bundled spaces-integrations
+  // extension to register (gateway, design §9). Absent/empty ⇒ no tools.
+  writeSessionToolSpec(integrationRegistry, agentDir);
   // Private per-session scratch dir, created up front so it exists under the
   // session-dir grant (and gets chowned with the tree in system scope).
   const tmpDir = tmpDirOf(id);
@@ -742,6 +891,8 @@ function registerSession(
     lastActivity: Date.now(),
     pendingSidechannels: new Map(),
     resolvers: new Map(),
+    toolGrants: new Set(),
+    pendingApprovals: new Map(),
   };
   session.driver = new RpcDriver({
     argv,
@@ -1255,6 +1406,16 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         resolveSidechannel(session, ws, asString(payload.id), payload);
         return;
       }
+      // Approval verdict for an integration tool call (gateway, design §9):
+      // resolve the parked gateway call with the user's decision.
+      if (asString(payload.type) === "approval_response") {
+        resolveApproval(
+          session,
+          asString(payload.id),
+          asString(payload.decision),
+        );
+        return;
+      }
       await dispatchCommand(session, ws, payload);
       return;
     }
@@ -1287,6 +1448,7 @@ function serveStatic(req: Request): Response {
 // ---- WebSocket server ------------------------------------------------------
 
 await setupProvider();
+await initIntegrations();
 
 Bun.serve<ConnData>({
   hostname: HOST,
