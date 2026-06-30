@@ -88,6 +88,10 @@ let
   # Desktop default: with no provisioned token, generate a per-login random one
   # (the panel reads the same file). A server sets token/tokenFile instead.
   useGeneratedToken = cfg.token == null && cfg.tokenFile == null;
+  # The integrations gateway (design §9) needs the supervisor to reach the
+  # broker's enabled.json + each integration's socket/shared dir; that widens
+  # the daemon's ProtectHome below.
+  integrationsEnabled = config.services.spaces-integrations.enable or false;
 in
 {
   options.services.pi-sessiond = {
@@ -454,6 +458,23 @@ in
       }
       // lib.optionalAttrs (cfg.token != null) {
         SPACES_SESSIOND_TOKEN = cfg.token;
+      }
+      // lib.optionalAttrs integrationsEnabled {
+        # Integrations gateway (design §9): with the spaces-integrations module
+        # enabled, the supervisor discovers the user's enabled integrations and
+        # forwards their MCP tools. All four paths resolve in the one user
+        # manager the daemon and the integration units share:
+        #   ENABLED — the broker's per-user state (which integrations are on);
+        #   DEFS    — the world-readable definition dir (the autoRun allowlist);
+        #   SOCKETS — %t, where each integration's socket-activated
+        #             spaces-integration-<name>.sock lives;
+        #   SHARED  — the file-exchange base; <SHARED>/<name> is granted rw in
+        #             the session policy (step 6), the same dir the integration
+        #             unit grants itself.
+        SPACES_SESSIOND_INTEGRATIONS_ENABLED = "%S/spaces-integrationd/enabled.json";
+        SPACES_SESSIOND_INTEGRATIONS_DEFS = "/etc/spaces-integrations";
+        SPACES_SESSIOND_INTEGRATIONS_SOCKETS = "%t";
+        SPACES_SESSIOND_INTEGRATIONS_SHARED = "%t/spaces-integration-share";
       };
       serviceConfig = {
         ExecStart = lib.getExe' cfg.package "pi-sessiond";
@@ -499,7 +520,12 @@ in
         # connect to user scope bus"). Everything else under /run/user (skill
         # sockets, other daemons) stays hidden from the daemon; each per-session
         # pi child gets its own Landlock domain, independent of the daemon's view.
-        ProtectHome = "tmpfs";
+        # With integrations enabled the gateway must read the broker's
+        # enabled.json (under /home) and reach each integration's socket +
+        # shared dir (under /run/user), so it drops to read-only there: the
+        # supervisor still cannot write the user's files, and each per-session
+        # pi child keeps its own Landlock domain regardless of the daemon's view.
+        ProtectHome = if integrationsEnabled then "read-only" else "tmpfs";
         BindPaths = [
           "%S/pi-sessiond"
           "%t/systemd"

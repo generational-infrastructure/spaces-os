@@ -155,14 +155,16 @@ test("buildRegistry namespaces tools and precomputes the autoRun verdict", async
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   expect([...reg.keys()]).toEqual(["github_get_repo", "github_create_issue"]);
   const get = reg.get("github_get_repo")!;
   expect(get).toMatchObject({
     integration: "github",
     tool: "get_repo",
-    socketPath: join(m.socketDir, "github.sock"),
+    socketPath: join(m.socketDir, "spaces-integration-github.sock"),
     autoRun: true,
   });
   // create_issue is not on the allowlist ⇒ confirm-per-call.
@@ -182,7 +184,9 @@ test("buildRegistry skips disabled integrations and missing definitions", async 
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   expect(reg.size).toBe(0);
 });
@@ -202,7 +206,9 @@ test("integrationNames lists each enabled integration once", async () => {
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   // two discovered tools, one integration ⇒ one name (not one per tool).
   expect(reg.size).toBe(2);
@@ -217,7 +223,9 @@ test("sessionSharedDirs grants <base>/<name> per enabled integration", async () 
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   expect(sessionSharedDirs(reg, "/run/share")).toEqual(["/run/share/github"]);
 });
@@ -233,7 +241,9 @@ test("sessionSharedDirs is empty without a base or without integrations", async 
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   // an enabled integration but no base ⇒ still no grant.
   expect(sessionSharedDirs(reg, "")).toEqual([]);
@@ -249,7 +259,9 @@ test("writeSessionToolSpec stages the LLM-facing shape without autoRun", async (
   );
   const reg = await buildRegistry(
     m,
-    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+    }),
   );
   const agentDir = mkdtempSync(join(tmpdir(), "agentdir-"));
   writeSessionToolSpec(reg, agentDir);

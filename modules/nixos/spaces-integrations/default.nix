@@ -135,20 +135,24 @@ in
         spaces-integrationd = {
           description = "Spaces integrations broker (enable + secret provisioning over %t/spaces-integrations.sock)";
           wantedBy = [ "default.target" ];
+          # systemd splits an unquoted multi-word `Environment=` value on
+          # whitespace; the encrypt/systemctl commands carry args, so they ride
+          # the `environment` attrset (NixOS quotes it) rather than a raw
+          # serviceConfig.Environment list — otherwise the args are dropped.
+          environment = {
+            SPACES_INTEGRATIOND_SOCKET = "%t/spaces-integrations.sock";
+            SPACES_INTEGRATIOND_DEFS_DIR = "/etc/spaces-integrations";
+            # Secret path: user-scoped + TPM2-enforced (host+tpm2, never the
+            # insecure `auto` fallback, never pure tpm2 which --uid= rejects).
+            SPACES_INTEGRATIOND_CREDS_ENCRYPT = "${pkgs.systemd}/bin/systemd-creds encrypt --user --uid=self --with-key=host+tpm2";
+            SPACES_INTEGRATIOND_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl --user";
+          };
           serviceConfig = {
             Type = "exec";
             ExecStart = lib.getExe pkgsSelf.spaces-integrationd;
             Restart = "on-failure";
             RestartSec = 2;
             StateDirectory = "spaces-integrationd";
-            Environment = [
-              "SPACES_INTEGRATIOND_SOCKET=%t/spaces-integrations.sock"
-              "SPACES_INTEGRATIOND_DEFS_DIR=/etc/spaces-integrations"
-              # Secret path: user-scoped + TPM2-enforced (host+tpm2, never the
-              # insecure `auto` fallback, never pure tpm2 which --uid= rejects).
-              "SPACES_INTEGRATIOND_CREDS_ENCRYPT=${pkgs.systemd}/bin/systemd-creds encrypt --user --uid=self --with-key=host+tpm2"
-              "SPACES_INTEGRATIOND_SYSTEMCTL=${pkgs.systemd}/bin/systemctl --user"
-            ];
             # Trusted (it holds the encrypt path + the socket) but still
             # unprivileged and hardened — it runs as the user, never root.
             NoNewPrivileges = true;
