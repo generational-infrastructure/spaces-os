@@ -48,6 +48,11 @@ in
       unitName = "spaces-integration-${name}";
       # %t = $XDG_RUNTIME_DIR, %S = $XDG_STATE_HOME for a --user unit.
       policyPath = "%t/${unitName}/landlock.json";
+      # File-exchange dir (design §9.4 step 6): a plain dir the agent SESSION
+      # also grants itself rw (same uid, no idmap). clone_to_workspace populates
+      # it; the agent edits the tree with its native file tools. Lives outside
+      # the private StateDirectory the agent's domain denies wholesale.
+      sharedDir = "%t/spaces-integration-share/${name}";
       secretNames = lib.attrNames manifest.secrets;
 
       # Static half of the Landlock policy; the CLI folds in the per-user paths
@@ -87,8 +92,17 @@ in
           # Lower the per-user policy, then exec the server confined. The CLI
           # reads $STATE_DIRECTORY / $CREDENTIALS_DIRECTORY (set by the dirs
           # below) from the env and writes the landlockconfig doc to %t.
-          ExecStartPre = "${landlockPolicyCli} --spec ${policySpecFile} --out ${policyPath}";
+          # mkdir the shared dir first (idempotent; the agent session mkdirs the
+          # same path too) so it exists before pi-landlock-exec — Landlock skips
+          # a missing path, which would silently drop the grant.
+          ExecStartPre = [
+            "${pkgs.coreutils}/bin/mkdir -p ${sharedDir}"
+            "${landlockPolicyCli} --spec ${policySpecFile} --out ${policyPath}"
+          ];
           ExecStart = "${landlockExec} --json ${policyPath} -- ${manifest.command}";
+          # The CLI folds $SPACES_INTEGRATION_SHARED_DIR into the policy's rw set
+          # (lowerIntegrationPolicy), and the server reads it as its clone target.
+          Environment = [ "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}" ];
           RuntimeDirectory = unitName;
           StateDirectory = unitName;
           # Decrypted secrets land in $CREDENTIALS_DIRECTORY/<name> (ro), in a

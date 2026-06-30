@@ -237,6 +237,29 @@ export async function buildRegistry(
   return registry;
 }
 
+// The distinct integration names behind the registry's tools (stable order) —
+// the enabled set, since every entry carries its integration. One name even
+// when an integration exposes several tools.
+export function integrationNames(registry: Registry): string[] {
+  const seen = new Set<string>();
+  for (const e of registry.values()) seen.add(e.integration);
+  return [...seen];
+}
+
+// The per-integration file-exchange dirs to fold into the agent session's
+// Landlock rw allowlist (design §9.4 step 6): one <sharedBase>/<name> per
+// enabled integration — the SAME dir the integration unit grants itself rw, so
+// clone_to_workspace populates it and the agent edits the tree with its native
+// file tools. Empty base or no integrations ⇒ none, so the grant appears only
+// when an integration is enabled.
+export function sessionSharedDirs(
+  registry: Registry,
+  sharedBase: string,
+): string[] {
+  if (!sharedBase) return [];
+  return integrationNames(registry).map((name) => join(sharedBase, name));
+}
+
 // ---- per-session child spec -------------------------------------------------
 
 // The child-facing spec: the LLM-callable shape, no autoRun (approval is

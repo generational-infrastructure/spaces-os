@@ -9,6 +9,9 @@ import {
   type DiscoveredTool,
   discoverTools,
   INTEGRATION_TOOL_SPEC_FILE,
+  integrationNames,
+  type Registry,
+  sessionSharedDirs,
   toolSpec,
   writeSessionToolSpec,
 } from "./integrations";
@@ -187,6 +190,53 @@ test("buildRegistry skips disabled integrations and missing definitions", async 
 test("buildRegistry yields nothing when enabled.json is unreadable/malformed", async () => {
   const m = setupManifest("reg3", { github: { autoRun: [] } }, "{oops");
   expect((await buildRegistry(m, fakeDiscover({}))).size).toBe(0);
+});
+
+// ---- file exchange: integration names + session shared dirs (step 6) --------
+
+test("integrationNames lists each enabled integration once", async () => {
+  const m = setupManifest(
+    "names",
+    { github: { autoRun: ["get_repo"] } },
+    { integrations: { github: { enabled: true } } },
+  );
+  const reg = await buildRegistry(
+    m,
+    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+  );
+  // two discovered tools, one integration ⇒ one name (not one per tool).
+  expect(reg.size).toBe(2);
+  expect(integrationNames(reg)).toEqual(["github"]);
+});
+
+test("sessionSharedDirs grants <base>/<name> per enabled integration", async () => {
+  const m = setupManifest(
+    "shared",
+    { github: { autoRun: [] } },
+    { integrations: { github: { enabled: true } } },
+  );
+  const reg = await buildRegistry(
+    m,
+    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+  );
+  expect(sessionSharedDirs(reg, "/run/share")).toEqual(["/run/share/github"]);
+});
+
+test("sessionSharedDirs is empty without a base or without integrations", async () => {
+  const empty: Registry = new Map();
+  expect(sessionSharedDirs(empty, "/run/share")).toEqual([]);
+
+  const m = setupManifest(
+    "shared2",
+    { github: { autoRun: [] } },
+    { integrations: { github: { enabled: true } } },
+  );
+  const reg = await buildRegistry(
+    m,
+    fakeDiscover({ [join(m.socketDir, "github.sock")]: DISCOVERED }),
+  );
+  // an enabled integration but no base ⇒ still no grant.
+  expect(sessionSharedDirs(reg, "")).toEqual([]);
 });
 
 // ---- session spec -----------------------------------------------------------

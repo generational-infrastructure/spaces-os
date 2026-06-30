@@ -9,6 +9,9 @@
 # carrying its args; Deny never reaches the server; "for this session" runs it
 # and suppresses the next prompt; a daemon with no integrations env exposes no
 # tools.
+# Also asserts the step-6 file-exchange wiring: an enabled integration adds its
+# shared dir to the session's Landlock rw set (created by the supervisor); with
+# none enabled, no such grant appears.
 #
 # Cheap (~seconds, no VM, no model): bun runs the daemon on loopback in the
 # build sandbox and spawns the stub pi per session. Real Landlock enforcement is

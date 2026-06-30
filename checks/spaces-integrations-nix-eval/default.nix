@@ -103,9 +103,15 @@ let
   brokerSvc = enabledSystem.config.systemd.user.services.spaces-integrationd;
 in
 # ── Exec lines: shape at eval (no realize) ──────────────────────────────────
-assert lib.hasInfix "/bin/spaces-landlock-policy " ghSvc.serviceConfig.ExecStartPre;
-assert lib.hasInfix "--out %t/spaces-integration-github/landlock.json"
+assert lib.any (lib.hasInfix "/bin/spaces-landlock-policy ") ghSvc.serviceConfig.ExecStartPre;
+assert lib.any (lib.hasInfix "--out %t/spaces-integration-github/landlock.json")
   ghSvc.serviceConfig.ExecStartPre;
+# File exchange (step 6): the unit creates its shared dir pre-start and declares
+# it; the agent session grants itself the SAME path (asserted in the gateway check).
+assert lib.any (lib.hasInfix "/bin/mkdir -p %t/spaces-integration-share/github")
+  ghSvc.serviceConfig.ExecStartPre;
+assert lib.any (lib.hasInfix "SPACES_INTEGRATION_SHARED_DIR=%t/spaces-integration-share/github")
+  ghSvc.serviceConfig.Environment;
 assert lib.hasInfix "/bin/pi-landlock-exec " ghSvc.serviceConfig.ExecStart;
 assert lib.hasInfix "--json %t/spaces-integration-github/landlock.json --"
   ghSvc.serviceConfig.ExecStart;
@@ -196,6 +202,17 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
       || fail "credentials mount not read-only"
     jq -e '[.pathBeneath[].parent[]] | (index("/sample") == null) and (index("/home") == null)' "$policy" >/dev/null \
       || fail "policy granted an unexpected path"
+
+    # ── 7. file exchange (step 6): when systemd resolves the shared dir, the CLI
+    # folds it into the writable surface — the SAME dir the agent session grants
+    # itself rw. Unset above (section 6) ⇒ rw is StateDirectory only.
+    policy2=$PWD/landlock-shared.json
+    env STATE_DIRECTORY=/sample/state CREDENTIALS_DIRECTORY=/sample/cred \
+        SPACES_INTEGRATION_SHARED_DIR=/sample/share \
+      spaces-landlock-policy --spec "$specFile" --out "$policy2"
+    jq -e '([.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]]) as $rw
+           | (($rw | index("/sample/state")) != null) and (($rw | index("/sample/share")) != null)' \
+      "$policy2" >/dev/null || fail "shared dir not granted rw when SPACES_INTEGRATION_SHARED_DIR set"
 
     touch "$out"
   ''

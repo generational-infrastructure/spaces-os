@@ -5,7 +5,7 @@ The supervisor's gateway is driven end to end without a model or the real pi:
 a stub `pi --mode rpc` child forwards a tool call exactly as the
 spaces-integrations extension does (extension_ui input with the integration-call
 sentinel), and a stub MCP server stands in for the integration. Asserts the
-step-4 acceptance:
+step-4 acceptance plus the step-6 file-exchange wiring:
 
   - discovery: the daemon stages the discovered tools as the per-session spec
     the extension would register (github_get_repo, github_create_issue);
@@ -14,6 +14,8 @@ step-4 acceptance:
   - Deny returns "Denied by user." and the MCP server is never called;
   - "Allow for this session" runs it and suppresses the prompt next time;
   - a daemon with no integrations env exposes no tools (empty spec).
+  - file exchange (step 6): an enabled integration's shared dir joins the
+    session's Landlock rw set (the supervisor creates it); none ⇒ absent.
 
 Cheap: bun runs the daemon on loopback in the build sandbox; no VM, no model.
 
@@ -109,10 +111,33 @@ def read_calls(calls_out):
         return [json.loads(line) for line in fh if line.strip()]
 
 
-async def scenarios(state, calls_out):
+def read_policy(state, sid):
+    with open(os.path.join(state, "sessions", sid, "landlock.json")) as fh:
+        return json.load(fh)
+
+
+def rw_parents(policy):
+    """The directories granted abi.read_write in a session's landlock policy."""
+    out = []
+    for rule in policy.get("pathBeneath", []):
+        if "abi.read_write" in rule.get("allowedAccess", []):
+            out.extend(rule.get("parent", []))
+    return out
+
+
+async def scenarios(state, calls_out, shared_base):
     async with websockets.connect("ws://127.0.0.1:8783") as ws:
         await hello(ws)
         sid = await create_session(ws)
+
+        # File exchange (step 6): the session policy grants the enabled
+        # integration's shared dir rw (the same dir the integration unit grants
+        # itself), and the supervisor created it before the launcher ran.
+        shared = os.path.join(shared_base, "github")
+        if shared not in rw_parents(read_policy(state, sid)):
+            fail(f"session policy must grant the integration shared dir rw: {shared}")
+        if not os.path.isdir(shared):
+            fail(f"supervisor must create the shared dir: {shared}")
 
         # The daemon stages the discovered tools for the extension to register.
         spec_path = os.path.join(
@@ -188,7 +213,7 @@ async def scenarios(state, calls_out):
             )
 
 
-async def scenario_no_integrations(state):
+async def scenario_no_integrations(state, shared_base):
     async with websockets.connect("ws://127.0.0.1:8784") as ws:
         await hello(ws)
         sid = await create_session(ws)
@@ -199,6 +224,11 @@ async def scenario_no_integrations(state):
             spec = json.load(fh)
         if spec != []:
             fail(f"a daemon with no integrations env must expose no tools, got {spec}")
+        # No integrations enabled ⇒ no shared-dir grant, even though the base is
+        # configured (the grant is per enabled integration, not the bare base).
+        shared = os.path.join(shared_base, "github")
+        if shared in rw_parents(read_policy(state, sid)):
+            fail("a daemon with no integrations must not grant any shared dir")
 
 
 def wait_path(path, timeout=30):
@@ -249,6 +279,9 @@ def main():
     import tempfile
 
     root = tempfile.mkdtemp(prefix="gw-")
+    # The file-exchange base; the daemon creates <base>/<name> per enabled
+    # integration (asserted below) — left absent here so creation is observable.
+    shared_base = os.path.join(root, "share")
     sock_dir = os.path.join(root, "sockets")
     os.makedirs(sock_dir, exist_ok=True)
     defs_dir = os.path.join(root, "defs")
@@ -276,13 +309,14 @@ def main():
                 "SPACES_SESSIOND_INTEGRATIONS_ENABLED": enabled_path,
                 "SPACES_SESSIOND_INTEGRATIONS_DEFS": defs_dir,
                 "SPACES_SESSIOND_INTEGRATIONS_SOCKETS": sock_dir,
+                "SPACES_SESSIOND_INTEGRATIONS_SHARED": shared_base,
             }
         )
         log1 = open(os.path.join(root, "daemon1.log"), "wb")
         d1 = subprocess.Popen([daemon], env=env1, stdout=log1, stderr=subprocess.STDOUT)
         procs.append(d1)
         wait_port(8783)
-        asyncio.run(scenarios(state1, calls_out))
+        asyncio.run(scenarios(state1, calls_out, shared_base))
         d1.terminate()
         d1.wait(timeout=5)
 
@@ -290,11 +324,12 @@ def main():
         state2 = os.path.join(root, "state2")
         os.makedirs(state2, exist_ok=True)
         env2 = base_env(state2, stub_pi, systemd_run, landlock_exec, 8784)
+        env2["SPACES_SESSIOND_INTEGRATIONS_SHARED"] = shared_base
         log2 = open(os.path.join(root, "daemon2.log"), "wb")
         d2 = subprocess.Popen([daemon], env=env2, stdout=log2, stderr=subprocess.STDOUT)
         procs.append(d2)
         wait_port(8784)
-        asyncio.run(scenario_no_integrations(state2))
+        asyncio.run(scenario_no_integrations(state2, shared_base))
 
         print("OK")
     except BaseException:
