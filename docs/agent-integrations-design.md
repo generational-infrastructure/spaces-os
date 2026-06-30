@@ -87,7 +87,7 @@ granted to both sides' policies — same uid, so no idmapping needed).
 Secrets are provisioned **only through the GUI** (panel form or
 broker-side OAuth) and never need root: the broker encrypts each as
 `systemd-creds` ciphertext — **TPM2-sealed and enforced**
-(`--with-key=tpm2`, never `auto`) and **user-scoped**
+(`--with-key=host+tpm2`, never `auto`) and **user-scoped**
 (`systemd-creds encrypt --user --uid=<user>`, binding
 uid+username+machine-id) — into the user's own credstore. At unit start
 `LoadCredentialEncrypted=` is decrypted through the privileged
@@ -97,8 +97,9 @@ binding makes cross-user isolation intrinsic, so no central root broker
 is required.
 
 Enabling is **rootless and rebuild-free** (req 10): a trusted user-level
-materialiser — home-manager for first-party integrations, the broker (a
-runtime materialiser) for on-the-fly third-party ones — writes the
+materialiser — a declarative NixOS module emitting `systemd.user.services` (or
+home-manager) for first-party integrations, the broker (a runtime materialiser)
+for on-the-fly third-party ones — writes the
 `--user` units and their landlockconfig policies, the user provisions
 secrets into their own credstore, and `systemctl --user enable
 --now` starts them. There is **no system-level prerequisite** beyond a
@@ -297,10 +298,11 @@ may be session- or user-scoped (§5.3).
 
 ### 5.1 Sandbox layer
 
-Manifest → a **user-level materialiser** writes a `--user` systemd unit
-(`~/.config/systemd/user/`, enabled rootless via `systemctl --user enable
---now` — req 10; home-manager for first-party, the broker for on-the-fly
-third-party, §5.6) whose `ExecStart` runs the integration through
+Manifest → a **trusted user-level materialiser** writes a `--user` systemd unit
+(a NixOS module emitting `systemd.user.services` — the declarative backend in
+this repo — or home-manager for first-party; the broker as a runtime
+materialiser for on-the-fly third-party, §5.6), enabled rootless via `systemctl
+--user enable --now` (req 10), whose `ExecStart` runs the integration through
 `pi-landlock-exec` with a **landlockconfig policy lowered from the
 manifest** (§5.4, §7): a deny-by-default FS allowlist (the integration's
 `StateDirectory`, its credential mount, the per-pair shared dir, and
@@ -334,15 +336,15 @@ Responsibilities:
 
 - **Storage:** secrets at rest via `systemd-creds`, encrypted
   **user-scoped** (`systemd-creds encrypt --user --uid=<user>`, binding
-  uid + username + machine-id) and **TPM2-sealed and enforced**: always
-  `--with-key=tpm2`, never `auto` (which silently falls back to the host
-  key). Without a usable TPM2, storing a secret *fails* — by design. A
-  TPM2-class blob is undecryptable without that TPM, so the decrypt side
-  enforces itself; clearing/replacing the TPM loses the secrets, and
-  recovery is re-entry through the GUI (the only provisioning path
+  uid + username + machine-id) and **TPM2-sealed and enforced** via
+  `--with-key=host+tpm2`, never `auto` (which silently falls back to the host
+  key alone). `host+tpm2` (not pure `tpm2`) is required: user-scoping needs the
+  host-key component to bind a uid, and pure `tpm2` is rejected in `--uid=` mode.
+  Both components are mandatory to decrypt, so the TPM is genuinely enforced — a
+  blob is undecryptable without that TPM; clearing/replacing it loses the
+  secrets, and recovery is re-entry through the GUI (the only provisioning path
   anyway, req 9). Never in the Nix store, never in agent-reachable paths.
-  (`debug/tpm-credential-poc.sh` demonstrates the full path on real
-  hardware.)
+  (`debug/tpm-credential-poc.sh` demonstrates the full path on real hardware.)
 - **Provisioning — GUI only (req 9):** *direct entry* — the panel renders
   a form from the manifest (field names, types, `secret: true`) and
   submits to the broker; *broker-side OAuth* — the broker runs the flow,
@@ -355,11 +357,12 @@ Responsibilities:
   persist broker-side, never on agent-writable storage.
 - **Delivery:** the broker writes the user-scoped ciphertext to a
   user-readable credstore path; the integration's `--user` unit names it
-  with `LoadCredentialEncrypted=`. Decryption happens at unit start
-  through the privileged **`systemd-creds.socket`** Varlink broker (root),
-  so the non-root user manager needs neither the root host key nor `tss`
-  TPM access; plaintext lands only in the unit's private credentials
-  mount — which the agent's Landlock domain does not grant. The agent
+  with `LoadCredentialEncrypted=`. The broker encrypts as the user, which needs
+  TPM access — integration users are granted `tss` at onboarding (a one-time
+  host action, not per-integration). Decryption happens at unit start through the
+  privileged **`systemd-creds.socket`** Varlink broker (root), so the unit needs
+  no TPM access of its own; plaintext lands only in the unit's private
+  credentials mount — which the agent's Landlock domain does not grant. The agent
   never holds the broker socket; the broker authenticates peers via
   `SO_PEERCRED`.
 
@@ -368,49 +371,57 @@ The `skill-config` CLI and its bash-confirm allowlist entry are removed.
 ### 5.3 Gateway (in the supervisor)
 
 As §3D, and living in the trusted supervisor (§5.0), not in the sandboxed
-runtime: integrations appear to the model as typed tools — thin stubs in
-the sandbox that forward the call over pi's rpc pipe; the gateway checks
-the manifest/approval, speaks **MCP** over the unix socket to the
-sandboxed server, screens output, and returns the result. The sandbox
-never holds an integration socket (its Landlock domain does not grant the
-socket path). Per-call approval requests cross the rpc pipe to the panel;
-unattended ones follow the remote-pi "block + notify" parking semantics.
-Because enforcement lives across the domain boundary, a self-loaded
-extension cannot bypass it.
+runtime. On connect it speaks **MCP** to each enabled integration's sandboxed
+server over its unix socket — `initialize` then `tools/list` — and **registers
+each discovered tool as a typed pi tool** for the model (thin stubs that forward
+over pi's rpc pipe). Schemas come from the (untrusted) server: they are
+*presentation only* and gate nothing — the load-bearing barrier is the
+args-bound confirm below, not the schema. The sandbox never holds an integration
+socket (its Landlock domain does not grant the socket path), and because
+enforcement lives across the domain boundary a self-loaded extension cannot
+bypass it.
 
-Per-call approval (the "read free, send gated" pattern — email, Signal):
+The manifest carries an **`autoRun` allowlist**, not per-tool schemas:
 
-- Enabling the integration is the standing grant for its non-approval
-  tools: the agent reads messages with no prompts.
-- An approval-flagged call **binds to its concrete arguments**: the
-  prompt shows them (recipient, body) and the gateway forwards exactly
-  the approved args — no swap after approval. This is the load-bearing
-  defence for the asymmetry: reads are automatic, so injected content (a
-  hostile email) enters context unimpeded; the user seeing recipient +
-  content on the effect prompt is the barrier.
-- Because the gateway sees typed arguments, grants can be scoped finer
-  than allow-once/always ("auto-approve sends to this recipient",
-  "…this thread this session" — the req-8 shape). Decisions persist
-  broker-side.
-- Enforcement is structural: the flag lives outside the agent's execution
-  domain and the gateway will not forward an unapproved effect call —
-  unlike a system-prompt rule, the model cannot ignore it.
+- **Allowlisted tools run with no prompt** — the agent reads with no friction.
+- **Every other discovered tool is still callable, but each call requires user
+  confirmation.** An empty allowlist ⇒ a freshly-plugged (e.g. third-party)
+  server is all-confirm until the user blesses tools, so an unmodified MCP server
+  plugs in with zero manual schema transcription.
+- The confirm prompt **binds to the call's concrete arguments**: it shows exactly
+  what the gateway will forward (recipient, body, repo, …) and forwards exactly
+  that — no swap after approval. This is the structural defence for the
+  read/effect asymmetry: reads are automatic, so injected content (a hostile
+  email) enters context unimpeded; the human seeing the real arguments on the
+  effect prompt is the barrier. MCP tool annotations (`readOnlyHint`,
+  `destructiveHint`) are *untrusted hints* — the panel may use them to suggest
+  what to allowlist, never to decide auto-run.
+- Prompt options are **Allow once · Allow for this session · Deny**. A session
+  grant is an ephemeral, tool-name-scoped entry in the gateway's per-session
+  state; **allow-forever and finer args-bound grants (the req-8 shape) are
+  deferred**, so `enabled.json` records only which integrations are enabled, not
+  tool grants. Deny returns "Denied by user." and the server never sees the call.
+- Per-call prompts cross the rpc pipe to the panel; unattended ones follow the
+  remote-pi "block + notify" parking semantics. Enforcement is structural — the
+  allowlist + gateway live outside the agent's execution domain, so the model
+  cannot bypass them.
 
 ### 5.4 Manifest
 
-One manifest per integration declares: tools (name, schema,
-`requiresApproval`, read vs. effect); named secrets and config fields
-(rendered by the panel); network access (allowed hosts / ports);
-filesystem paths; bus/Wayland interfaces (desktop integrations); trust
-tier (first-party unit / container / microVM); execution shape (resident
-/ transient). The filesystem, network, and IPC posture is what the
-trusted materialiser **lowers to a landlockconfig policy** (§5.1, §7); the
-author writes the high-level manifest, never the policy.
+One manifest per integration declares its **sandbox and provisioning posture** —
+the part a server cannot be trusted to declare about its own cage: named secrets
+and config fields (rendered by the panel); network access; filesystem paths;
+bus/Wayland interfaces (desktop integrations); trust tier (first-party unit /
+container / microVM); execution shape (resident / transient); and the **`autoRun`
+tool allowlist** (§5.3). It does **not** redeclare tool schemas — those are
+discovered at runtime from the server's `tools/list` (§5.3). The filesystem,
+network, and IPC posture is what the trusted materialiser **lowers to a
+landlockconfig policy** (§5.1, §7); the author writes the high-level manifest,
+never the policy.
 
-The user approves the manifest when enabling the integration (req 6).
-First-party manifests live in this repo as Nix; imported third-party
-servers get a JSON manifest checked at enable time. All approval state
-lives broker-side.
+The user approves the manifest when enabling the integration (req 6). First-party
+manifests live in this repo as Nix; imported third-party servers get a JSON
+manifest checked at enable time. All approval state lives broker-side.
 
 ### 5.5 Foreign setup & authentication flows
 
@@ -542,9 +553,9 @@ per-user codegen, no privileged "start units for users" hop:
   `StateDirectory`/`CacheDirectory` is integration-owned.
 - **Enabling needs neither root nor a rebuild (req 10).** The `--user`
   units, their landlockconfig policies, sockets, and the integration
-  packages are produced by a user-level materialiser (home-manager for
-  first-party, the broker for on-the-fly third-party — §5.6) into
-  `~/.config/systemd/user/`; the user enables them with `systemctl --user
+  packages are produced by a user-level materialiser (a NixOS module emitting
+  `systemd.user.services` for first-party, the broker for on-the-fly third-party
+  — §5.6) into the user systemd path; the user enables them with `systemctl --user
   enable --now` and provisions secrets into their own credstore. There is
   no system-level platform action: Landlock is on by default on the
   shipped kernel (ABI 6 for full IPC scoping; older kernels keep the FS +
@@ -599,14 +610,14 @@ unchanged.
   best-effort: FS and ptrace/mem walls hold; an integration's abstract
   sockets and cross-domain signals become reachable by a same-uid sibling.
   Track the kernel floor.
-- **Verify encrypt-as-user on systemd 260:** `systemd-creds encrypt --user
-  --uid=self --with-key=tpm2` must succeed for a non-root user via
-  `systemd-creds.socket` (a ~v256 "Selected key not available in --uid=
-  scoped mode, refusing" bug existed). If it regressed, users need `tss`
-  group membership — a one-time root touch, still not per-integration.
+- **Encrypt-as-user (resolved).** Pure `tpm2` is rejected in user-scoped mode on
+  systemd 260 (`Selected key not available in --uid= scoped mode`); the secret
+  path uses **`host+tpm2`** with integration users in `tss` at onboarding
+  (§5.2). Verified on the target host (systemd 260, kernel 6.18).
 - **Enablement backend (agent-proposed enable, §5.6):** how a
   user-accepted enable materialises a `--user` unit + policy at runtime
-  without a rebuild — regenerate + re-activate the home-manager config, a
+  without a rebuild — regenerate + re-activate the declarative materialiser (the
+  NixOS module, or home-manager), a
   small user-level templating daemon, or a vetted manifest registry the
   catalog ids resolve against. The gate is fixed (agent proposes, user
   accepts, trusted user-level materialiser writes the unit); the
@@ -624,147 +635,186 @@ unchanged.
 
 ## 9. Minimal POC plan
 
-One real integration, end to end, every critical mechanism exercised
-once. Pick: **GitHub** (PAT secret, one read tool, one approval-gated
-effect tool, one file-exchange tool). Requires systemd ≥258 (the distro
-ships 260) and a Landlock kernel (ABI 6 for full IPC scoping). Builds on
-the shipped sandboxed pi runtime + supervisor gateway
+One real integration, end to end, every load-bearing mechanism exercised once.
+Pick: **GitHub** (PAT secret; a read tool; an approval-gated effect tool; a
+file-exchange tool). The execution checklist, decision log, and verified
+build-gates live in
+[agent-integrations-poc-plan.md](./agent-integrations-poc-plan.md); this section
+is the architectural definition. Both build-gates are verified on the target
+host (systemd 260, kernel 6.18): Landlock **ABI 6**, and the user-scoped secret
+path via **`host+tpm2`** (pure `tpm2` is rejected in `--uid=` mode — §5.2).
+Builds on the shipped sandboxed pi runtime + supervisor gateway
 ([landlock-sandbox-design.md](./landlock-sandbox-design.md)), reusing its
-`pi-landlock-exec` launcher and landlockconfig emitter.
+`pi-landlock-exec` launcher and `buildLandlockPolicy` emitter.
 
 > **Note — the existing `integrations-poc` branch is superseded.** It was
-> written against the abandoned managed-userns model: system
-> `DynamicUser` units, a `nsresourced` platform module, a **root** broker
-> using host-key `systemd-creds`, and a gateway wired into the
-> pre-Landlock `main.ts`. Re-base it onto this plan: `--user` units +
-> `pi-landlock-exec`, a user-level broker with user-scoped creds, and the
-> gateway on the shipped supervisor/`rpc-driver` layer.
+> written against the abandoned managed-userns model: system `DynamicUser`
+> units, a `nsresourced` platform module, a **root** broker using host-key
+> `systemd-creds`, and a gateway wired into the pre-Landlock `main.ts`. It is
+> **rebuilt fresh, not rebased**, onto this plan: `--user` units +
+> `pi-landlock-exec`, a user-level broker with user-scoped `host+tpm2` creds,
+> runtime tool discovery, and the gateway on the shipped supervisor/`rpc-driver`
+> layer. Salvageable as reference: the Go broker skeleton, the Python
+> `integration-github` server, and the check drivers.
 
 ### 9.1 Components
 
-1. **Materialiser (home-manager module for the demo)** `modules/home-manager/spaces-integrations.nix`
-   (new): takes manifests as Nix attrsets and writes, per integration,
-   into `~/.config/systemd/user/` a **`--user` service**
-   `spaces-integration-<name>.service` whose `ExecStart` is
-   `pi-landlock-exec --json <policy> -- <command>`, the policy lowered
-   from the manifest (FS allowlist = `StateDirectory` + credential mount
-   + shared dir; netPort/`RestrictAddressFamilies` per `network`; ABI-6
-   IPC scoping) — plus `StateDirectory=spaces-integrations/<name>`, the
-   systemd hardening set, and `LoadCredentialEncrypted=<sec>:<user-credstore-path>`
-   per declared secret — and a **`--user` socket**
+1. **Materialiser** `modules/nixos/spaces-integrations/` (new): a NixOS module
+   (the repo has no home-manager) that takes manifests as Nix attrsets and
+   emits, per integration, a **`--user` service**
+   `systemd.user.services."spaces-integration-<name>"` and a **`--user` socket**
    `spaces-integration-<name>.socket`
-   (`ListenStream=%t/spaces-integrations/<name>.sock`, `SocketMode=0600`).
-   Enabling is `systemctl --user enable --now`; no rebuild, no root
-   (req 10). Socket activation: the gateway connects, the user manager
-   starts the instance. No NixOS module, no platform prerequisite.
+   (`ListenStream=%t/spaces-integrations/<name>.sock`, `SocketMode=0600`). The
+   unit's `ExecStartPre` runs a thin `spaces-landlock-policy` CLI — wrapping
+   `buildLandlockPolicy` so there is one policy emitter — which resolves the
+   unit-start paths (`$STATE_DIRECTORY`, `$CREDENTIALS_DIRECTORY`,
+   `$RUNTIME_DIRECTORY`, shared dir) into `$RUNTIME_DIRECTORY/landlock.json`;
+   `ExecStart` is then
+   `pi-landlock-exec --json $RUNTIME_DIRECTORY/landlock.json -- <command>`.
+   (Unit-start generation is required: a system module emits one generic user
+   unit with no build-time `$HOME`, and landlockconfig variables are in-document
+   templating, not env injection.) Plus
+   `StateDirectory=spaces-integrations/<name>` (mode 0700), the systemd
+   hardening set, and `LoadCredentialEncrypted=<sec>:<credstore-path>` per
+   declared secret. The manifest→{unit, policy spec, definition JSON} lowering
+   lives in a backend-agnostic `lib.nix`; `default.nix` is the thin NixOS
+   adapter, so a home-manager adapter can reuse `lib.nix` later. Enabling is
+   `systemctl --user enable --now` — no per-integration root, no rebuild to
+   *use* (req 10).
 
    ```nix
    services.spaces-integrations.integrations.github = {
      command = "${integration-github}/bin/integration-github";
-     shape = "resident";
-     secrets.token.description = "GitHub personal access token";
+     shape   = "resident";
      network = true;
-     tools.get_repo.approval = false;
-     tools.create_issue.approval = true;
+     secrets.token.description = "GitHub personal access token";
+     autoRun = [ "get_repo" ]; # everything else => confirm-per-call
    };
    ```
 
-2. **Broker** `packages/spaces-integrationd/` (Go, small static daemon —
-   runs as the **user**, not root): a per-user socket. Ops `list`,
+2. **Broker** `packages/spaces-integrationd/` (Go, small static **`--user`**
+   daemon on `%t/spaces-integrations.sock`, `SO_PEERCRED`-authed): ops `list`,
    `enable`, `set-secret`, `status`. `set-secret` pipes the value through
-   `systemd-creds encrypt --user --uid=self --name=<sec> --with-key=tpm2`
-   into the user's credstore and discards the plaintext (TPM2 enforced —
-   storing fails without a usable TPM2). `enable` records the manifest
-   approval (req 6) and writes a per-user `enabled.json` (metadata only,
-   no secrets) the gateway consumes. No root daemon and no central secret
-   store — user-scope binding keeps users' secrets mutually undecryptable.
-   (The existing Go broker is the starting point; switch its
-   `credsEncrypt` default to `--user --uid=self` and drop root.)
+   `systemd-creds encrypt --user --uid=self --name=<sec> --with-key=host+tpm2`
+   into the user's credstore and discards the plaintext (TPM2 enforced — storing
+   fails without a usable TPM2). `enable` records the manifest approval (req 6)
+   and writes a per-user `enabled.json` (which integrations are on — metadata
+   only, no secrets, no tool grants). No root daemon, no central secret store:
+   user-scope binding keeps users' secrets mutually undecryptable. Coexists with
+   `skill-config-daemon`, which is removed *after* the POC. (Salvage the branch's
+   Go; switch `credsEncrypt` to `--user --uid=self --with-key=host+tpm2` and drop
+   root.)
 
 3. **Demo integration** `packages/integration-github/` (Python, stdlib —
-   `socket.socket(fileno=3)` makes socket activation trivial): minimal MCP
-   server (`initialize`, `tools/list`, `tools/call`) on the activated
-   socket fd. Reads the PAT from `$CREDENTIALS_DIRECTORY/token`. Tools:
-   `get_repo` (read), `create_issue` (effect, approval-gated),
-   `clone_to_workspace` (clones into the shared dir; stretch). Unchanged
-   by the re-base — it already targets `--user` socket activation + the
-   credentials dir.
+   `socket.socket(fileno=3)` for trivial socket activation): a minimal MCP server
+   (`initialize`, `tools/list`, `tools/call`) on the activated socket fd. Reads
+   the PAT from `$CREDENTIALS_DIRECTORY/token`. Tools: `get_repo` (read,
+   allowlisted), `create_issue` (effect, confirm-gated), and `clone_to_workspace`
+   (file exchange — step 6, §9.4). Salvage the branch's server.
 
-4. **Gateway in the supervisor:** read `enabled.json`; expose one
-   forwarding stub per manifest tool to the sandboxed pi runtime (over the
-   rpc pipe); on call, check the approval flag (panel prompt, block +
-   notify when unattended), then MCP `tools/call` over the user socket.
-   The shared dir is granted to both the session policy and the
-   integration policy. Re-wire onto the shipped supervisor/`rpc-driver`
-   (`packages/pi-sessiond/`).
+4. **Gateway in the supervisor** (`packages/pi-sessiond/`): read `enabled.json`;
+   for each enabled integration connect the socket, `initialize` + `tools/list`,
+   and register a typed forwarding tool per discovered tool to the sandboxed pi
+   runtime (over the rpc pipe). On call: if the tool is on the manifest `autoRun`
+   allowlist (or session-granted) forward immediately; otherwise raise an
+   args-bound confirm to the panel (Allow once / for this session / Deny; block +
+   notify when unattended), then MCP `tools/call` over the user socket. For file
+   exchange the per-pair shared dir is granted to both the session policy and the
+   integration policy (§9.4 step 6). Rewrite onto the shipped
+   supervisor/`rpc-driver`.
 
-5. **Panel (minimal, req 9):** reuse the skill-config request/submit
-   machinery — an enable action plus a secret-entry prompt rendered from
-   the manifest fields, submitting to the broker. No settings-page polish.
+5. **Panel (minimal, req 9):** enable + secret entry render from the
+   integration's definition JSON and submit to the broker directly; the per-call
+   approval prompt rides the existing pi-sessiond executor WebSocket as an
+   `approval_request` event, rendered by a confirm component modeled on
+   `SignalConfirm.qml`. Reuse the skill-config request/submit *UI pattern*; no
+   settings-page polish.
 
 ### 9.2 Secret path (the part the POC must prove)
 
 ```
-panel form ──user socket──▶ broker ──systemd-creds encrypt --user --uid──▶
-    user-scoped, TPM2-sealed ciphertext in the user's credstore
-unit start: user manager ──▶ systemd-creds.socket (root) decrypts ──▶
+panel form --user socket--> broker --systemd-creds encrypt --user --uid=self
+    --with-key=host+tpm2--> user-scoped, TPM2-enforced ciphertext in the credstore
+unit start: user manager --> systemd-creds.socket (root) decrypts -->
     private ramfs credentials mount, instance-only
-agent: no path — its Landlock domain grants neither the integration's
+agent: no path -- its Landlock domain grants neither the integration's
     credential mount nor its socket, and the domain rule blocks
     ptrace/read of the (sibling-domain) integration process. Only
     unconfined code (human, gateway, broker) can reach in.
 ```
 
+Pure `tpm2` is rejected in `--user`/`--uid=` mode on systemd 260; `host+tpm2` is
+the enforced-TPM path (§5.2). Integration users are in `tss` (onboarding) so the
+broker can encrypt.
+
 ### 9.3 Checks (repo testing conventions)
 
-- `checks/spaces-integrations-nix-eval`: manifest → unit + policy codegen
-  asserts (pattern: `spaces-noctalia-nix-eval`); the lowered
-  landlockconfig is deny-by-default and grants only the declared paths /
+- `checks/spaces-integrations-nix-eval`: manifest → unit + socket + policy-spec
+  codegen asserts (pattern: `pi-sessiond-nix-eval`). Asserts the unit wiring
+  (`ExecStartPre` policy gen, `ExecStart` `pi-landlock-exec`, `StateDirectory`,
+  `LoadCredentialEncrypted`, socket `ListenStream`/`SocketMode`), and — by
+  running the `spaces-landlock-policy` CLI on sample resolved paths — that the
+  lowered landlockconfig is deny-by-default and grants only the declared paths /
   ports.
-- Broker protocol unit tests inside the Go package.
-- `checks/pi-sessiond-integration-gateway`: cheap headless check — the
-  real daemon against a stub MCP socket and a scripted mock LLM. Asserts:
-  tools registered and forwarded; approval-flagged call opens the confirm
-  side channel with the args in the prompt; deny returns "Denied by user."
-  and the stub never sees the call; daemon without the integrations env
-  exposes no integration tools.
+- Broker protocol unit tests inside the Go package (`set-secret` encrypts
+  `host+tpm2` and discards plaintext; `enable` writes `enabled.json`;
+  `SO_PEERCRED`).
+- `checks/pi-sessiond-integration-gateway`: cheap headless check — the real
+  daemon against a stub MCP socket and a scripted mock LLM. Asserts: discovered
+  tools registered and forwarded; an allowlisted tool runs with no prompt; a
+  non-allowlisted tool opens the confirm side channel with the args in the
+  prompt; "Allow for this session" suppresses subsequent prompts for that tool
+  that session; Deny returns "Denied by user." and the stub never sees the call;
+  a daemon with no integrations env exposes no integration tools.
 - `checks/integration-poc-machine`: **new** VM test (not bolted onto
-  `test-machine.nix`): `virtualisation.tpm.enable = true` (swtpm), users
-  alice and bob, GitHub API replaced by a local mock HTTP server.
+  `test-machine.nix`): `virtualisation.tpm.enable = true` (swtpm), users alice
+  and bob (both in `tss`), GitHub API replaced by a local mock HTTP server.
   Asserts:
   - enable is refused while secrets are missing;
   - at rest only ciphertext (plaintext grep finds nothing);
-  - the instance sees the plaintext (a `secret_fingerprint` debug tool
-    returns its sha256 prefix);
-  - other users cannot decrypt (user-scoped creds);
-  - the integration authenticates against the mock API with the delivered
-    token (Authorization header observed server-side);
-  - the **agent's Landlock domain cannot `ptrace` or read
-    `/proc/<pid>/mem` of an integration process, nor open its socket /
-    `StateDirectory` / credential mount, while the unconfined supervisor
-    can** (the same-uid wall — the load-bearing assertion that replaces
-    the old delegated-uid wall);
-  - alice cannot reach bob's integration socket or `StateDirectory`
-    (cross-user DAC);
-  - a normal user (no root, no rebuild) can enable, provision, and launch
-    an integration end to end;
-  - `systemd-creds encrypt --user --with-key=tpm2` succeeds as that
-    non-root user (encrypt-as-user, §8).
+  - the instance sees the plaintext (a `secret_fingerprint` debug tool returns
+    its sha256 prefix);
+  - other users cannot decrypt (user-scoped `host+tpm2` creds);
+  - the integration authenticates against the mock API with the delivered token
+    (Authorization header observed server-side);
+  - the **agent's Landlock domain cannot `ptrace` or read `/proc/<pid>/mem` of
+    an integration process, nor open its socket / `StateDirectory` / credential
+    mount, while the unconfined supervisor can** (the same-uid wall);
+  - alice cannot reach bob's integration socket or `StateDirectory` (cross-user
+    DAC);
+  - a normal user (no root, no rebuild) can enable, provision, and launch an
+    integration end to end;
+  - `systemd-creds encrypt --user --uid=self --with-key=host+tpm2` succeeds as
+    that non-root user;
+  - **file exchange:** `clone_to_workspace` populates the shared dir, the agent
+    edits the tree with its native file tools, and a push/PR effect is
+    confirm-gated.
 
 ### 9.4 Order of work
 
-1. Nix codegen + eval check (red-green on the unit text **and** the
-   lowered landlockconfig policy).
-2. Broker (user-level, user-scoped creds) + protocol tests.
-3. Demo integration + socket activation; drive it with `socat` before pi.
-4. Gateway on the shipped supervisor/`rpc-driver` + cheap pi-session check.
-5. Panel prompts + approval flow.
-6. Full VM check with TPM and both users (Landlock wall + cross-user DAC).
+One `jj` commit per step; build fresh, salvage file contents as reference.
+
+1. **Nix codegen** — `lib.nix`/`default.nix` + the `spaces-landlock-policy` CLI +
+   `spaces-integrations-nix-eval` (red-green on the unit text **and** the lowered
+   policy).
+2. **Broker** — `spaces-integrationd` (user-level, `host+tpm2`) + protocol tests.
+3. **Demo integration** — `integration-github` (`get_repo` + `create_issue`) +
+   socket activation; drive with `socat` before pi.
+4. **Gateway** — runtime discovery + `autoRun`/confirm on the supervisor + cheap
+   pi-session check.
+5. **Panel** — enable/secret form (panel→broker) + the approval event
+   (gateway→panel ws).
+6. **File exchange** — per-pair shared dir granted to both the integration policy
+   **and** the agent session policy; `clone_to_workspace`; agent edits natively,
+   push/PR behind approval.
+7. **Full VM check** — TPM (swtpm) + alice/bob: secret path, Landlock wall,
+   cross-user DAC, approval, and file exchange.
 
 ### 9.5 Explicit non-goals
 
-Container/microVM tiers, the `DynamicUser` multi-tenant tier, per-host
-network proxy, OAuth, the §5.5 foreign-setup channel (QR), third-party
-server wrapping, output screening (stretch), instance lifecycle on
-logout, multi-executor, agent-proposed enable (§5.6). Removing the legacy
-`skill-config` path happens after the POC proves out, not during.
+Container/microVM tiers, the `DynamicUser` multi-tenant tier, per-host network
+proxy, OAuth, the §5.5 foreign-setup channel (QR), third-party server wrapping,
+output screening (stretch), instance lifecycle on logout, multi-executor,
+agent-proposed enable (§5.6), and persistent ("allow forever") / args-bound tool
+grants (only ephemeral session grants ship). Removing the legacy `skill-config`
+path happens after the POC proves out, not during.
