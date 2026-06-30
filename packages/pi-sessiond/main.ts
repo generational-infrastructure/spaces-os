@@ -27,7 +27,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { RpcDriver, type RpcFrame } from "./rpc-driver";
@@ -45,6 +45,7 @@ import {
   INTEGRATION_CALL_TITLE,
   type Registry,
   type RegistryEntry,
+  sessionSharedDirs,
   writeSessionToolSpec,
 } from "./integrations";
 
@@ -93,6 +94,14 @@ const INTEGRATIONS_DEFS_DIR =
   process.env.SPACES_SESSIOND_INTEGRATIONS_DEFS ?? "";
 const INTEGRATIONS_SOCKET_DIR =
   process.env.SPACES_SESSIOND_INTEGRATIONS_SOCKETS ?? "";
+// The per-integration file-exchange base dir (design §9.4 step 6): for each
+// enabled integration the supervisor grants <base>/<name> rw in the session's
+// Landlock policy (and creates it), so the agent reads/edits — with its native
+// file tools — a tree the integration cloned in. The integration unit grants
+// itself the same dir. Empty ⇒ no file-exchange grants. Pre-expanded (%t) by
+// systemd before the daemon sees it, like the paths above.
+const INTEGRATIONS_SHARED_DIR =
+  process.env.SPACES_SESSIOND_INTEGRATIONS_SHARED ?? "";
 // Skill plumbing for the per-session pi runtime (NixOS module → JSON env).
 // SPACES_SESSIOND_SESSION_ENV: { VAR: value } --setenv'd into the session unit
 // (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_ALLOWED_PATHS:
@@ -516,8 +525,9 @@ function modelPort(url: string): number | undefined {
 // The per-session landlockconfig policy (design §5). Deny-by-default, bucketed
 // by path type so each grant matches its inode (sandbox.ts). The workspace + the
 // session dir (which contains this session's private agent dir / HOME) are
-// granted rw; the shared long-term memory store is added below. Written next to
-// the session so the launcher (pre-exec, uid 1000) can read it.
+// granted rw; the shared long-term memory store and each enabled integration's
+// file-exchange dir are added below. Written next to the session so the launcher
+// (pre-exec, uid 1000) can read it.
 function writeLandlockPolicy(id: string): string {
   const rwDirs = [workdirOf(id), sessionDirOf(id)];
   const rwFiles: string[] = [];
@@ -535,6 +545,17 @@ function writeLandlockPolicy(id: string): string {
   // The memory store (sediment) writes a sqlite db plus -wal/-shm siblings.
   const sedimentDb = process.env.SEDIMENT_DB;
   if (sedimentDb) rwDirs.push(dirname(sedimentDb));
+  // File exchange (design §9.4 step 6): grant each enabled integration's shared
+  // dir rw — the same <base>/<name> the integration unit grants itself — so the
+  // agent edits a cloned-in tree with its native file tools. Created here so the
+  // grant is live before pi-landlock-exec applies (it skips a missing path).
+  for (const dir of sessionSharedDirs(
+    integrationRegistry,
+    INTEGRATIONS_SHARED_DIR,
+  )) {
+    mkdirSync(dir, { recursive: true });
+    rwDirs.push(dir);
+  }
   // Egress: the child dials the credential proxy (openrouter) and/or the local
   // llama-swap endpoint. Grant connect_tcp to whichever ports are configured.
   const connectPorts = [PROXY_PORT, modelPort(LLM_URL)].filter(

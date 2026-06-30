@@ -709,8 +709,10 @@ Builds on the shipped sandboxed pi runtime + supervisor gateway
    `socket.socket(fileno=3)` for trivial socket activation): a minimal MCP server
    (`initialize`, `tools/list`, `tools/call`) on the activated socket fd. Reads
    the PAT from `$CREDENTIALS_DIRECTORY/token`. Tools: `get_repo` (read,
-   allowlisted), `create_issue` (effect, confirm-gated), and `clone_to_workspace`
-   (file exchange — step 6, §9.4). Salvage the branch's server.
+   allowlisted), `create_issue` (effect, confirm-gated), `clone_to_workspace`
+   (file exchange — populates the shared dir), and `open_pull_request` (the
+   confirm-gated push/PR effect over that tree). The last two are step 6 (§9.4).
+   Salvage the branch's server.
 
 4. **Gateway in the supervisor** (`packages/pi-sessiond/`): read `enabled.json`;
    for each enabled integration connect the socket, `initialize` + `tools/list`,

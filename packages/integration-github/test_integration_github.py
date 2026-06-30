@@ -1,7 +1,9 @@
 import hashlib
+import io
 import json
 import os
 import socket
+import tarfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +12,22 @@ import integration_github
 import pytest
 
 TOKEN = "sekrit-token-12345"
+
+
+def _make_tarball(prefix="octocat-hello-deadbee", files=None):
+    """A GitHub-style tar.gz: every entry under a single "<owner>-<repo>-<sha>/"
+    wrapper dir, exactly what the tarball endpoint returns."""
+    files = files or {"README.md": b"# hello\n", "src/app.py": b"print('hi')\n"}
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel, data in files.items():
+            info = tarfile.TarInfo(f"{prefix}/{rel}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+TARBALL = _make_tarball()
 
 
 class StubGitHub(BaseHTTPRequestHandler):
@@ -28,6 +46,13 @@ class StubGitHub(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _reply_bytes(self, code, data, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         self._record()
         if self.path == "/repos/octocat/hello":
@@ -40,6 +65,8 @@ class StubGitHub(BaseHTTPRequestHandler):
                     "default_branch": "main",
                 },
             )
+        elif self.path.startswith("/repos/octocat/hello/tarball/"):
+            self._reply_bytes(200, TARBALL, "application/gzip")
         else:
             self._reply(404, {"message": "Not Found"})
 
@@ -52,6 +79,14 @@ class StubGitHub(BaseHTTPRequestHandler):
                 {
                     "number": 7,
                     "html_url": "https://github.test/octocat/hello/issues/7",
+                },
+            )
+        elif self.path == "/repos/octocat/hello/pulls":
+            self._reply(
+                201,
+                {
+                    "number": 99,
+                    "html_url": "https://github.test/octocat/hello/pull/99",
                 },
             )
         else:
@@ -71,11 +106,14 @@ def env(tmp_path_factory):
     creds = tmp / "creds"
     creds.mkdir()
     (creds / "token").write_text(TOKEN + "\n")
+    share = tmp / "share"
+    share.mkdir()
 
     sock_path = str(tmp / "github.sock")
     os.environ["SPACES_INTEGRATION_SOCKET"] = sock_path
     os.environ["SPACES_GITHUB_API_URL"] = f"http://127.0.0.1:{stub.server_address[1]}"
     os.environ["CREDENTIALS_DIRECTORY"] = str(creds)
+    os.environ["SPACES_INTEGRATION_SHARED_DIR"] = str(share)
     os.environ.pop("LISTEN_FDS", None)
 
     threading.Thread(target=integration_github.main, daemon=True).start()
@@ -84,7 +122,7 @@ def env(tmp_path_factory):
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
-    yield {"sock": sock_path, "creds": str(creds), "tmp": tmp}
+    yield {"sock": sock_path, "creds": str(creds), "tmp": tmp, "share": str(share)}
     stub.shutdown()
 
 
@@ -152,12 +190,19 @@ def test_initialize_handshake(client):
 def test_tools_list_shape(client):
     resp = client.rpc("tools/list")
     tools = {t["name"]: t for t in resp["result"]["tools"]}
-    assert set(tools) == {"get_repo", "create_issue"}
+    assert set(tools) == {
+        "get_repo",
+        "create_issue",
+        "clone_to_workspace",
+        "open_pull_request",
+    }
     assert tools["get_repo"]["inputSchema"]["required"] == ["repo"]
     assert tools["create_issue"]["inputSchema"]["required"] == ["repo", "title"]
     assert (
         tools["create_issue"]["inputSchema"]["properties"]["body"]["type"] == "string"
     )
+    assert tools["clone_to_workspace"]["inputSchema"]["required"] == ["repo"]
+    assert tools["open_pull_request"]["inputSchema"]["required"] == ["repo", "title"]
 
 
 def test_get_repo_happy_path(client):
@@ -254,3 +299,64 @@ def test_http_error_is_tool_error(client):
     result = resp["result"]
     assert result["isError"] is True
     assert "404" in result["content"][0]["text"]
+
+
+def test_clone_to_workspace_extracts_tree(client, env):
+    StubGitHub.requests.clear()
+    resp = call_tool(client, "clone_to_workspace", {"repo": "octocat/hello"})
+    result = resp["result"]
+    assert result["isError"] is False
+    dest = os.path.join(env["share"], "hello")
+    # the wrapper dir is stripped; the tree lands directly under the workspace
+    assert os.path.isfile(os.path.join(dest, "README.md"))
+    assert os.path.isfile(os.path.join(dest, "src", "app.py"))
+    assert "2 files" in result["content"][0]["text"]
+    # the fetch carried the credential
+    gets = [r for r in StubGitHub.requests if r[0] == "GET" and "/tarball/" in r[1]]
+    assert gets and gets[0][2].get("Authorization") == f"Bearer {TOKEN}"
+
+
+def test_clone_to_workspace_without_shared_dir_is_error(client, monkeypatch):
+    monkeypatch.delenv("SPACES_INTEGRATION_SHARED_DIR", raising=False)
+    resp = call_tool(client, "clone_to_workspace", {"repo": "octocat/hello"})
+    result = resp["result"]
+    assert result["isError"] is True
+    assert "no shared workspace" in result["content"][0]["text"]
+
+
+def test_open_pull_request_pushes_workspace_edits(client, env):
+    StubGitHub.requests.clear()
+    # clone, then the "agent" edits the tree with its own file tools
+    call_tool(client, "clone_to_workspace", {"repo": "octocat/hello"})
+    dest = os.path.join(env["share"], "hello")
+    with open(os.path.join(dest, "AGENT.md"), "w") as fh:
+        fh.write("agent was here\n")
+    resp = call_tool(
+        client,
+        "open_pull_request",
+        {"repo": "octocat/hello", "title": "My change", "body": "please review"},
+    )
+    result = resp["result"]
+    assert result["isError"] is False
+    assert "PR #99" in result["content"][0]["text"]
+    # the effect reached the server with auth and the agent's edit reflected in it
+    posts = [
+        r for r in StubGitHub.requests if r[0] == "POST" and r[1].endswith("/pulls")
+    ]
+    assert len(posts) == 1
+    _, _, headers, body = posts[0]
+    assert headers.get("Authorization") == f"Bearer {TOKEN}"
+    sent = json.loads(body)
+    assert sent["title"] == "My change"
+    assert sent["base"] == "main"
+    assert "AGENT.md" in sent["body"]
+
+
+def test_open_pull_request_without_clone_is_error(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("SPACES_INTEGRATION_SHARED_DIR", str(tmp_path / "empty"))
+    resp = call_tool(
+        client, "open_pull_request", {"repo": "octocat/hello", "title": "x"}
+    )
+    result = resp["result"]
+    assert result["isError"] is True
+    assert "clone_to_workspace first" in result["content"][0]["text"]
