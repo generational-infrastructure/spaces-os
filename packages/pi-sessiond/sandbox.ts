@@ -15,7 +15,7 @@
 
 // One skill-plumbing path the sandboxed pi runtime reaches (a socket, a
 // skills-def dir, the skill-config store), mirroring the NixOS module option
-// services.pi-sessiond-local.allowedPaths. The grant applies to the whole
+// services.pi-sessiond.allowedPaths. The grant applies to the whole
 // per-session Landlock domain — every tool/bash/extension inherits it, not a
 // standalone bash sandbox. Paths arrive pre-expanded (systemd resolves %h/%t
 // in the Environment= the module hands the daemon) and are folded into the

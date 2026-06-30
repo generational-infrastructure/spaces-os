@@ -39,7 +39,7 @@ let
   # this name; QEMU exposes it to the guest at fwCfgPath.
   fwCfgName = "opt/org.spaces/openrouter-key";
   fwCfgPath = "/sys/firmware/qemu_fw_cfg/by_name/${fwCfgName}/raw";
-  # The LoadCredential source the pi-chat / pi-sessiond-local modules
+  # The LoadCredential source the pi-chat / pi-sessiond modules
   # expect the OpenRouter key at.
   secretPath = "/run/spaces-secrets/openrouter-api-key";
 in
@@ -81,9 +81,9 @@ in
           boot.kernelModules = [ "qemu_fw_cfg" ];
 
           # spaces-secrets-load creates the (empty placeholder) secret
-          # file that pi-sessiond-local's LoadCredential reads. If the
+          # file that pi-sessiond's LoadCredential reads. If the
           # launcher published a key over fw_cfg, overwrite the file with
-          # it before the user session's pi-sessiond-local starts, so the
+          # it before the user session's pi-sessiond starts, so the
           # supervisor registers OpenRouter and its catalog reaches the
           # picker. No key -> ConditionPathExists fails -> stays local.
           systemd.services.spaces-openrouter-fwcfg = {

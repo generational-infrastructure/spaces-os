@@ -1,6 +1,6 @@
 # Cheap nix-eval contract for the pi-chat client-side WS tokenFile — the secret
 # indirection that keeps the `hello` token out of the world-readable panel
-# config and the Nix store (the server side already has services.pi-sessiond-local
+# config and the Nix store (the server side already has services.pi-sessiond
 # .tokenFile; this is its client counterpart). Asserts:
 #   - wsTokenFile -> the rendered pi-chat.json executor advertises a `tokenPath`
 #     under /run/spaces-secrets and carries NO inline token; the staging service

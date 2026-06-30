@@ -6,7 +6,7 @@ $SPACES_PI_CHAT_CONFIG seam at a fixture config, and asserts:
 
   (a) a config carrying localExecutor {id:"host", url:"ws://127.0.0.1:<p>"}
       materializes a backend.executors entry with token "" and tokenPath
-      $XDG_RUNTIME_DIR/pi-sessiond-local/token;
+      $XDG_RUNTIME_DIR/pi-sessiond/token;
   (b) the executor authenticates against a fake pi-sessiond whose expected
       token is the token FILE's content (hello -> welcome), proving the
       tokenPath plumbing end-to-end;
@@ -210,11 +210,11 @@ def main():
             },
         )
         # Mint the per-login token where the daemon contract puts it:
-        # $XDG_RUNTIME_DIR/pi-sessiond-local/token. Trailing newline checks
+        # $XDG_RUNTIME_DIR/pi-sessiond/token. Trailing newline checks
         # the panel trims the read. The daemon only answers `welcome` when
         # the hello token equals the file CONTENT, so a successful connect
         # proves the tokenPath plumbing end-to-end.
-        token_dir = os.path.join(qs.xdg, "pi-sessiond-local")
+        token_dir = os.path.join(qs.xdg, "pi-sessiond")
         os.makedirs(token_dir, exist_ok=True)
         token_path = os.path.join(token_dir, "token")
         with open(token_path, "w") as fh:

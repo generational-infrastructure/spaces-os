@@ -152,7 +152,7 @@ reachable. The supervisor emits one document per session; the launcher applies
 it (§6).
 
 Paths are the ones the runtime uses today (`main.ts`): `STATE_DIR =
-%S/pi-sessiond-local` (`~/.local/state/pi-sessiond-local`), `sessions/<id>`
+%S/pi-sessiond` (`~/.local/state/pi-sessiond`), `sessions/<id>`
 (holding this session's private `agent/` = the child's `HOME` /
 `PI_CODING_AGENT_DIR`), `workspaces/<id>`. The daemon keeps its own
 `$STATE_DIR/pi-agent` for in-process model discovery; children never use it.
@@ -248,8 +248,8 @@ The supervisor emits, per session, a document of this shape — literal paths, o
   "ruleset": [{ "scoped": ["signal", "abstract_unix_socket"] }],
   "pathBeneath": [
     { "allowedAccess": ["abi.read_write"], "parent": [
-        "/home/amy/.local/state/pi-sessiond-local/workspaces/<id>",
-        "/home/amy/.local/state/pi-sessiond-local/sessions/<id>" ] },
+        "/home/amy/.local/state/pi-sessiond/workspaces/<id>",
+        "/home/amy/.local/state/pi-sessiond/sessions/<id>" ] },
     { "allowedAccess": ["read_file", "write_file"], "parent": [
         "/dev/null", "/dev/zero", "/dev/urandom", "/dev/random", "/dev/tty" ] },
     { "allowedAccess": ["abi.read_execute"], "parent": ["/nix/store"] },
@@ -356,7 +356,7 @@ scheme.
   per-session policy file, and invokes `systemd-run … pi-landlock-exec --json
   <policy> -- pi …`. The session's private agent dir (`HOME`) and `TMPDIR` nest
   under the session-dir grant; the rpc pipe and `cwd` need no grant of their own.
-- **`modules/nixos/pi-sessiond-local/`** — the single `--user` executor (desktop loopback + each server user). Skill
+- **`modules/nixos/pi-sessiond/`** — the single `--user` executor (desktop loopback + each server user). Skill
   paths arrive through `allowedPaths` and fold into each session's Landlock FS
   allowlist by mode; `pi-landlock-exec`'s absolute path is handed over via
   `SPACES_SESSIOND_LANDLOCK_EXEC`. The supervisor daemon is hardened with
@@ -519,8 +519,8 @@ Extend `sandbox.test.ts` (the §12 unit assertions). *Done when* the unit tests
 green and the `managed` path is untouched.
 
 **Phase 3 — wire main.ts + module.** `main.ts` writes the per-session policy file
-and spawns through the launcher; `pi-sessiond-local.nix` turns `bashBinds` into
-`allowedPaths` and puts `pi-landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
+and spawns through the launcher; `modules/nixos/pi-sessiond/` folds skill paths
+(`allowedPaths`) into the Landlock allowlist and puts `pi-landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
 `nsresourced` stays imported. *Done when* a session starts under the launcher in
 the VM.
 
@@ -548,13 +548,13 @@ config, the `ProtectHome`/`TemporaryFileSystem` block, and `nsresourced.nix`
    service) is spawned through pi-landlock-exec.
 2. **Done — root executor retired (per-user cutover).** The root system service
    is gone (docs/pi-sessiond-per-user-refactor.md). Desktop and server now run
-   the *same* `--user` executor (`modules/nixos/pi-sessiond-local/`): the
+   the *same* `--user` executor (`modules/nixos/pi-sessiond/`): the
    supervisor and every per-session pi child run as the user's own uid — no root
    daemon, no `--uid=`/chown, no shared `pi-session` uid. Cross-session isolation
    within a user is the Landlock `scoped` + seccomp wall (as before); cross-user
    isolation on a multi-user server is plain DAC (distinct real uids). One
    mechanism, one policy emitter, one launcher, one module.
-   Pinned by `checks/pi-sessiond-session-uid`: the spawned `pi-session-<id>` user
+   Pinned by `checks/pi-sessiond-per-user`: the spawned `pi-session-<id>` user
    unit runs as the same unprivileged uid as the supervisor, nothing runs as
    root, and the session dirs are owned by that user.
 3. **Optional, later — nspawn / VM uid backstop.** Cross-*user* isolation on the

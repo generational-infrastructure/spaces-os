@@ -1,11 +1,11 @@
 # Design: per-user `pi-sessiond` (retiring the root remote executor)
 
-**Status:** **implemented.** The root system executor
-`modules/nixos/pi-sessiond/default.nix` (and `users.users.pi-session`) is gone;
-the single generalized `--user` module `modules/nixos/pi-sessiond-local/` is the
-only executor — desktop loopback and each server user alike. The integration
-design ([agent-integrations-design.md](./agent-integrations-design.md)) builds
-on this per-user shape. See "As built" (§4) for the deltas from the plan.
+**Status:** **implemented.** The root system executor and `users.users.pi-session`
+are gone; the single generalized `--user` module — `modules/nixos/pi-sessiond/`,
+renamed from the desktop's `pi-sessiond-local` — is the only executor, desktop
+loopback and each server user alike. The integration design
+([agent-integrations-design.md](./agent-integrations-design.md)) builds on this
+per-user shape. See "As built" (§4) for the deltas from the plan.
 
 **Goal:** a multi-user server runs **one `pi-sessiond` per remote user, each as
 that user's own uid**, structurally identical to the desktop's per-user
@@ -43,8 +43,8 @@ root executor provides **neither**:
   each session dir to the runtime uid). Adding an integration there is a root +
   rebuild action — the opposite of the desktop's rootless, on-the-fly flow.
 
-**Coherence: two executors are one too many.** The desktop already runs the
-executor as a `--user` service (`modules/nixos/pi-sessiond-local.nix`). The
+**Coherence: two executors are one too many.** The desktop already ran the
+executor as a `--user` service (then `pi-sessiond-local`, now `pi-sessiond`). The
 root executor is a *second*, structurally different deployment of the same
 daemon, carrying machinery that exists only for its shared-uid model:
 `SPACES_SESSIOND_SESSION_USER` + `/etc/passwd` resolution + `chownTree` +
@@ -102,15 +102,15 @@ flowchart TB
 
 ## 4. The refactor (what changes)
 
-1. **Delete `modules/nixos/pi-sessiond/default.nix`** and `users.users.pi-session`
+1. **Delete the root system executor module** (then `modules/nixos/pi-sessiond/default.nix`) and `users.users.pi-session`
    / `users.groups.pi-session`. Drop the `nixosModules.pi-sessiond` flake
    export (or repoint it at the generalized `--user` module).
-2. **Generalize the single `--user` executor** (`pi-sessiond-local.nix`, the
-   one remaining executor module): add the headless/remote knobs the root
-   module carried — bind `host`, explicit `token`/`tokenFile`, per-user `port`.
-   The desktop keeps its panel-coupled defaults via `pi-chat`; a server user
-   enables the same module headless under linger. (Rename away from `-local`
-   if "local" no longer fits.)
+2. **Generalize the single `--user` executor** (the surviving module, then
+   `pi-sessiond-local`): add the headless/remote knobs the root module carried —
+   bind `host`, explicit `token`/`tokenFile`, per-user `port`. The desktop keeps
+   its panel-coupled defaults via `pi-chat`; a server user enables the same
+   module headless under linger. (Since renamed `pi-sessiond-local` → `pi-sessiond`
+   now that "local" no longer fits — see As built.)
 3. **Strip the uid-drop machinery** from `packages/pi-sessiond/`:
    - `main.ts` — remove `SPACES_SESSIOND_SESSION_USER`, `resolveUser`,
      `SESSION_IDS`, and the `chownTree` of session/workdir.
@@ -141,27 +141,31 @@ in isolation.
 
 ### As built (deltas from the plan above)
 
-- **The surviving module is a directory**, `modules/nixos/pi-sessiond-local/`
-  (`default.nix` + the shared `lib.nix` moved in from `pi-sessiond/`). An orphan
-  `pi-sessiond/` dir would make blueprint emit a broken
-  `nixosModules.pi-sessiond`; the name `pi-sessiond-local` was kept (rename
-  deferred — it would churn every consumer and the on-disk state dir).
+- **The surviving module is a directory**, `modules/nixos/pi-sessiond/`
+  (`default.nix` + the shared `lib.nix`), **renamed from `pi-sessiond-local`** now
+  that one executor makes the `-local` qualifier noise (module attr == the
+  `pi-sessiond` daemon/package name). The rename is full: the `services.pi-sessiond`
+  option, unit names, `StateDirectory`/token path (`~/.local/state/pi-sessiond`,
+  `$XDG_RUNTIME_DIR/pi-sessiond/token`), and env all moved with it — a **clean
+  break**, so pre-existing sessions under the old `~/.local/state/pi-sessiond-local`
+  are not migrated. The old root `pi-sessiond/` dir was deleted first, freeing the
+  path (and the `nixosModules.pi-sessiond` attr) for the survivor.
 - **The clan `pi` service** (`clan-service-modules/pi/`) executor role enables
-  `services.pi-sessiond-local` (host / firewall / token / llmApiKeyFile /
+  `services.pi-sessiond` (host / firewall / token / llmApiKeyFile /
   serveWebUi / peers; memory off). It does **not** create the account: the host
   provisions the lingering user that runs it (a dual-role desktop machine runs it
   as the human user; a headless executor as a dedicated linger user) and must
   make the token / llama-swap-key clan vars readable by that user. True
   N-users-per-machine addressing stays the deferred front-router (§5).
 - **A shared module `key`** on pi-chat's and the clan executor's imports of
-  `pi-sessiond-local` collapses the two into one on a dual-role machine
+  `pi-sessiond` collapses the two into one on a dual-role machine
   (blueprint wraps the module as an attrset, so identical-path imports do not
   otherwise dedupe).
 - **More dependents than §4.5 listed** were rewired: also
   `checks/pi-sessiond-lifecycle`, `checks/pi-sessiond-session-tmpdir`, and
-  `checks/pi-sessiond-session-uid` (the last rewritten to assert the per-user
+  `checks/pi-sessiond-per-user` (the last rewritten to assert the per-user
   invariant — supervisor and child share the unprivileged uid, no root, no
-  chown). New cheap check `pi-sessiond-local-knobs-nix-eval` pins the
+  chown; renamed from `pi-sessiond-session-uid`). New cheap check `pi-sessiond-knobs-nix-eval` pins the
   desktop/server token + bind knobs.
 
 ---

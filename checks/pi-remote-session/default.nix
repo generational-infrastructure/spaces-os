@@ -39,7 +39,7 @@ pkgs.testers.runNixOSTest {
   nodes.server =
     { lib, pkgs, ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
+      imports = [ inputs.self.nixosModules.pi-sessiond ];
 
       # A real linger-enabled account runs the per-user `--user` executor (the
       # server replica of the desktop mechanism) — no root daemon, no shared
@@ -50,7 +50,7 @@ pkgs.testers.runNixOSTest {
         linger = true;
       };
 
-      services.pi-sessiond-local = {
+      services.pi-sessiond = {
         enable = true;
         executorId = "server";
         host = "0.0.0.0";
@@ -101,7 +101,7 @@ pkgs.testers.runNixOSTest {
         server.wait_for_unit("pi-remote-mock-llm.service")
         server.wait_for_unit("user@1001.service")
         server.wait_until_succeeds(
-            "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
+            "systemctl --user --machine=agent@.host is-active pi-sessiond.service", timeout=60)
         server.wait_for_open_port(${toString wsPort})
 
     client.wait_for_unit("multi-user.target")
@@ -124,7 +124,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("session is persisted to disk as jsonl"):
         server.wait_until_succeeds(
-            "find /home/agent/.local/state/pi-sessiond-local/sessions -name '*.jsonl' | grep -q .",
+            "find /home/agent/.local/state/pi-sessiond/sessions -name '*.jsonl' | grep -q .",
             timeout=15,
         )
 
@@ -154,7 +154,7 @@ pkgs.testers.runNixOSTest {
         # Restarting the daemon drops every in-process AgentSession; the
         # session is cold on disk (session.jsonl) and the SDK SessionManager
         # reloads it on the next attach.
-        server.succeed("systemctl --user --machine=agent@.host restart pi-sessiond-local.service")
+        server.succeed("systemctl --user --machine=agent@.host restart pi-sessiond.service")
         server.wait_for_open_port(${toString wsPort})
         client.succeed(
             "${clientPython}/bin/python3 ${driver} resume "

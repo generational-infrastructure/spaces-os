@@ -1,4 +1,4 @@
-# Shared child-process wiring for the pi-sessiond-local executor module.
+# Shared child-process wiring for the pi-sessiond executor module.
 #
 # Factored out of ./default.nix so the option surface and the child/settings
 # composition stay separable. The one module runs the daemon as a `--user`

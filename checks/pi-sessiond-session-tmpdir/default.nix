@@ -30,7 +30,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine =
     { ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
+      imports = [ inputs.self.nixosModules.pi-sessiond ];
 
       users.users.agent = {
         isNormalUser = true;
@@ -38,7 +38,7 @@ pkgs.testers.runNixOSTest {
         linger = true;
       };
 
-      services.pi-sessiond-local = {
+      services.pi-sessiond = {
         enable = true;
         host = "127.0.0.1";
         port = wsPort;
@@ -71,7 +71,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("pi-tmpdir-mock-llm.service")
     machine.wait_for_unit("user@1001.service")
     machine.wait_until_succeeds(
-        "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
+        "systemctl --user --machine=agent@.host is-active pi-sessiond.service", timeout=60)
     machine.wait_for_open_port(${toString wsPort})
 
     ws = "ws://127.0.0.1:${toString wsPort}"
@@ -84,7 +84,7 @@ pkgs.testers.runNixOSTest {
         if line.startswith("SESSION_ID=")
     )
 
-    session_dir = f"/home/agent/.local/state/pi-sessiond-local/sessions/{sid}"
+    session_dir = f"/home/agent/.local/state/pi-sessiond/sessions/{sid}"
     tmp_dir = f"{session_dir}/tmp"
     policy = f"{session_dir}/landlock.json"
     ll = f"${landlock}/bin/pi-landlock-exec --json {policy} --"

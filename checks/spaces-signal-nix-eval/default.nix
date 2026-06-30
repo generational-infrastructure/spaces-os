@@ -8,7 +8,7 @@
 #      bridge's sandbox runtime dir (read-write) into
 #      services.pi-chat.sandboxAllowedPaths, which pi-chat forwards into the
 #      daemon's SPACES_SESSIOND_ALLOWED_PATHS env JSON (the per-session
-#      sandbox bind list of pi-sessiond-local) — and crucially does NOT
+#      sandbox bind list of pi-sessiond) — and crucially does NOT
 #      publish the signal-cli daemon socket or panel.sock, so a
 #      prompt-injected agent can read messages and queue sends but can
 #      neither reach the daemon directly nor mint its own approval.
@@ -110,17 +110,15 @@ let
   pathUnit = enabledSystem.config.systemd.user.paths.spaces-signal-link;
   # The bind list the daemon folds into every per-session sandbox.
   # services.pi-chat.sandboxAllowedPaths forwards into
-  # services.pi-sessiond-local.allowedPaths, serialized as JSON into the
+  # services.pi-sessiond.allowedPaths, serialized as JSON into the
   # daemon user unit's environment.
   allowedPathsEnv =
-    system:
-    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_ALLOWED_PATHS;
+    system: system.config.systemd.user.services.pi-sessiond.environment.SPACES_SESSIOND_ALLOWED_PATHS;
   # The env JSON the daemon --setenv's into every per-session sandbox.
-  # services.pi-chat.sandboxEnv forwards into pi-sessiond-local.sessionEnv;
+  # services.pi-chat.sandboxEnv forwards into pi-sessiond.sessionEnv;
   # the in-sandbox `signal` CLI reads SPACES_SIGNAL_DB from here.
   sessionEnvJson =
-    system:
-    system.config.systemd.user.services.pi-sessiond-local.environment.SPACES_SESSIOND_SESSION_ENV;
+    system: system.config.systemd.user.services.pi-sessiond.environment.SPACES_SESSIOND_SESSION_ENV;
 in
 pkgs.runCommand "spaces-signal-nix-eval-test"
   {

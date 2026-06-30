@@ -1,5 +1,5 @@
 # Cheap nix-eval contract for the loopback executor user service
-# (modules/nixos/pi-sessiond-local.nix).
+# (modules/nixos/pi-sessiond/).
 #
 # What actually needs pinning here:
 #   - the daemon's isolation shape: ProtectHome=tmpfs with the state dir
@@ -9,7 +9,7 @@
 #     the state dir, NO SPACES_SESSIOND_STATE_DIR (the $STATE_DIRECTORY
 #     fallback must win), and a systemd-run wrapper that targets the *user*
 #     manager (--user) so the per-session pi units land next to the daemon;
-#   - the token oneshot owns %t/pi-sessiond-local and survives restarts;
+#   - the token oneshot owns %t/pi-sessiond and survives restarts;
 #   - enable=false generates neither unit.
 #
 # Eval-only: the daemon's ExecStart references the pi-sessiond package
@@ -42,15 +42,15 @@ let
     };
 
   enabledSystem = mkSystem [
-    inputs.self.nixosModules.pi-sessiond-local
+    inputs.self.nixosModules.pi-sessiond
     {
       networking.hostName = "loopback-on";
-      services.pi-sessiond-local.enable = true;
+      services.pi-sessiond.enable = true;
     }
   ];
 
   disabledSystem = mkSystem [
-    inputs.self.nixosModules.pi-sessiond-local
+    inputs.self.nixosModules.pi-sessiond
     { networking.hostName = "loopback-off"; }
   ];
 
@@ -66,10 +66,10 @@ let
       services.pi-chat.enable = true;
     }
   ];
-  panelDaemon = panelOnlySystem.config.systemd.user.services.pi-sessiond-local or null;
+  panelDaemon = panelOnlySystem.config.systemd.user.services.pi-sessiond or null;
 
-  daemon = enabledSystem.config.systemd.user.services.pi-sessiond-local;
-  tokenUnit = enabledSystem.config.systemd.user.services.pi-sessiond-local-token;
+  daemon = enabledSystem.config.systemd.user.services.pi-sessiond;
+  tokenUnit = enabledSystem.config.systemd.user.services.pi-sessiond-token;
 
   # ExecStart is `getExe' package "pi-sessiond"` — exporting it would make
   # the pi build a dependency of this check. Strip it; assert on the rest.
@@ -93,7 +93,7 @@ assert lib.hasInfix "memory" (builtins.readFile daemon.environment.SPACES_SESSIO
 # pi child at pi-landlock-exec. A string match never realizes the Rust build
 # (same discipline as PI_BIN / ExecStart).
 assert lib.hasSuffix "/bin/pi-landlock-exec" daemon.environment.SPACES_SESSIOND_LANDLOCK_EXEC;
-pkgs.runCommand "pi-sessiond-local-nix-eval-test"
+pkgs.runCommand "pi-sessiond-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];
     daemonServiceConfig = builtins.toJSON daemonServiceConfig;
@@ -103,11 +103,9 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     daemonRequires = builtins.toJSON daemon.requires;
     daemonAfter = builtins.toJSON daemon.after;
     tokenServiceConfig = builtins.toJSON tokenUnit.serviceConfig;
-    disabledHasDaemon = if (disabledServices.pi-sessiond-local or null) == null then "no" else "yes";
-    disabledHasToken =
-      if (disabledServices.pi-sessiond-local-token or null) == null then "no" else "yes";
-    panelOnlyDaemonEnabled =
-      if panelOnlySystem.config.services.pi-sessiond-local.enable then "yes" else "no";
+    disabledHasDaemon = if (disabledServices.pi-sessiond or null) == null then "no" else "yes";
+    disabledHasToken = if (disabledServices.pi-sessiond-token or null) == null then "no" else "yes";
+    panelOnlyDaemonEnabled = if panelOnlySystem.config.services.pi-sessiond.enable then "yes" else "no";
     panelOnlyHasDaemonUnit = if panelDaemon == null then "no" else "yes";
     # The forwarding contract is engaged, not just the enable bit: the
     # daemon's per-session env carries the skill-config socket only when
@@ -125,14 +123,14 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
 
     # ── 1. Daemon sandbox shape ─────────────────────────────────────
     sc '.ProtectHome == "tmpfs"'
-    sc '.StateDirectory == "pi-sessiond-local"'
-    sc '.LoadCredential == ["token:%t/pi-sessiond-local/token"]'
+    sc '.StateDirectory == "pi-sessiond"'
+    sc '.LoadCredential == ["token:%t/pi-sessiond/token"]'
     # State dir back through the ProtectHome tmpfs, plus the user
     # manager's IPC endpoints (%t/systemd private socket + %t/bus) —
     # ProtectHome=tmpfs empties /run/user too, and without these the
     # daemon's `systemd-run --user` bash spawner cannot reach the
     # manager. Sediment DB bind comes from memory.enable (default on).
-    sc '.BindPaths == ["%S/pi-sessiond-local", "%t/systemd", "%t/bus", "%h/.local/state/spaces/pi/sediment"]'
+    sc '.BindPaths == ["%S/pi-sessiond", "%t/systemd", "%t/bus", "%h/.local/state/spaces/pi/sediment"]'
 
     # ── 1b. Memory parity: sediment runs in the child, which inherits the
     # supervisor's SEDIMENT_DB/HF_HOME; the extension itself loads via
@@ -141,10 +139,10 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     env_ '.HF_HOME | startswith("/nix/store/")'
 
     # Ordered after (and hard-required on) the token generator.
-    jq -e 'index("pi-sessiond-local-token.service") != null' <<<"$daemonRequires" >/dev/null \
-      || fail "daemon must Requires= pi-sessiond-local-token.service"
-    jq -e 'index("pi-sessiond-local-token.service") != null' <<<"$daemonAfter" >/dev/null \
-      || fail "daemon must be After= pi-sessiond-local-token.service"
+    jq -e 'index("pi-sessiond-token.service") != null' <<<"$daemonRequires" >/dev/null \
+      || fail "daemon must Requires= pi-sessiond-token.service"
+    jq -e 'index("pi-sessiond-token.service") != null' <<<"$daemonAfter" >/dev/null \
+      || fail "daemon must be After= pi-sessiond-token.service"
 
     # ── 2. Daemon env contract (what main.ts reads) ─────────────────
     env_ '.SPACES_SESSIOND_HOST == "127.0.0.1"'
@@ -153,13 +151,13 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
     env_ 'has("SPACES_SESSIOND_TRUSTED") | not'
     # $STATE_DIRECTORY (from StateDirectory= above) must win.
     env_ 'has("SPACES_SESSIOND_STATE_DIR") | not'
-    env_ '.HOME == "%S/pi-sessiond-local"'
+    env_ '.HOME == "%S/pi-sessiond"'
     # The --user content check happened at eval; here just pin that the
     # wrapper is a real store path, not a bare "systemd-run".
     env_ '.SPACES_SESSIOND_SYSTEMD_RUN | startswith("/nix/store/")'
 
     # ── 3. Token oneshot owns the runtime dir and stays "active" ────
-    tok '.RuntimeDirectory == "pi-sessiond-local"'
+    tok '.RuntimeDirectory == "pi-sessiond"'
     tok '.RemainAfterExit == true'
 
     # ── 4. enable = false generates neither unit ────────────────────
@@ -168,9 +166,9 @@ pkgs.runCommand "pi-sessiond-local-nix-eval-test"
 
     # ── 5. pi-chat alone brings the loopback executor (default-on) ──
     [ "$panelOnlyDaemonEnabled" = "yes" ] \
-      || fail "pi-chat-only import left services.pi-sessiond-local.enable false"
+      || fail "pi-chat-only import left services.pi-sessiond.enable false"
     [ "$panelOnlyHasDaemonUnit" = "yes" ] \
-      || fail "pi-chat-only import generated no pi-sessiond-local unit"
+      || fail "pi-chat-only import generated no pi-sessiond unit"
     jq -e '.SKILL_CONFIG_SOCKET == "%t/spaces-skill-config.sock"' <<<"$panelOnlySessionEnv" >/dev/null \
       || fail "pi-chat-only import did not forward the skill env into the daemon"
     [ "$panelOnlyDefaultExecutor" = "host" ] \

@@ -2,7 +2,7 @@
 #
 # Standalone Quickshell chat panel for the spaces AI agent. Every chat
 # session lives on a pi-sessiond executor reached over WebSocket — by
-# default the per-user loopback daemon (services.pi-sessiond-local,
+# default the per-user loopback daemon (services.pi-sessiond,
 # enabled and fed its skill/sandbox surface by this module); remote
 # executors come in via `executors`/`wsUrl`. The panel itself never
 # spawns pi.
@@ -294,7 +294,7 @@ in
     # (services.pi-chat.localExecutor enables + port-syncs it). Keyed so a
     # dual-role clan machine (this client + the executor role, which imports
     # the same module) collapses the two imports into one.
-    (inputs.self.nixosModules.pi-sessiond-local // { key = "spaces/nixosModules/pi-sessiond-local"; })
+    (inputs.self.nixosModules.pi-sessiond // { key = "spaces/nixosModules/pi-sessiond"; })
   ];
 
   options.services.pi-chat = {
@@ -383,14 +383,14 @@ in
       description = ''
         Executor id new (and legacy, un-pinned) sessions are created on.
         Empty falls back to the first configured executor. (Local execution
-        is itself an executor — the loopback pi-sessiond-local; there is no
+        is itself an executor — the loopback pi-sessiond; there is no
         in-process spawn.)
       '';
     };
 
     localExecutor = {
       enable =
-        lib.mkEnableOption "the per-user loopback pi-sessiond (pi-sessiond-local) as the panel's executor"
+        lib.mkEnableOption "the per-user loopback pi-sessiond (pi-sessiond) as the panel's executor"
         // {
           default = true;
         };
@@ -402,7 +402,7 @@ in
       port = lib.mkOption {
         type = lib.types.port;
         default = 8768;
-        description = "Loopback port pi-sessiond-local listens on (the panel connects to ws://127.0.0.1:<port>).";
+        description = "Loopback port pi-sessiond listens on (the panel connects to ws://127.0.0.1:<port>).";
       };
     };
 
@@ -495,11 +495,11 @@ in
       '';
       description = ''
         Extra filesystem grants for the per-session pi sandboxes of the
-        loopback executor (pi-sessiond-local).
+        loopback executor (pi-sessiond).
 
         NixOS modules that add a skill **MUST** publish their required
         host paths through this option. Forwarded into
-        `services.pi-sessiond-local.allowedPaths` after the pi-chat-owned
+        `services.pi-sessiond.allowedPaths` after the pi-chat-owned
         baseline binds; the daemon folds them into each session's Landlock
         FS allowlist.
       '';
@@ -513,7 +513,7 @@ in
       '';
       description = ''
         Extra environment variables for the per-session pi sandboxes of the
-        loopback executor (pi-sessiond-local).
+        loopback executor (pi-sessiond).
 
         NixOS modules that add a skill **MUST** publish here any absolute
         path a skill CLI must resolve independently of the sandbox's
@@ -521,7 +521,7 @@ in
         agent dir as `$HOME`, so a `~`-relative default no longer points at
         a host path granted via `sandboxAllowedPaths`. May contain systemd
         specifiers `%h` / `%t`, expanded in the daemon unit's Environment=.
-        Forwarded into `services.pi-sessiond-local.sessionEnv` after the
+        Forwarded into `services.pi-sessiond.sessionEnv` after the
         pi-chat-owned baseline — same contract as `sandboxAllowedPaths`.
       '';
     };
@@ -546,7 +546,7 @@ in
       default = { };
       description = ''
         Extra keys to merge into the loopback executor's generated
-        settings.json (forwarded to services.pi-sessiond-local.piSettings).
+        settings.json (forwarded to services.pi-sessiond.piSettings).
         `defaultProvider`, `defaultModel`, `extensions`, and `skills` are
         populated by the modules and cannot be overridden here.
       '';
@@ -654,7 +654,7 @@ in
     # The loopback daemon the panel attaches to. Imported above; enabled,
     # port-synced, and fed the panel-side skill/sandbox surface so one flag
     # drives both halves.
-    services.pi-sessiond-local = lib.mkIf cfg.localExecutor.enable {
+    services.pi-sessiond = lib.mkIf cfg.localExecutor.enable {
       enable = lib.mkDefault true;
       port = lib.mkDefault cfg.localExecutor.port;
       llmUrl = lib.mkDefault cfg.llmUrl;
@@ -715,7 +715,7 @@ in
     services.llama-swap.enable = lib.mkDefault true;
 
     # Every built-in skill's CLI lands on the system PATH. Two reasons:
-    #   1. pi-sessiond-local forwards a PATH containing the system
+    #   1. pi-sessiond forwards a PATH containing the system
     #      profile into every per-session sandbox, so the agent can shell
     #      out by bare name (`signal threads`, `osm-cli search …`,
     #      `caldav list …`, etc.) without each skill's SKILL.md having
@@ -946,7 +946,7 @@ in
         # memoryDbDir is $HOME-relative — the user-writable sediment
         # vector store. The panel only needs it for the destructive
         # "wipe memory" action; recall/storage runs inside
-        # pi-sessiond-local.
+        # pi-sessiond.
         memoryDbDir = memoryDbRel;
         # memoryHfHome is the absolute /nix/store path with the pre-baked
         # embedding-model cache. Not read by the panel — kept for ops
@@ -955,9 +955,9 @@ in
         memoryHfHome = toString sedimentPkg.modelCache;
       }
       // lib.optionalAttrs cfg.localExecutor.enable {
-        # Per-user loopback pi-sessiond (pi-sessiond-local). The panel folds
+        # Per-user loopback pi-sessiond (pi-sessiond). The panel folds
         # this into its executors list with the per-login token path
-        # $XDG_RUNTIME_DIR/pi-sessiond-local/token — the secret itself never
+        # $XDG_RUNTIME_DIR/pi-sessiond/token — the secret itself never
         # lands in this world-readable file.
         localExecutor = {
           inherit (cfg.localExecutor) id;

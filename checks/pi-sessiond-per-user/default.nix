@@ -22,14 +22,14 @@ let
   py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
 in
 pkgs.testers.runNixOSTest {
-  name = "pi-sessiond-session-uid";
+  name = "pi-sessiond-per-user";
   meta.platforms = [ "x86_64-linux" ];
   node.specialArgs = { inherit inputs; };
 
   nodes.machine =
     { ... }:
     {
-      imports = [ inputs.self.nixosModules.pi-sessiond-local ];
+      imports = [ inputs.self.nixosModules.pi-sessiond ];
 
       # A real linger-enabled account runs the per-user --user executor; every
       # session child runs as that same uid (no root daemon, no uid drop).
@@ -39,7 +39,7 @@ pkgs.testers.runNixOSTest {
         linger = true;
       };
 
-      services.pi-sessiond-local = {
+      services.pi-sessiond = {
         enable = true;
         host = "127.0.0.1";
         port = wsPort;
@@ -73,7 +73,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("pi-uid-mock-llm.service")
     machine.wait_for_unit("user@1001.service")
     machine.wait_until_succeeds(
-        "systemctl --user --machine=agent@.host is-active pi-sessiond-local.service", timeout=60)
+        "systemctl --user --machine=agent@.host is-active pi-sessiond.service", timeout=60)
     machine.wait_for_open_port(${toString wsPort})
 
     ws = "ws://127.0.0.1:${toString wsPort}"
@@ -82,7 +82,7 @@ pkgs.testers.runNixOSTest {
     # No root daemon: the supervisor runs as the unprivileged executor user.
     with subtest("supervisor runs as the executor user, not root"):
         pid = machine.succeed(
-            "systemctl --user --machine=agent@.host show -p MainPID --value pi-sessiond-local.service"
+            "systemctl --user --machine=agent@.host show -p MainPID --value pi-sessiond.service"
         ).strip()
         assert pid != "0", "daemon has no main pid"
         owner = machine.succeed(f"stat -c %u /proc/{pid}").strip()
@@ -113,8 +113,8 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the session's dirs are owned by the executor user"):
         for d in (
-            f"/home/agent/.local/state/pi-sessiond-local/sessions/{sid}",
-            f"/home/agent/.local/state/pi-sessiond-local/workspaces/{sid}",
+            f"/home/agent/.local/state/pi-sessiond/sessions/{sid}",
+            f"/home/agent/.local/state/pi-sessiond/workspaces/{sid}",
         ):
             d_owner = machine.succeed(f"stat -c %U {d}").strip()
             assert d_owner == "agent", f"{d} owned by {d_owner}, expected agent"

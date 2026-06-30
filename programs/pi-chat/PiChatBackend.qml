@@ -2,7 +2,7 @@
 //
 // Loads the sessions index from disk, materializes one PiSession per
 // entry (each pinned to a pi-sessiond executor — the loopback
-// pi-sessiond-local by default), and exposes `chat` aliased to the
+// pi-sessiond by default), and exposes `chat` aliased to the
 // active session so the existing Panel/Bubble surface keeps working
 // unchanged. Sessions stay cold until selected: attach happens on the
 // first send, model query, or explicit selectSession().
@@ -120,12 +120,12 @@ Item {
     const list = (root._cfg.executors || []).slice();
     if (list.length === 0 && root.wsUrl !== "")
       list.push({ id: "remote", url: root.wsUrl, token: root.wsToken });
-    // Loopback pi-sessiond-local: the module advertises { id, url }; the
+    // Loopback pi-sessiond: the module advertises { id, url }; the
     // hello token is per-login, minted into the user runtime dir, so only
     // its path goes on the entry — PiExecutor reads it at connect time.
     const le = root._cfg.localExecutor;
     if (le && le.id && le.url)
-      list.push({ id: String(le.id), url: String(le.url), token: "", tokenPath: root.runtimeDir + "/pi-sessiond-local/token" });
+      list.push({ id: String(le.id), url: String(le.url), token: "", tokenPath: root.runtimeDir + "/pi-sessiond/token" });
     // Test seam: a headless check injects the executor topology as JSON via
     // $SPACES_PI_CHAT_EXECUTORS because it can't write the root-owned
     // /etc/spaces/pi-chat.json. Synchronous (no FileView) so it never perturbs
