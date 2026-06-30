@@ -80,8 +80,8 @@ in
 
       serviceUnit = {
         description = "Spaces integration: ${manifest.description} (Landlock-confined MCP server)";
-        # Socket-activated; no wantedBy. The broker (step 2) owns when the
-        # .socket listens at runtime; the .socket carries the wantedBy for now.
+        # Socket-activated; no wantedBy. The broker owns the socket lifecycle:
+        # it `systemctl --user start`s this integration's .socket on enable.
         serviceConfig = {
           Type = "exec";
           # Lower the per-user policy, then exec the server confined. The CLI
@@ -125,7 +125,6 @@ in
 
       socketUnit = {
         description = "Spaces integration socket: ${manifest.description}";
-        wantedBy = [ "sockets.target" ];
         socketConfig = {
           ListenStream = "%t/${unitName}.sock";
           SocketMode = "0600";

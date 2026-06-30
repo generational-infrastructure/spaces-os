@@ -100,6 +100,7 @@ let
     landlockExec = "unused-here";
   };
   ghDef = ghInteg.definition;
+  brokerSvc = enabledSystem.config.systemd.user.services.spaces-integrationd;
 in
 # ── Exec lines: shape at eval (no realize) ──────────────────────────────────
 assert lib.hasInfix "/bin/spaces-landlock-policy " ghSvc.serviceConfig.ExecStartPre;
@@ -114,6 +115,11 @@ assert ghDef.autoRun == [ "get_repo" ];
 assert ghDef.network;
 assert ghDef ? secrets && ghDef.secrets ? token;
 assert !(ghDef ? command);
+# ── Broker unit (step 2): user-scoped host+tpm2 secret path, never pure tpm2 ─
+assert lib.hasSuffix "/bin/spaces-integrationd" brokerSvc.serviceConfig.ExecStart;
+assert brokerSvc.serviceConfig.StateDirectory == "spaces-integrationd";
+assert lib.any (lib.hasInfix "--with-key=host+tpm2") brokerSvc.serviceConfig.Environment;
+assert lib.any (lib.hasInfix "%t/spaces-integrations.sock") brokerSvc.serviceConfig.Environment;
 pkgs.runCommand "spaces-integrations-nix-eval-test"
   {
     nativeBuildInputs = [
