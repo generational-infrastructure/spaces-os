@@ -157,8 +157,22 @@ in
     # llama-server binary on PATH for debugging
     environment.systemPackages = [ cfg.llama-server-package ];
 
-    # Expose llama-swap port to Docker bridge networks
-    networking.firewall.interfaces."br-+".allowedTCPPorts = [ cfg.port ];
+    # Expose the llama-swap port to Docker bridge networks so rootless
+    # containers can reach it. Interface-wildcard syntax is firewall-backend
+    # specific: the iptables backend accepts the "br+" form in
+    # `firewall.interfaces`, but the nftables backend rejects it ("unexpected
+    # +") and needs a quoted glob in a raw input rule.
+    networking.firewall =
+      if config.networking.nftables.enable then
+        {
+          extraInputRules = ''
+            iifname "br-*" tcp dport ${toString cfg.port} accept
+          '';
+        }
+      else
+        {
+          interfaces."br-+".allowedTCPPorts = [ cfg.port ];
+        };
 
     # Unix socket proxy for rootless Docker containers
     systemd.services.llama-swap-socket = {
