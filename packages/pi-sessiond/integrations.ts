@@ -218,7 +218,10 @@ export async function buildRegistry(
   for (const name of loadEnabled(opts.enabledPath)) {
     const def = loadDefinition(opts.defsDir, name);
     if (!def) continue;
-    const socketPath = join(opts.socketDir, `${name}.sock`);
+    // Socket by the materialiser's unit convention (spaces-integrations/lib.nix
+    // unitName): %t/spaces-integration-<name>.sock. socketDir is the daemon's
+    // %t ($XDG_RUNTIME_DIR), shared with the integration units' user manager.
+    const socketPath = join(opts.socketDir, `spaces-integration-${name}.sock`);
     const tools = await discover(socketPath);
     for (const t of tools) {
       if (!NAME_RE.test(t.name)) continue;

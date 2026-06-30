@@ -124,8 +124,8 @@ assert !(ghDef ? command);
 # ── Broker unit (step 2): user-scoped host+tpm2 secret path, never pure tpm2 ─
 assert lib.hasSuffix "/bin/spaces-integrationd" brokerSvc.serviceConfig.ExecStart;
 assert brokerSvc.serviceConfig.StateDirectory == "spaces-integrationd";
-assert lib.any (lib.hasInfix "--with-key=host+tpm2") brokerSvc.serviceConfig.Environment;
-assert lib.any (lib.hasInfix "%t/spaces-integrations.sock") brokerSvc.serviceConfig.Environment;
+assert lib.hasInfix "--with-key=host+tpm2" brokerSvc.environment.SPACES_INTEGRATIOND_CREDS_ENCRYPT;
+assert lib.hasInfix "%t/spaces-integrations.sock" brokerSvc.environment.SPACES_INTEGRATIOND_SOCKET;
 pkgs.runCommand "spaces-integrations-nix-eval-test"
   {
     nativeBuildInputs = [

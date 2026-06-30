@@ -176,3 +176,95 @@ below remain.)
   **output screening**, **container/microVM tiers**, **OAuth** — out of POC
   scope (§9.5).
 - **pi SDK MCP client** — irrelevant; the gateway owns the MCP side either way.
+- **Integration-socket peer-auth** — `AF_UNIX connect()` is not Landlock-mediated
+  and ABI-6 IPC scoping covers only abstract sockets, so a same-uid agent that
+  learns an integration's pathname activation socket could connect directly and
+  bypass the gateway's approval. The POC relies on FS isolation + path
+  non-disclosure + the gateway as the sole approval point; a peer/credential
+  check on the socket would close the direct-connect path.
+
+## Implementation notes — deviations & decisions
+
+Recorded as the POC was built (2026-06-30). Captures where the work departed
+from the plan above, the compromises taken, and the load-bearing decisions made
+along the way — including two latent bugs the full-system VM check (step 7)
+surfaced that earlier, narrower checks could not.
+
+### Latent bugs the VM surfaced (fixes reached back into earlier steps)
+
+- **Gateway socket naming.** The gateway derived an integration's socket as
+  `<socketDir>/<name>.sock`, but the materialiser emits
+  `%t/spaces-integration-<name>.sock`. The cheap gateway check and the
+  `integrations.test.ts` unit tests both stubbed the bare-name path, so the
+  mismatch stayed invisible until the VM wired the real gateway to the real
+  unit. Fixed by teaching `buildRegistry` the unit-naming convention
+  (`socketDir = %t`, socket = `spaces-integration-<name>.sock`); the two stub
+  tests were updated to match.
+- **Broker `systemd-creds` / `systemctl` invocation dropped its arguments.**
+  The broker unit passed the multi-word `systemd-creds encrypt …` and
+  `systemctl --user` commands through a `serviceConfig.Environment` *list*,
+  whose values systemd splits on whitespace — so the broker received only the
+  bare binary path and ran `systemd-creds … -` (parsing `-` as the verb). The
+  broker's Go test mocks the encrypt/systemctl command, so it never exercised
+  the real argument vector. Fixed by moving the broker's environment to the
+  unit `environment` attrset (which NixOS quotes); the nix-eval check now reads
+  the values from `.environment`.
+
+### Architectural decisions
+
+- **`pi-sessiond` ↔ `spaces-integrations` module wiring.** Making the gateway
+  discover integrations on a real system needs the daemon unit to carry
+  `SPACES_SESSIOND_INTEGRATIONS_{ENABLED,DEFS,SOCKETS,SHARED}`. The `pi-sessiond`
+  module now sets them when `services.spaces-integrations.enable` (a cross-module
+  read, `or false`-guarded so the option's absence is harmless on deployments
+  without the integrations module). This glue was not a numbered step; it is the
+  prerequisite that turns the per-step pieces into a working whole.
+- **Daemon `ProtectHome` is relaxed to `read-only` when integrations are on.**
+  `ProtectHome=tmpfs` empties `/home` *and* `/run/user` for the supervisor, which
+  hides the broker's `enabled.json` (under `/home`) and every integration's
+  socket + shared dir (under `/run/user`) — so the gateway saw zero integrations.
+  The per-integration socket paths are created at runtime and are not known when
+  the unit starts, so the existing `BindPaths` punch-through could not cover them
+  cleanly. When integrations are enabled the daemon drops to
+  `ProtectHome=read-only`: it can read `enabled.json`, `connect()` the sockets,
+  and grant the shared path, but still cannot write the user's files, and each
+  per-session pi child keeps its own Landlock domain regardless. The daemon never
+  needs to *create* the shared dir — discovery (run before the WS listens)
+  activates each integration, whose `ExecStartPre` makes the dir first.
+
+### VM check (step 7) realisations
+
+- **File exchange is driven by real pi + a scripted mock LLM.** The VM runs the
+  real pi child and the `spaces-integrations` extension; a mock OpenAI endpoint
+  scripts the tool-call chain (`get_repo` → `clone_to_workspace` → a native edit
+  → `open_pull_request`) and a WebSocket driver auto-approves the two
+  confirm-gated tools. "The agent edits the tree with its native file tools" is a
+  `bash` tool call (allowlisted via `bashConfirm.allowPatterns` so it auto-runs)
+  writing into the granted shared workspace; `open_pull_request` then reflects
+  that file into the PR body, proving the round-trip end to end.
+- **GitHub is redirected with a wrapper, not a module option.** The integration
+  reads `SPACES_GITHUB_API_URL` from its environment. Rather than add a
+  per-integration `environment` knob to the module, the VM points the integration
+  at the in-VM mock with a `writeShellScript` wrapper used as its `command`; the
+  integration package and the `services.spaces-integrations` contract are
+  untouched.
+- **Cross-user DAC is exercised bob→alice.** The wall is symmetric uid DAC plus
+  user-scoped credentials, so the VM provisions only `alice` (running both
+  `pi-sessiond` and the broker — giving `bob` linger too would collide on the
+  daemon's loopback port) and asserts that `bob`, a sibling in the *same* `tss`
+  group, cannot read alice's ciphertext or reach her broker socket. "Other users
+  cannot decrypt" is established by that DAC read-denial together with the
+  `--uid=self` binding (asserted in the nix-eval check), without standing up a
+  second user manager.
+- **The Landlock-wall probe tests the FS wall with the live session's real
+  policy.** It re-applies the actual `landlock.json` the supervisor wrote for the
+  e2e session (through `pi-landlock-exec`) rather than a hand-rolled policy, so it
+  tests exactly the domain a real agent runs under: the integration's private
+  runtime state is denied while the granted shared workspace stays reachable.
+  **Finding:** Landlock mediates filesystem opens, **not** `AF_UNIX connect()`
+  (and ABI-6 IPC scoping covers only *abstract* sockets, not the integration's
+  pathname activation socket), so the wall the VM asserts is FS isolation of the
+  integration's private state — not socket unreachability. See the
+  integration-socket peer-auth residual above.
+- **Determinism.** `alice`/`bob` uids are pinned (1001/1002) so the shared
+  workspace path the scripted edit writes is fixed.

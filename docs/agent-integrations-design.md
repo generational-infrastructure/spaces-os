@@ -779,9 +779,11 @@ broker can encrypt.
   - other users cannot decrypt (user-scoped `host+tpm2` creds);
   - the integration authenticates against the mock API with the delivered token
     (Authorization header observed server-side);
-  - the **agent's Landlock domain cannot `ptrace` or read `/proc/<pid>/mem` of
-    an integration process, nor open its socket / `StateDirectory` / credential
-    mount, while the unconfined supervisor can** (the same-uid wall);
+  - the **agent's Landlock domain cannot read the integration's private runtime
+    state, while the unconfined supervisor — same uid — can**, and the granted
+    shared workspace stays reachable (the deny-by-default FS wall; `ptrace`/mem
+    is walled by the sibling-domain rule, and `AF_UNIX connect()` is not
+    Landlock-mediated — see the POC plan's deviations note);
   - alice cannot reach bob's integration socket or `StateDirectory` (cross-user
     DAC);
   - a normal user (no root, no rebuild) can enable, provision, and launch an

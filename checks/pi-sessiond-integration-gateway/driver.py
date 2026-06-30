@@ -292,7 +292,7 @@ def main():
     with open(enabled_path, "w") as fh:
         json.dump({"integrations": {"github": {"enabled": True}}}, fh)
     calls_out = os.path.join(root, "calls.jsonl")
-    gh_sock = os.path.join(sock_dir, "github.sock")
+    gh_sock = os.path.join(sock_dir, "spaces-integration-github.sock")
 
     # Stub MCP server must be listening before the daemon's startup discovery.
     mcp = subprocess.Popen([sys.executable, stub_mcp, gh_sock, calls_out])
