@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Rispondi",
-    "quote-missing": "↳ (messaggio precedente)"
+    "quote-missing": "↳ (messaggio precedente)",
+    "approval-title": "Consentire la chiamata allo strumento di integrazione?",
+    "approval-deny": "Rifiuta",
+    "approval-once": "Consenti una volta",
+    "approval-session": "Consenti per la sessione",
+    "approval-allowed-once": "✓ consentito una volta",
+    "approval-allowed-session": "✓ consentito (sessione)",
+    "approval-denied": "✗ rifiutato"
   },
   "settings": {
     "nixos-hint": "La configurazione del peer (pubkey, relay, nome visualizzato) è gestita dal modulo NixOS — vedi services.pi-chat nella tua configurazione.",
     "history-limit-label": "Limite cronologia",
-    "history-limit-description": "Messaggi mantenuti nel mirror in memoria del pannello (SQLite conserva tutto)."
+    "history-limit-description": "Messaggi mantenuti nel mirror in memoria del pannello (SQLite conserva tutto).",
+    "integrations-title": "Integrazioni",
+    "integrations-offline": "Connessione al daemon delle integrazioni…",
+    "integrations-empty": "Nessuna integrazione disponibile. Configurale tramite services.spaces-integrations nella tua configurazione NixOS.",
+    "integrations-enabled-badge": "abilitata",
+    "integrations-enable": "Abilita",
+    "integrations-disable": "Disabilita",
+    "integrations-secret-set": "impostato",
+    "integrations-secret-unset": "non impostato",
+    "integrations-secret-save": "Salva",
+    "integrations-error": "Richiesta di integrazione non riuscita: {error}"
   },
   "menu": {
     "open-chat": "Apri chat",

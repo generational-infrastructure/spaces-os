@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "回复",
-    "quote-missing": "↳（更早的消息）"
+    "quote-missing": "↳（更早的消息）",
+    "approval-title": "允许集成工具调用?",
+    "approval-deny": "拒绝",
+    "approval-once": "允许一次",
+    "approval-session": "本会话内允许",
+    "approval-allowed-once": "✓ 已允许一次",
+    "approval-allowed-session": "✓ 已允许（会话）",
+    "approval-denied": "✗ 已拒绝"
   },
   "settings": {
     "nixos-hint": "对端配置（公钥、中继、显示名称）由 NixOS 模块管理 — 请参阅配置中的 services.pi-chat。",
     "history-limit-label": "历史记录上限",
-    "history-limit-description": "面板内存镜像中保留的消息数（SQLite 会保留全部）。"
+    "history-limit-description": "面板内存镜像中保留的消息数（SQLite 会保留全部）。",
+    "integrations-title": "集成",
+    "integrations-offline": "正在连接集成守护进程…",
+    "integrations-empty": "没有可用的集成。请在 NixOS 配置中通过 services.spaces-integrations 进行配置。",
+    "integrations-enabled-badge": "已启用",
+    "integrations-enable": "启用",
+    "integrations-disable": "禁用",
+    "integrations-secret-set": "已设置",
+    "integrations-secret-unset": "未设置",
+    "integrations-secret-save": "保存",
+    "integrations-error": "集成请求失败: {error}"
   },
   "menu": {
     "open-chat": "打开聊天",

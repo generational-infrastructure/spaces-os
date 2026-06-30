@@ -515,6 +515,7 @@ Item {
         onConfirmRequested: confirmed => root.chat.confirmRespond(modelData.id, confirmed)
         onPromptSubmit: value => root.chat.promptRespond(modelData.id, value)
         onPromptCancel: root.chat.promptCancel(modelData.id)
+        onApprovalRequested: decision => root.chat.approvalRespond(modelData.id, decision)
       }
 
       // A streaming token reassigns the model every frame but never

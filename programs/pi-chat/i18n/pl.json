@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Odpowiedz",
-    "quote-missing": "↳ (wcześniejsza wiadomość)"
+    "quote-missing": "↳ (wcześniejsza wiadomość)",
+    "approval-title": "Zezwolić na wywołanie narzędzia integracji?",
+    "approval-deny": "Odmów",
+    "approval-once": "Zezwól raz",
+    "approval-session": "Zezwól na sesję",
+    "approval-allowed-once": "✓ zezwolono raz",
+    "approval-allowed-session": "✓ zezwolono (sesja)",
+    "approval-denied": "✗ odmówiono"
   },
   "settings": {
     "nixos-hint": "Konfiguracja peera (pubkey, przekaźniki, nazwa wyświetlana) jest zarządzana przez moduł NixOS — zobacz services.pi-chat w swojej konfiguracji.",
     "history-limit-label": "Limit historii",
-    "history-limit-description": "Wiadomości przechowywane w odbiciu panelu w pamięci (SQLite zachowuje wszystko)."
+    "history-limit-description": "Wiadomości przechowywane w odbiciu panelu w pamięci (SQLite zachowuje wszystko).",
+    "integrations-title": "Integracje",
+    "integrations-offline": "Łączenie z demonem integracji…",
+    "integrations-empty": "Brak dostępnych integracji. Skonfiguruj je przez services.spaces-integrations w swojej konfiguracji NixOS.",
+    "integrations-enabled-badge": "włączona",
+    "integrations-enable": "Włącz",
+    "integrations-disable": "Wyłącz",
+    "integrations-secret-set": "ustawiony",
+    "integrations-secret-unset": "nieustawiony",
+    "integrations-secret-save": "Zapisz",
+    "integrations-error": "Żądanie integracji nie powiodło się: {error}"
   },
   "menu": {
     "open-chat": "Otwórz czat",

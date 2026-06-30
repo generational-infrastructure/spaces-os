@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Antworten",
-    "quote-missing": "↳ (frühere Nachricht)"
+    "quote-missing": "↳ (frühere Nachricht)",
+    "approval-title": "Integrationstool-Aufruf zulassen?",
+    "approval-deny": "Ablehnen",
+    "approval-once": "Einmal zulassen",
+    "approval-session": "Für Sitzung zulassen",
+    "approval-allowed-once": "✓ einmal zugelassen",
+    "approval-allowed-session": "✓ zugelassen (Sitzung)",
+    "approval-denied": "✗ abgelehnt"
   },
   "settings": {
     "nixos-hint": "Die Peer-Konfiguration (Pubkey, Relays, Anzeigename) wird vom NixOS-Modul verwaltet — siehe services.pi-chat in deiner Konfiguration.",
     "history-limit-label": "Verlaufslimit",
-    "history-limit-description": "Nachrichten, die im In-Memory-Spiegel des Panels gehalten werden (SQLite behält alles)."
+    "history-limit-description": "Nachrichten, die im In-Memory-Spiegel des Panels gehalten werden (SQLite behält alles).",
+    "integrations-title": "Integrationen",
+    "integrations-offline": "Verbinde mit dem Integrations-Daemon…",
+    "integrations-empty": "Keine Integrationen verfügbar. Konfiguriere sie über services.spaces-integrations in deiner NixOS-Konfiguration.",
+    "integrations-enabled-badge": "aktiviert",
+    "integrations-enable": "Aktivieren",
+    "integrations-disable": "Deaktivieren",
+    "integrations-secret-set": "gesetzt",
+    "integrations-secret-unset": "nicht gesetzt",
+    "integrations-secret-save": "Speichern",
+    "integrations-error": "Integrationsanfrage fehlgeschlagen: {error}"
   },
   "menu": {
     "open-chat": "Chat öffnen",

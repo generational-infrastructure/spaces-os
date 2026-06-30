@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Répondre",
-    "quote-missing": "↳ (message antérieur)"
+    "quote-missing": "↳ (message antérieur)",
+    "approval-title": "Autoriser l'appel d'outil d'intégration ?",
+    "approval-deny": "Refuser",
+    "approval-once": "Autoriser une fois",
+    "approval-session": "Autoriser pour la session",
+    "approval-allowed-once": "✓ autorisé une fois",
+    "approval-allowed-session": "✓ autorisé (session)",
+    "approval-denied": "✗ refusé"
   },
   "settings": {
     "nixos-hint": "La configuration du pair (pubkey, relais, nom d'affichage) est gérée par le module NixOS — voir services.pi-chat dans votre configuration.",
     "history-limit-label": "Limite d'historique",
-    "history-limit-description": "Messages conservés dans le miroir en mémoire du panneau (SQLite conserve tout)."
+    "history-limit-description": "Messages conservés dans le miroir en mémoire du panneau (SQLite conserve tout).",
+    "integrations-title": "Intégrations",
+    "integrations-offline": "Connexion au démon d'intégrations…",
+    "integrations-empty": "Aucune intégration disponible. Configurez-les via services.spaces-integrations dans votre configuration NixOS.",
+    "integrations-enabled-badge": "activée",
+    "integrations-enable": "Activer",
+    "integrations-disable": "Désactiver",
+    "integrations-secret-set": "défini",
+    "integrations-secret-unset": "non défini",
+    "integrations-secret-save": "Enregistrer",
+    "integrations-error": "Échec de la requête d'intégration : {error}"
   },
   "menu": {
     "open-chat": "Ouvrir le chat",

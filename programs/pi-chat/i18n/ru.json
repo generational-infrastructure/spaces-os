@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Ответить",
-    "quote-missing": "↳ (более раннее сообщение)"
+    "quote-missing": "↳ (более раннее сообщение)",
+    "approval-title": "Разрешить вызов инструмента интеграции?",
+    "approval-deny": "Отклонить",
+    "approval-once": "Разрешить один раз",
+    "approval-session": "Разрешить на сессию",
+    "approval-allowed-once": "✓ разрешено один раз",
+    "approval-allowed-session": "✓ разрешено (сессия)",
+    "approval-denied": "✗ отклонено"
   },
   "settings": {
     "nixos-hint": "Конфигурация собеседника (pubkey, релеи, отображаемое имя) управляется модулем NixOS — см. services.pi-chat в вашей конфигурации.",
     "history-limit-label": "Лимит истории",
-    "history-limit-description": "Сообщения, хранящиеся в зеркале панели в памяти (SQLite сохраняет всё)."
+    "history-limit-description": "Сообщения, хранящиеся в зеркале панели в памяти (SQLite сохраняет всё).",
+    "integrations-title": "Интеграции",
+    "integrations-offline": "Подключение к демону интеграций…",
+    "integrations-empty": "Нет доступных интеграций. Настройте их через services.spaces-integrations в вашей конфигурации NixOS.",
+    "integrations-enabled-badge": "включено",
+    "integrations-enable": "Включить",
+    "integrations-disable": "Отключить",
+    "integrations-secret-set": "задан",
+    "integrations-secret-unset": "не задан",
+    "integrations-secret-save": "Сохранить",
+    "integrations-error": "Запрос интеграции не выполнен: {error}"
   },
   "menu": {
     "open-chat": "Открыть чат",
