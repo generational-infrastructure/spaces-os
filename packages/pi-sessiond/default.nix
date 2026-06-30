@@ -24,10 +24,27 @@ let
     cp ${./rpc-driver.ts} "$out/rpc-driver.ts"
     cp ${./proxy.ts} "$out/proxy.ts"
     cp ${./sandbox.ts} "$out/sandbox.ts"
+    cp ${./seccomp-denylist.json} "$out/seccomp-denylist.json"
     cp ${./provider.ts} "$out/provider.ts"
     cp ${./staging.ts} "$out/staging.ts"
     # Resolve @earendil-works/pi-coding-agent (and its deps) from the pinned pi.
     ln -s ${pi}/lib/node_modules "$out/node_modules"
+  '';
+
+  # spaces-landlock-policy: the integration units' ExecStartPre policy
+  # generator (modules/nixos/spaces-integrations). It wraps the same
+  # buildLandlockPolicy the per-session sandbox uses, so the landlockconfig
+  # schema keeps a single emitter. Bundled WITHOUT node_modules: it imports
+  # only sandbox.ts (+ its JSON denylist), never the pi SDK, so its closure is
+  # just bun — cheap to build and to pull onto an integration host.
+  policyCliSrc = pkgs.runCommandLocal "spaces-landlock-policy-src" { } ''
+    mkdir -p "$out"
+    cp ${./landlock-policy-cli.ts} "$out/landlock-policy-cli.ts"
+    cp ${./sandbox.ts} "$out/sandbox.ts"
+    cp ${./seccomp-denylist.json} "$out/seccomp-denylist.json"
+  '';
+  landlockPolicy = pkgs.writeShellScriptBin "spaces-landlock-policy" ''
+    exec ${pkgs.bun}/bin/bun ${policyCliSrc}/landlock-policy-cli.ts "$@"
   '';
 in
 # Re-export `pi` so the module wires SPACES_SESSIOND_PI_BIN to the same build
@@ -37,6 +54,6 @@ in
 '').overrideAttrs
   (old: {
     passthru = (old.passthru or { }) // {
-      inherit pi;
+      inherit pi landlockPolicy;
     };
   })
