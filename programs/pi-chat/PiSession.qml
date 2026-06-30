@@ -114,6 +114,11 @@ QtObject {
   // on shutdown. Confirm bubbles are stored in `messages` for the UI.
   property var _pendingExtensionUI: ({})
 
+  // Pending integration tool approvals (gateway → panel, keyed by id).
+  // The bubble in `messages` carries the UI; this mirrors
+  // _pendingExtensionUI so a collapse/cleanup can find still-open ones.
+  property var _pendingApprovals: ({})
+
   function _now() { return Date.now(); }
 
   function _localId() {
@@ -189,6 +194,14 @@ QtObject {
     _send({ type: "extension_ui_response", id: id, confirmed: !!confirmed });
     patch(id, { confirmState: confirmed ? "allowed" : "denied" });
     delete _pendingExtensionUI[id];
+  }
+
+  // Gateway → panel: the user picked once | session | deny for an
+  // integration tool call. Mirror the verdict into the bubble and reply.
+  function approvalRespond(id, decision) {
+    _send({ type: "approval_response", id: id, decision: decision });
+    patch(id, { approvalState: decision });
+    delete _pendingApprovals[id];
   }
 
   // WS mode: another mirrored client answered this side channel first. Collapse
@@ -557,6 +570,10 @@ QtObject {
       _handleExtensionRequest(ev);
       break;
 
+    case "approval_request":
+      _handleApprovalRequest(ev);
+      break;
+
     case "extension_error":
       Logger.w("PiSession", sessionId, "extension error", ev.error);
       break;
@@ -767,6 +784,28 @@ QtObject {
     }
     // setStatus / setWidget / setTitle / set_editor_text are
     // fire-and-forget; ignore them.
+  }
+
+  // Gateway → panel: a non-allowlisted integration tool wants to run.
+  // Render an approval bubble — the args are the security-relevant payload
+  // the user is consenting to; {once, session, deny} reply over the ws.
+  function _handleApprovalRequest(ev) {
+    _pendingApprovals[ev.id] = true;
+    _appendMessage({
+      id: ev.id,
+      from: "peer",
+      text: "",
+      ts: _now(),
+      state: "sent",
+      tries: 0,
+      ack: "", image: "", replyTo: "",
+      type: "approval",
+      approvalIntegration: ev.integration || "",
+      approvalTool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
+      approvalArgs: JSON.stringify(ev.args || {}, null, 2),
+      approvalState: "pending",
+    });
+    incomingNotification(ev.toolName || "approval");
   }
 
   function _handleResponse(ev) {

@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "Beantwoorden",
-    "quote-missing": "↳ (eerder bericht)"
+    "quote-missing": "↳ (eerder bericht)",
+    "approval-title": "Aanroep van integratietool toestaan?",
+    "approval-deny": "Weigeren",
+    "approval-once": "Eén keer toestaan",
+    "approval-session": "Toestaan voor sessie",
+    "approval-allowed-once": "✓ één keer toegestaan",
+    "approval-allowed-session": "✓ toegestaan (sessie)",
+    "approval-denied": "✗ geweigerd"
   },
   "settings": {
     "nixos-hint": "Peer-configuratie (pubkey, relays, weergavenaam) wordt beheerd door de NixOS-module — zie services.pi-chat in je configuratie.",
     "history-limit-label": "Geschiedenislimiet",
-    "history-limit-description": "Berichten bijgehouden in het in-memory-spiegel van het paneel (SQLite bewaart alles)."
+    "history-limit-description": "Berichten bijgehouden in het in-memory-spiegel van het paneel (SQLite bewaart alles).",
+    "integrations-title": "Integraties",
+    "integrations-offline": "Verbinden met de integratie-daemon…",
+    "integrations-empty": "Geen integraties beschikbaar. Configureer ze via services.spaces-integrations in je NixOS-configuratie.",
+    "integrations-enabled-badge": "ingeschakeld",
+    "integrations-enable": "Inschakelen",
+    "integrations-disable": "Uitschakelen",
+    "integrations-secret-set": "ingesteld",
+    "integrations-secret-unset": "niet ingesteld",
+    "integrations-secret-save": "Opslaan",
+    "integrations-error": "Integratieverzoek mislukt: {error}"
   },
   "menu": {
     "open-chat": "Chat openen",

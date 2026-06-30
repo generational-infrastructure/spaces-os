@@ -40,18 +40,23 @@ Item {
   // Panel forwards to chat.promptRespond / chat.promptCancel.
   signal promptSubmit(string value)
   signal promptCancel
+  // Emitted when the user picks once/session/deny on an approval bubble.
+  // Panel forwards to chat.approvalRespond.
+  signal approvalRequested(string decision)
 
   readonly property bool mine: row.msg.from === "me"
   readonly property bool isNotification: (row.msg.type ?? "") === "notification"
   readonly property bool isConfirm: (row.msg.type ?? "") === "confirm"
   readonly property bool isPrompt: (row.msg.type ?? "") === "prompt"
   readonly property bool isThinking: (row.msg.type ?? "") === "thinking"
+  readonly property bool isApproval: (row.msg.type ?? "") === "approval"
   // Match locally — O(1) and can't drift from Panel's hit list since
   // it's the same predicate.
   readonly property bool searchHit:
     searchQuery !== "" && (row.msg.text || "").toLowerCase().includes(searchQuery)
 
   implicitHeight: row.isConfirm ? confirmCard.implicitHeight
+                                : row.isApproval ? approvalCard.implicitHeight
                                 : row.isPrompt ? promptCard.implicitHeight
                                 : row.isNotification ? notifText.implicitHeight
                                 : row.isThinking ? thinkingText.implicitHeight
@@ -341,6 +346,101 @@ Item {
           ? row.tr("bubble.confirm-allowed")
           : row.tr("bubble.confirm-denied")
         color: (row.msg.confirmState === "allowed") ? Color.mTertiary : Color.mError
+        pointSize: Style.fontSizeS
+        font.bold: true
+      }
+    }
+  }
+
+  // Integration tool-call approval (gateway → panel). A non-allowlisted
+  // tool wants to run; the args below are exactly what it will execute
+  // with. Three outcomes — once, session (tool-name grant), deny.
+  Rectangle {
+    id: approvalCard
+    visible: row.isApproval
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.margins: 0
+    implicitHeight: approvalCol.implicitHeight + Style.marginM * 2
+    radius: Style.radiusS
+    color: Color.mSurfaceVariant
+    border.width: 1
+    border.color: {
+      const s = row.msg.approvalState ?? "pending";
+      if (s === "once" || s === "session") return Color.mTertiary;
+      if (s === "deny") return Color.mError;
+      return Color.mPrimary;
+    }
+    ColumnLayout {
+      id: approvalCol
+      anchors.fill: parent
+      anchors.margins: Style.marginM
+      spacing: Style.marginXS
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NIcon {
+          icon: "key"
+          pointSize: Style.fontSizeL
+          color: Color.mPrimary
+        }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: 0
+          NText {
+            text: row.tr("bubble.approval-title")
+            pointSize: Style.fontSizeM
+            font.bold: true
+            color: Color.mOnSurface
+          }
+          NText {
+            text: (row.msg.approvalIntegration || "") + " · " + (row.msg.approvalTool || "")
+            pointSize: Style.fontSizeS
+            color: Color.mOnSurfaceVariant
+          }
+        }
+      }
+      // The exact args the tool will run with — the security-relevant payload.
+      NText {
+        Layout.fillWidth: true
+        visible: (row.msg.approvalArgs || "") !== "" && (row.msg.approvalArgs || "") !== "{}"
+        text: row.msg.approvalArgs
+        wrapMode: Text.Wrap
+        color: Color.mOnSurfaceVariant
+        pointSize: Style.fontSizeXS
+      }
+      RowLayout {
+        Layout.alignment: Qt.AlignRight
+        spacing: Style.marginS
+        visible: (row.msg.approvalState ?? "pending") === "pending"
+        Button {
+          text: row.tr("bubble.approval-deny")
+          onClicked: row.approvalRequested("deny")
+        }
+        Button {
+          text: row.tr("bubble.approval-once")
+          onClicked: row.approvalRequested("once")
+        }
+        Button {
+          text: row.tr("bubble.approval-session")
+          highlighted: true
+          onClicked: row.approvalRequested("session")
+        }
+      }
+      NText {
+        Layout.alignment: Qt.AlignRight
+        visible: (row.msg.approvalState ?? "pending") !== "pending"
+        text: {
+          const s = row.msg.approvalState ?? "";
+          if (s === "once") return row.tr("bubble.approval-allowed-once");
+          if (s === "session") return row.tr("bubble.approval-allowed-session");
+          if (s === "deny") return row.tr("bubble.approval-denied");
+          return "";
+        }
+        color: {
+          const s = row.msg.approvalState ?? "";
+          return s === "deny" ? Color.mError : Color.mTertiary;
+        }
         pointSize: Style.fontSizeS
         font.bold: true
       }

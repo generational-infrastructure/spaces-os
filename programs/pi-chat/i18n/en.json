@@ -48,12 +48,29 @@
     "prompt-cancel": "Cancel",
     "prompt-submitted": "✓ submitted",
     "prompt-cancelled": "✗ cancelled",
-    "prompt-retracted": "⚠ retracted"
+    "prompt-retracted": "⚠ retracted",
+    "approval-title": "Allow integration tool call?",
+    "approval-deny": "Deny",
+    "approval-once": "Allow once",
+    "approval-session": "Allow for session",
+    "approval-allowed-once": "✓ allowed once",
+    "approval-allowed-session": "✓ allowed (session)",
+    "approval-denied": "✗ denied"
   },
   "settings": {
     "nixos-hint": "Peer configuration (pubkey, relays, display name) is managed by the NixOS module — see services.pi-chat in your config.",
     "history-limit-label": "History limit",
-    "history-limit-description": "Messages kept in the panel's in-memory mirror (sqlite keeps everything)."
+    "history-limit-description": "Messages kept in the panel's in-memory mirror (sqlite keeps everything).",
+    "integrations-title": "Integrations",
+    "integrations-offline": "Connecting to the integrations daemon…",
+    "integrations-empty": "No integrations available. Configure them via services.spaces-integrations in your NixOS config.",
+    "integrations-enabled-badge": "enabled",
+    "integrations-enable": "Enable",
+    "integrations-disable": "Disable",
+    "integrations-secret-set": "set",
+    "integrations-secret-unset": "not set",
+    "integrations-secret-save": "Save",
+    "integrations-error": "Integration request failed: {error}"
   },
   "menu": {
     "open-chat": "Open Chat",

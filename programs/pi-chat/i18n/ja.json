@@ -34,12 +34,29 @@
   },
   "bubble": {
     "reply-tooltip": "返信",
-    "quote-missing": "↳（以前のメッセージ）"
+    "quote-missing": "↳（以前のメッセージ）",
+    "approval-title": "統合ツールの呼び出しを許可しますか?",
+    "approval-deny": "拒否",
+    "approval-once": "1回だけ許可",
+    "approval-session": "セッション中は許可",
+    "approval-allowed-once": "✓ 一度だけ許可",
+    "approval-allowed-session": "✓ 許可（セッション）",
+    "approval-denied": "✗ 拒否"
   },
   "settings": {
     "nixos-hint": "ピア設定（公開鍵、リレー、表示名）は NixOS モジュールで管理されています — 設定の services.pi-chat を参照してください。",
     "history-limit-label": "履歴の上限",
-    "history-limit-description": "パネルのメモリ内ミラーに保持されるメッセージ数（SQLite はすべて保持します）。"
+    "history-limit-description": "パネルのメモリ内ミラーに保持されるメッセージ数（SQLite はすべて保持します）。",
+    "integrations-title": "統合",
+    "integrations-offline": "統合デーモンに接続中…",
+    "integrations-empty": "利用可能な統合がありません。NixOS 設定の services.spaces-integrations で構成してください。",
+    "integrations-enabled-badge": "有効",
+    "integrations-enable": "有効化",
+    "integrations-disable": "無効化",
+    "integrations-secret-set": "設定済み",
+    "integrations-secret-unset": "未設定",
+    "integrations-secret-save": "保存",
+    "integrations-error": "統合リクエストに失敗しました: {error}"
   },
   "menu": {
     "open-chat": "チャットを開く",
