@@ -172,3 +172,27 @@ def test_read_credential_and_shared_dir(tmp_path, monkeypatch):
     assert mcp.shared_dir() == "/run/share/x"
     monkeypatch.delenv("SPACES_INTEGRATION_SHARED_DIR", raising=False)
     assert mcp.shared_dir() is None
+
+
+def test_store_profile_merges_config_and_secrets(tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text(
+        '[mail.work]\nimap_host = "imap.corp.com"\nimap_port = "993"\n'
+    )
+    (creds / "secrets").write_text('[mail.work]\npassword = "hunter2"\n')
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    vals = mcp.store_profile("work")
+    assert vals["imap_host"] == "imap.corp.com"
+    assert vals["imap_port"] == "993"
+    assert vals["password"] == "hunter2"
+    # A profile that isn't provisioned yields no fields.
+    assert mcp.store_profile("home") == {}
+
+
+def test_store_profile_absent_blobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path / "empty"))
+    assert mcp.store_profile("work") == {}
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    assert mcp.store_profile("work") == {}

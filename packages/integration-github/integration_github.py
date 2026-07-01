@@ -16,7 +16,7 @@ import tarfile
 import urllib.error
 import urllib.request
 
-from spaces_integration_mcp import read_credential, run, shared_dir
+from spaces_integration_mcp import run, shared_dir, store_profile
 
 SERVER_NAME = "integration-github"
 SERVER_VERSION = "0.1.0"
@@ -291,12 +291,14 @@ _TOOL_IMPLS = {
 
 
 def call_tool(name, arguments):
-    """Dispatch a tools/call: read the PAT, run the impl, return (text, is_error).
-    A missing credential is a tool error, never a crash."""
+    """Dispatch a tools/call: read the PAT from the store's default profile, run
+    the impl, return (text, is_error). GitHub is single-account (multiProfile
+    off), so all tools use the implicit "default" profile. A missing credential
+    is a tool error, never a crash."""
     impl = _TOOL_IMPLS.get(name)
     if impl is None:
         return f"unknown tool: {name}", True
-    token = read_credential("token")
+    token = store_profile("default").get("token")
     if not token:
         return "credential 'token' is not available", True
     return impl(arguments, token)

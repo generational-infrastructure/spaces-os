@@ -105,7 +105,7 @@ def env(tmp_path_factory):
 
     creds = tmp / "creds"
     creds.mkdir()
-    (creds / "token").write_text(TOKEN + "\n")
+    (creds / "secrets").write_text(f'[github.default]\ntoken = "{TOKEN}"\n')
     share = tmp / "share"
     share.mkdir()
 
