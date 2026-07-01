@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "integration-mail"
+version = "0.1.0"
+description = "Mail (IMAP/SMTP) MCP integration server (spaces integration POC)"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["spaces-integration-mcp"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["integration_mail.py"]
+
+[project.scripts]
+integration-mail = "integration_mail:main"
+integration-mail-authcmd = "integration_mail:authcmd"
