@@ -27,7 +27,12 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
   # and `./result/bin/run-test-machine-vm`.
   pkgs.writeShellApplication {
     name = "run-test-machine-vm";
-    runtimeInputs = [ pkgs.coreutils ];
+    runtimeInputs = [
+      pkgs.coreutils
+      # remote-viewer: the SPICE client the launcher spawns for the
+      # interactive display (see the spice wiring in vm-debug.nix).
+      pkgs.virt-viewer
+    ];
     text = ''
       # Keep QEMU's disk image out of the repo root. Resolve the repo
       # root (closest ancestor with .jj/.git, else $PWD) the same way the
@@ -46,19 +51,57 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
       mkdir -p -- "$state_dir"
       export NIX_DISK_IMAGE="$state_dir/test-vm.qcow2"
 
+      # One EXIT trap for everything: temp files to delete and the SPICE
+      # client to reap. A second `trap … EXIT` would clobber the first,
+      # so both the OpenRouter keyfile and the viewer register here.
+      cleanup_files=()
+      viewer_pid=""
+      cleanup() {
+        if [ -n "$viewer_pid" ]; then
+          kill "$viewer_pid" 2>/dev/null || true
+        fi
+        if [ "''${#cleanup_files[@]}" -gt 0 ]; then
+          rm -f "''${cleanup_files[@]}"
+        fi
+      }
+      trap cleanup EXIT
+
       if [ -n "''${OPENROUTER_API_KEY:-}" ]; then
         # A 0600 file (not -fw_cfg string=) keeps the key out of `ps`.
         # Prefer the user runtime dir (0700) over /tmp.
         keydir="''${XDG_RUNTIME_DIR:-/tmp}"
         keyfile="$(mktemp "$keydir/openrouter-key.XXXXXX")"
         chmod 600 "$keyfile"
-        trap 'rm -f "$keyfile"' EXIT
+        cleanup_files+=("$keyfile")
         printf '%s' "$OPENROUTER_API_KEY" > "$keyfile"
         QEMU_OPTS="''${QEMU_OPTS:-} -fw_cfg name=opt/org.spaces/openrouter-key,file=$keyfile"
         export QEMU_OPTS
       fi
-      # No exec: keep the shell alive so the trap cleans up the keyfile
-      # after QEMU exits (QEMU has already read fw_cfg by then).
+
+      # The guest opts (modules/nixos/vm-debug.nix) render the display to
+      # a SPICE unix socket rather than a local QEMU window, so the
+      # host<->guest clipboard works (QEMU's GTK clipboard bridge ships
+      # disabled in nixpkgs). Publish the socket path the guest opts read,
+      # then spawn the client once QEMU has created it. The wait loop
+      # covers the socket not existing yet at launch.
+      sockdir="''${XDG_RUNTIME_DIR:-/tmp}"
+      TEST_VM_SPICE_SOCK="$sockdir/test-vm-spice.sock"
+      export TEST_VM_SPICE_SOCK
+      rm -f "$TEST_VM_SPICE_SOCK"
+      cleanup_files+=("$TEST_VM_SPICE_SOCK")
+      (
+        tries=0
+        while [ ! -S "$TEST_VM_SPICE_SOCK" ] && [ "$tries" -lt 300 ]; do
+          sleep 0.1
+          tries=$((tries + 1))
+        done
+        exec remote-viewer "spice+unix://$TEST_VM_SPICE_SOCK"
+      ) &
+      viewer_pid=$!
+
+      # No exec: keep the shell alive so the trap cleans up (keyfile,
+      # socket, viewer) after QEMU exits — QEMU has already read fw_cfg
+      # by then.
       ${vm}/bin/run-test-machine-vm "$@"
     '';
   }

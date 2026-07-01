@@ -3,8 +3,10 @@
 # Applied via virtualisation.vmVariant so they only affect builds of
 # `system.build.vm` (e.g. `nix build .#test-vm`), not the installed
 # system. Two display modes:
-#   - GTK (default): virtio-vga-gl + interactive window, spice-vdagent
-#     host↔guest clipboard, intel-hda duplex audio via host PipeWire.
+#   - GUI (default): SPICE display shown through remote-viewer, with
+#     host↔guest clipboard via spice-vdagent and intel-hda duplex audio
+#     via host PipeWire. (A local GTK window can't sync the clipboard —
+#     nixpkgs ships QEMU's gtk_clipboard feature disabled.)
 #   - headless (services.spaces.vm-debug.headless = true): no window,
 #     QMP control socket on /tmp/agent-vm-qmp.sock, VNC on
 #     127.0.0.1:5999, serial on stdio. Intended for agent-driven dev
@@ -19,14 +21,26 @@
 let
   cfg = config.services.spaces.vm-debug;
   guiOpts = [
+    # `nix run .#test-vm` shows the guest through a SPICE client
+    # (remote-viewer), not a local QEMU window: QEMU's GTK clipboard
+    # bridge ships disabled in nixpkgs (the gtk_clipboard meson feature,
+    # flagged "EXPERIMENTAL, MAY HANG" upstream), so a GTK window can
+    # never sync the host<->guest clipboard. SPICE's clipboard is a
+    # separate, always-compiled path. virtio-vga-gl + SPICE gl=on give
+    # the guest accelerated GL and hand the scanout to remote-viewer;
+    # SPICE registers the sole host GL context, so no -display is set
+    # (with SPICE on, QEMU defaults to no local window). The launcher
+    # (packages/test-vm) spawns that client against the socket below and
+    # tears it down when QEMU exits.
     "-device virtio-vga-gl"
-    "-display gtk,gl=on,show-menubar=off"
+    "-spice unix=on,addr=\${TEST_VM_SPICE_SOCK:-/tmp/test-vm-spice.sock},disable-ticketing=on,gl=on"
     "-audiodev pipewire,id=snd0"
     "-device intel-hda"
     "-device hda-duplex,audiodev=snd0"
-    # Clipboard sharing between host and guest.
-    "-chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on"
+    # SPICE agent channel: carries the host<->guest clipboard, bridged
+    # in the guest by spice-vdagent (configured below).
     "-device virtio-serial"
+    "-chardev spicevmc,id=vdagent,name=vdagent"
     "-device virtserialport,chardev=vdagent,name=com.redhat.spice.0"
   ];
   # Headless: no audio, no spice, no GL. Paths come from the
@@ -95,6 +109,38 @@ in
         ExecStart = "${pkgs.spice-vdagent}/bin/spice-vdagent -x";
       };
       wantedBy = [ "graphical-session.target" ];
+    };
+
+    # spice-vdagent is X11-only (no libwayland), so the host clipboard it
+    # receives only reaches the XWayland CLIPBOARD selection — and niri's
+    # xwayland-satellite does not mirror X->Wayland, so Wayland clients
+    # (the quickshell panel, wl-paste) never see it. Bridge it: block on
+    # X CLIPBOARD changes and copy each into the Wayland clipboard. Dedup
+    # against the current Wayland value so the Wayland->X path can't loop.
+    systemd.user.services.spice-clipboard-to-wayland = lib.mkIf (!cfg.headless) {
+      description = "Mirror the X11 clipboard (fed by spice-vdagent) into Wayland";
+      partOf = [ "graphical-session.target" ];
+      after = [
+        "graphical-session.target"
+        "spice-vdagent.service"
+      ];
+      wantedBy = [ "graphical-session.target" ];
+      serviceConfig = {
+        Type = "simple";
+        Restart = "on-failure";
+        RestartSec = 2;
+        ExecStart = pkgs.writeShellScript "spice-clipboard-to-wayland" ''
+          export DISPLAY=:0
+          while :; do
+            ${pkgs.clipnotify}/bin/clipnotify -s clipboard || { sleep 1; continue; }
+            val=$(${pkgs.xclip}/bin/xclip -selection clipboard -o 2>/dev/null) || continue
+            [ -n "$val" ] || continue
+            cur=$(${pkgs.wl-clipboard}/bin/wl-paste -n 2>/dev/null || true)
+            [ "$val" = "$cur" ] && continue
+            printf %s "$val" | ${pkgs.wl-clipboard}/bin/wl-copy
+          done
+        '';
+      };
     };
   };
 }
