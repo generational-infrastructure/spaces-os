@@ -18,6 +18,7 @@
     "voice-tooltip": "Voice to text",
     "voice-stop-tooltip": "Stop recording (transcribe)",
     "new-session-tooltip": "Start a new chat session",
+    "settings-tooltip": "Settings",
     "options-tooltip": "Display options",
     "options-thinking-hide": "Hide thinking in chat",
     "options-thinking-show": "Show thinking in chat",

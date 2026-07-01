@@ -40,11 +40,11 @@ import { startCredentialProxy } from "./proxy";
 import { stageFile } from "./staging";
 import { fetchModels } from "./provider";
 import {
-  buildRegistry,
   callIntegrationTool,
   INTEGRATION_CALL_TITLE,
   type Registry,
   type RegistryEntry,
+  refreshRegistry,
   sessionSharedDirs,
   writeSessionToolSpec,
 } from "./integrations";
@@ -707,25 +707,35 @@ function resolveSidechannel(
 
 // ---- integrations gateway (design §9) --------------------------------------
 
-// The enabled integrations' discovered tools, built once at startup (the
-// enabled.json is per-user and the daemon runs as the user). Empty ⇒ off.
+// The enabled integrations' discovered tools. Rebuilt lazily whenever the
+// broker's enabled.json changes (its mtime moves on every runtime
+// enable/disable), so a freshly enabled integration surfaces on the next new
+// chat instead of only after a daemon restart. Empty ⇒ off.
 let integrationRegistry: Registry = new Map();
+let integrationsMtimeMs = -1;
 
-async function initIntegrations(): Promise<void> {
+async function refreshIntegrations(): Promise<void> {
   if (
     !INTEGRATIONS_ENABLED_PATH ||
     !INTEGRATIONS_DEFS_DIR ||
     !INTEGRATIONS_SOCKET_DIR
   )
     return;
-  integrationRegistry = await buildRegistry({
-    defsDir: INTEGRATIONS_DEFS_DIR,
-    enabledPath: INTEGRATIONS_ENABLED_PATH,
-    socketDir: INTEGRATIONS_SOCKET_DIR,
-  });
-  console.error(
-    `pi-sessiond: ${integrationRegistry.size} integration tool(s) registered`,
+  const res = await refreshRegistry(
+    {
+      defsDir: INTEGRATIONS_DEFS_DIR,
+      enabledPath: INTEGRATIONS_ENABLED_PATH,
+      socketDir: INTEGRATIONS_SOCKET_DIR,
+    },
+    { mtimeMs: integrationsMtimeMs, registry: integrationRegistry },
   );
+  integrationsMtimeMs = res.mtimeMs;
+  integrationRegistry = res.registry;
+  if (res.rebuilt) {
+    console.error(
+      `pi-sessiond: ${integrationRegistry.size} integration tool(s) registered`,
+    );
+  }
 }
 
 // Raise the per-call approval prompt to the panel and await the verdict
@@ -1312,6 +1322,9 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       const provider = asString(parsed.provider) ?? DEFAULT_PROVIDER;
       const model = asString(parsed.model) ?? DEFAULT_MODEL;
       const name = asString(parsed.name) ?? "";
+      // Pick up a runtime enable/disable so a freshly enabled integration's
+      // tools are staged for this new session (design §9).
+      await refreshIntegrations();
       const session = createSession(provider, model, name);
       session.subscribers.add(ws);
       send(ws, {
@@ -1384,6 +1397,9 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         return;
       }
       const live = sessions.get(sessionId);
+      // A cold restore stages the tool spec afresh; reflect the current
+      // enabled set before it does.
+      if (!live) await refreshIntegrations();
       const session = live ?? resumeSession(sessionId);
       if (!session) {
         sendNoSuchSession(ws, sessionId);
@@ -1469,7 +1485,7 @@ function serveStatic(req: Request): Response {
 // ---- WebSocket server ------------------------------------------------------
 
 await setupProvider();
-await initIntegrations();
+await refreshIntegrations();
 
 Bun.serve<ConnData>({
   hostname: HOST,
