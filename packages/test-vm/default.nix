@@ -2,6 +2,9 @@
 # Run: nix build .#test-vm && ./result/bin/run-test-machine-vm
 #  or: nix run .#test-vm
 #
+# The QEMU disk image lands at <repo>/.agent-vm/test-vm.qcow2 (gitignored),
+# not in the cwd — same workdir as the headless agent-vm, distinct filename.
+#
 # OpenRouter: if $OPENROUTER_API_KEY is set in your shell, the launcher
 # forwards it into the guest at boot via QEMU fw_cfg (no --impure, key
 # never enters the store) — the guest stages it for pi-sessiond so
@@ -26,6 +29,23 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
     name = "run-test-machine-vm";
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
+      # Keep QEMU's disk image out of the repo root. Resolve the repo
+      # root (closest ancestor with .jj/.git, else $PWD) the same way the
+      # headless agent-vm wrapper does and stash the qcow2 under
+      # <repo>/.agent-vm/. A distinct name (test-vm.qcow2 vs the headless
+      # agent-vm's test-machine.qcow2) keeps the two runnable side by side.
+      state_dir=$PWD/.agent-vm
+      d=$PWD
+      while [ "$d" != / ]; do
+        if [ -d "$d/.jj" ] || [ -d "$d/.git" ]; then
+          state_dir="$d/.agent-vm"
+          break
+        fi
+        d=$(dirname "$d")
+      done
+      mkdir -p -- "$state_dir"
+      export NIX_DISK_IMAGE="$state_dir/test-vm.qcow2"
+
       if [ -n "''${OPENROUTER_API_KEY:-}" ]; then
         # A 0600 file (not -fw_cfg string=) keeps the key out of `ps`.
         # Prefer the user runtime dir (0700) over /tmp.
