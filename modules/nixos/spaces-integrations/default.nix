@@ -35,10 +35,20 @@ let
   landlockPolicyCli = lib.getExe pkgsSelf.pi-sessiond.landlockPolicy;
   landlockExec = lib.getExe pkgsSelf.pi-landlock-exec;
 
-  secretSubmodule = lib.types.submodule {
-    options.description = lib.mkOption {
-      type = lib.types.str;
-      description = "What this secret is, shown in the settings panel's provisioning form.";
+  fieldSubmodule = lib.types.submodule {
+    options = {
+      description = lib.mkOption {
+        type = lib.types.str;
+        description = "What this field is, shown in the settings panel's provisioning form.";
+      };
+      required = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether a profile must set this field before the integration can be
+          enabled. Optional fields default server-side.
+        '';
+      };
     };
   };
 
@@ -75,12 +85,21 @@ let
         '';
       };
       secrets = lib.mkOption {
-        type = lib.types.attrsOf secretSubmodule;
+        type = lib.types.attrsOf fieldSubmodule;
         default = { };
         description = ''
-          Secrets the server receives via systemd encrypted credentials
-          ($CREDENTIALS_DIRECTORY/<name>). Provisioned through the panel into the
-          user's own credstore (host+tpm2); never in the Nix store.
+          Secret fields (per profile) the broker seals with host+tpm2 into the
+          `secrets` blob credential ($CREDENTIALS_DIRECTORY/secrets); provisioned
+          through the panel, never in the Nix store.
+        '';
+      };
+      config = lib.mkOption {
+        type = lib.types.attrsOf fieldSubmodule;
+        default = { };
+        description = ''
+          Non-secret connection fields (per profile) delivered plaintext via the
+          `config` blob credential ($CREDENTIALS_DIRECTORY/config) — hosts, ports,
+          usernames. Entered through the panel like secrets, but not masked.
         '';
       };
       autoRun = lib.mkOption {
@@ -91,6 +110,15 @@ let
           tool the server exposes stays callable but confirm-per-call. Empty =>
           all-confirm (the safe default). Tool SCHEMAS are discovered at runtime
           from the server, never declared here.
+        '';
+      };
+      multiProfile = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether this integration holds several accounts (profiles). The panel
+          shows profile management when true; when false it provisions a single
+          implicit "default" profile. The store is profile-keyed either way.
         '';
       };
     };

@@ -49,6 +49,8 @@ let
       command = "integration-github-placeholder";
       network = true;
       connectPorts = [ 443 ];
+      multiProfile = true;
+      config.owner.description = "Default owner/org";
       secrets.token.description = "GitHub personal access token";
       autoRun = [ "get_repo" ];
     };
@@ -120,6 +122,9 @@ assert lib.hasInfix "integration-github-placeholder" ghSvc.serviceConfig.ExecSta
 assert ghDef.autoRun == [ "get_repo" ];
 assert ghDef.network;
 assert ghDef ? secrets && ghDef.secrets ? token;
+assert ghDef.secrets.token.required;
+assert ghDef.multiProfile;
+assert ghDef ? config && ghDef.config ? owner;
 assert !(ghDef ? command);
 # ── Broker unit (step 2): user-scoped host+tpm2 secret path, never pure tpm2 ─
 assert lib.hasSuffix "/bin/spaces-integrationd" brokerSvc.serviceConfig.ExecStart;
@@ -158,7 +163,8 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     sc '.Type == "exec"'
     sc '.StateDirectory == "spaces-integration-github"'
     sc '.RuntimeDirectory == "spaces-integration-github"'
-    sc '.LoadCredentialEncrypted == ["token:%S/spaces-integrationd/github/token"]'
+    sc '.LoadCredentialEncrypted == ["secrets:%S/spaces-integrationd/github/secrets"]'
+    sc '.LoadCredential == ["config:%S/spaces-integrationd/github/config.toml"]'
     # network = true → IP egress permitted at the family layer (Landlock netPort
     # refines the ports below).
     sc '.RestrictAddressFamilies == "AF_UNIX AF_INET AF_INET6"'
@@ -173,13 +179,17 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     # ── 2. offline integration: no IP egress, no credentials ────────
     notes '.RestrictAddressFamilies == "AF_UNIX"'
     notes '.LoadCredentialEncrypted == []'
+    notes '.LoadCredential == []'
 
     # ── 3. socket-activation endpoint ───────────────────────────────
     sock '.ListenStream == "%t/spaces-integration-github.sock"'
 
     # ── 4. definition = safe contract (no command, no secret value) ─
     def '.autoRun == ["get_repo"]'
+    def '.multiProfile == true'
     def '.secrets.token.description | length > 0'
+    def '.secrets.token.required == true'
+    def '.config.owner.description | length > 0'
     def 'has("command") | not'
     [ "$hasEtc" = "yes" ] || fail "github definition not wired into /etc"
 
