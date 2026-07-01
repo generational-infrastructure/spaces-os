@@ -57,7 +57,9 @@
     "integrations-secret-set": "задан",
     "integrations-secret-unset": "не задан",
     "integrations-secret-save": "Сохранить",
-    "integrations-error": "Запрос интеграции не выполнен: {error}"
+    "integrations-error": "Запрос интеграции не выполнен: {error}",
+    "integrations-profile-remove": "Удалить",
+    "integrations-profile-add": "Добавить аккаунт (имя профиля)"
   },
   "menu": {
     "open-chat": "Открыть чат",

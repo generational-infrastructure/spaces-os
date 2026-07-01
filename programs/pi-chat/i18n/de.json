@@ -57,7 +57,9 @@
     "integrations-secret-set": "gesetzt",
     "integrations-secret-unset": "nicht gesetzt",
     "integrations-secret-save": "Speichern",
-    "integrations-error": "Integrationsanfrage fehlgeschlagen: {error}"
+    "integrations-error": "Integrationsanfrage fehlgeschlagen: {error}",
+    "integrations-profile-remove": "Entfernen",
+    "integrations-profile-add": "Konto hinzufügen (Profilname)"
   },
   "menu": {
     "open-chat": "Chat öffnen",

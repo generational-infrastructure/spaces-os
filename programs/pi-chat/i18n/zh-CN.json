@@ -57,7 +57,9 @@
     "integrations-secret-set": "已设置",
     "integrations-secret-unset": "未设置",
     "integrations-secret-save": "保存",
-    "integrations-error": "集成请求失败: {error}"
+    "integrations-error": "集成请求失败: {error}",
+    "integrations-profile-remove": "移除",
+    "integrations-profile-add": "添加账户（配置名称）"
   },
   "menu": {
     "open-chat": "打开聊天",

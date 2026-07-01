@@ -38,8 +38,11 @@ QtObject {
   signal acked(string op, string integration, bool ok, string error)
 
   function refresh() { _request({ op: "list" }); }
-  function setSecret(integration, name, value) {
-    _request({ op: "set-secret", integration: integration, name: name, value: value });
+  function setField(integration, profile, field, value) {
+    _request({ op: "set-field", integration: integration, profile: profile, field: field, value: value });
+  }
+  function removeProfile(integration, profile) {
+    _request({ op: "remove-profile", integration: integration, profile: profile });
   }
   function enable(integration) { _request({ op: "enable", integration: integration }); }
   function disable(integration) { _request({ op: "disable", integration: integration }); }

@@ -71,7 +71,9 @@
     "integrations-secret-set": "set",
     "integrations-secret-unset": "not set",
     "integrations-secret-save": "Save",
-    "integrations-error": "Integration request failed: {error}"
+    "integrations-error": "Integration request failed: {error}",
+    "integrations-profile-remove": "Remove",
+    "integrations-profile-add": "Add account (profile name)"
   },
   "menu": {
     "open-chat": "Open Chat",

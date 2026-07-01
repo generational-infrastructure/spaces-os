@@ -57,7 +57,9 @@
     "integrations-secret-set": "ustawiony",
     "integrations-secret-unset": "nieustawiony",
     "integrations-secret-save": "Zapisz",
-    "integrations-error": "Żądanie integracji nie powiodło się: {error}"
+    "integrations-error": "Żądanie integracji nie powiodło się: {error}",
+    "integrations-profile-remove": "Usuń",
+    "integrations-profile-add": "Dodaj konto (nazwa profilu)"
   },
   "menu": {
     "open-chat": "Otwórz czat",
