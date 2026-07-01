@@ -398,9 +398,17 @@ let
         machine.succeed("echo home-marker-secret > /home/test/secret-marker")
         machine.succeed("chown test /home/test/secret-marker")
 
-        with subtest("daemon mount namespace hides the user's home"):
+        # pi-chat enables agent integrations by default, which drops the
+        # daemon's ProtectHome from tmpfs to read-only so it can read the
+        # broker's enabled.json under $HOME. Home is thus visible but never
+        # writable in the daemon's namespace (the pi child stays Landlock-
+        # confined regardless). integration-poc-machine covers the integrations.
+        with subtest("daemon mount namespace mounts the user's home read-only"):
             machine.succeed("test -f /home/test/secret-marker")
-            machine.fail(f"nsenter -t {pid} -m test -f /home/test/secret-marker")
+            machine.succeed(f"nsenter -t {pid} -m test -f /home/test/secret-marker")
+            machine.fail(
+                f"nsenter -t {pid} -m sh -c 'echo x > /home/test/write-probe'"
+            )
 
         with subtest("daemon listens on 8768 (bun cold start can take a while)"):
             machine.wait_until_succeeds("ss -tln | grep -q ':8768 '", timeout=180)
