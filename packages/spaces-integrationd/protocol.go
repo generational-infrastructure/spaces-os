@@ -8,20 +8,24 @@ package main
 // integrations.sock anyway — its dir is 0700 — but the check is the explicit
 // authorisation primitive). Every op acts on this one user's own state.
 //
-// Contract: docs/agent-integrations-poc-plan.md (step 2).
+// The store is a unified, profile-keyed skill-config store (config.toml +
+// host+tpm2-sealed secrets blob) per integration; profiles are rows inside, so
+// multi-account needs no rebuild. Contract:
+// docs/agent-integrations-skill-migration-plan.md.
 
-// client -> daemon. Op is one of "list", "set-secret", "enable", "disable".
-// Integration is required for everything but "list"; Name/Value only for
-// "set-secret".
+// client -> daemon. Op is one of "list", "set-field", "remove-profile",
+// "enable", "disable". Integration is required for everything but "list";
+// Profile for set-field/remove-profile; Field/Value only for set-field.
 type Request struct {
 	Op          string `json:"op"`
 	Integration string `json:"integration,omitempty"`
-	Name        string `json:"name,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Field       string `json:"field,omitempty"`
 	Value       string `json:"value,omitempty"`
 }
 
-// daemon -> client, terminal reply for set-secret/enable/disable and the error
-// case of every op.
+// daemon -> client, terminal reply for set-field/remove-profile/enable/disable
+// and the error case of every op.
 type Ack struct {
 	Op    string `json:"op"`              // "ok" | "error"
 	Error string `json:"error,omitempty"` // populated on op=="error"
@@ -34,40 +38,54 @@ type ListReply struct {
 }
 
 type IntegrationInfo struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Enabled     bool         `json:"enabled"`
-	Secrets     []SecretInfo `json:"secrets"`
+	Name         string        `json:"name"`
+	Description  string        `json:"description"`
+	MultiProfile bool          `json:"multiProfile"`
+	Enabled      bool          `json:"enabled"`
+	Config       []FieldInfo   `json:"config"`   // schema (sorted by name)
+	Secrets      []FieldInfo   `json:"secrets"`  // schema (sorted by name)
+	Profiles     []ProfileInfo `json:"profiles"` // provisioned accounts
 }
 
-type SecretInfo struct {
+type FieldInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Set         bool   `json:"set"`
+	Required    bool   `json:"required"`
+}
+
+type ProfileInfo struct {
+	Name string `json:"name"`
+	// Config field values (non-secret). Secret field -> set? (never the value).
+	Config   map[string]string `json:"config"`
+	Secrets  map[string]bool   `json:"secrets"`
+	Complete bool              `json:"complete"` // all required fields present
 }
 
 // Definition mirrors the world-readable /etc/spaces-integrations/<name>.json the
-// materialiser emits. The broker needs only names + secret descriptions for the
-// panel's provisioning form; posture (network/ports) and the gateway's autoRun
-// allowlist are other consumers' concerns and ignored here (unknown JSON fields
-// are dropped). Tool SCHEMAS are discovered at runtime, never declared.
+// materialiser emits. The broker needs the field schema (to route config vs
+// secret and gate completeness) + multiProfile for the panel; posture
+// (network/ports) and the gateway's autoRun allowlist are other consumers'
+// concerns and ignored here (unknown JSON fields are dropped).
 type Definition struct {
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
-	Secrets     map[string]SecretDef `json:"secrets"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	MultiProfile bool                   `json:"multiProfile"`
+	Config       map[string]FieldSchema `json:"config"`
+	Secrets      map[string]FieldSchema `json:"secrets"`
 }
 
-type SecretDef struct {
+type FieldSchema struct {
 	Description string `json:"description"`
+	Required    bool   `json:"required"`
 }
 
 // Persistent state at <state>/enabled.json (no secrets): which integrations are
-// on, and which of their secrets have ciphertext present on disk.
+// on. Everything else (profiles, field values, secret set-status) is derived
+// from the per-integration store, never duplicated here.
 type EnabledState struct {
 	Integrations map[string]IntegrationState `json:"integrations"`
 }
 
 type IntegrationState struct {
-	Enabled bool            `json:"enabled"`
-	Secrets map[string]bool `json:"secrets"` // true = ciphertext present
+	Enabled bool `json:"enabled"`
 }

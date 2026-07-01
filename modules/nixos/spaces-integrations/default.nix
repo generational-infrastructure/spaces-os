@@ -191,7 +191,13 @@ in
             # Secret path: user-scoped + TPM2-enforced (host+tpm2, never the
             # insecure `auto` fallback, never pure tpm2 which --uid= rejects).
             SPACES_INTEGRATIOND_CREDS_ENCRYPT = "${pkgs.systemd}/bin/systemd-creds encrypt --user --uid=self --with-key=host+tpm2";
+            # Decrypt mirrors the encrypt scope: the broker unseals its own
+            # secrets blob to a tmpfs working copy to edit one profile row.
+            SPACES_INTEGRATIOND_CREDS_DECRYPT = "${pkgs.systemd}/bin/systemd-creds decrypt --user --uid=self";
             SPACES_INTEGRATIOND_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl --user";
+            # Store engine (config.toml + secrets.toml blob); shared with the
+            # agent-facing skills so one implementation owns the format.
+            SPACES_INTEGRATIOND_SKILL_CONFIG = "${lib.getExe pkgsSelf.skill-config}";
           };
           serviceConfig = {
             Type = "exec";
@@ -199,6 +205,9 @@ in
             Restart = "on-failure";
             RestartSec = 2;
             StateDirectory = "spaces-integrationd";
+            # Tmpfs scratch for the schema file + transient unsealed secrets.toml
+            # during an edit — never on the persistent StateDirectory.
+            RuntimeDirectory = "spaces-integrationd";
             # Trusted (it holds the encrypt path + the socket) but still
             # unprivileged and hardened — it runs as the user, never root.
             NoNewPrivileges = true;

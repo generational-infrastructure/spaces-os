@@ -13,6 +13,13 @@ import (
 // testEnv wires a real unix-socket server against temp dirs and stub commands.
 // Connections come from this test process, so SO_PEERCRED resolves to the
 // current uid == the broker's own uid: checkPeer passes.
+//
+// The store engine is the REAL skill-config (found on PATH via the build's
+// nativeCheckInputs) — mocking it would have hidden broker↔skill-config
+// argument-vector bugs, exactly the class the POC's VM check surfaced. Only
+// systemd-creds (needs a TPM) and systemctl are stubbed: encrypt prepends an
+// "ENC" header line, decrypt strips it, so seal/unseal round-trips faithfully
+// while a sealed blob is still observably not plaintext.
 type testEnv struct {
 	t         *testing.T
 	sock      string
@@ -24,12 +31,15 @@ type testEnv struct {
 const githubDef = `{
   "name": "github",
   "description": "GitHub",
+  "multiProfile": true,
   "network": true,
   "connectPorts": [443],
   "autoRun": ["get_repo"],
+  "config": {
+    "owner": { "description": "Default owner/org", "required": false }
+  },
   "secrets": {
-    "token": { "description": "GitHub personal access token" },
-    "extra": { "description": "Second secret" }
+    "token": { "description": "GitHub personal access token", "required": true }
   }
 }`
 
@@ -54,7 +64,8 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 	dir := t.TempDir()
 	defsDir := filepath.Join(dir, "defs")
 	stateDir := filepath.Join(dir, "state")
-	for _, d := range []string{defsDir, stateDir} {
+	runtimeDir := filepath.Join(dir, "run")
+	for _, d := range []string{defsDir, stateDir, runtimeDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -62,10 +73,13 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 	if err := os.WriteFile(filepath.Join(defsDir, "github.json"), []byte(githubDef), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Stub encryptor: argv is --name=<secret> - <dest>; wraps stdin so the test
-	// can assert the plaintext was consumed and transformed.
-	creds := filepath.Join(dir, "creds-encrypt")
-	writeScript(t, creds, "#!/bin/sh\ndest=\"$3\"\n{ printf 'ENC('; cat; printf ')'; } > \"$dest\"\n")
+	// Stub encryptor/decryptor: argv is --name=secrets <in> <out>. encrypt
+	// prepends an "ENC" header line; decrypt drops the first line — a faithful
+	// round-trip whose sealed form is observably not the plaintext.
+	credsEnc := filepath.Join(dir, "creds-encrypt")
+	writeScript(t, credsEnc, "#!/bin/sh\n{ echo ENC; cat \"$2\"; } > \"$3\"\n")
+	credsDec := filepath.Join(dir, "creds-decrypt")
+	writeScript(t, credsDec, "#!/bin/sh\ntail -n +2 \"$2\" > \"$3\"\n")
 	sysctlLog := filepath.Join(dir, "systemctl.log")
 	sysctl := filepath.Join(dir, "systemctl")
 	writeScript(t, sysctl,
@@ -76,7 +90,8 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	srv := NewServer(defsDir, stateDir, []string{creds}, []string{sysctl})
+	srv := NewServer(defsDir, stateDir, runtimeDir,
+		[]string{credsEnc}, []string{credsDec}, []string{sysctl}, []string{"skill-config"})
 	go srv.Serve(l)
 	return &testEnv{t: t, sock: sock, defsDir: defsDir, stateDir: stateDir, sysctlLog: sysctlLog}
 }
@@ -155,9 +170,32 @@ func (e *testEnv) systemctlCalls() []string {
 	return strings.Split(strings.TrimSpace(string(data)), "\n")
 }
 
-func (e *testEnv) setSecret(integration, name, value string) {
+func (e *testEnv) setField(integration, profile, field, value string) {
 	e.t.Helper()
-	e.wantOK(e.roundtrip(Request{Op: "set-secret", Integration: integration, Name: name, Value: value}))
+	e.wantOK(e.roundtrip(Request{Op: "set-field", Integration: integration, Profile: profile, Field: field, Value: value}))
+}
+
+// githubInfo returns the single github IntegrationInfo from a `list` reply.
+func (e *testEnv) githubInfo() map[string]any {
+	e.t.Helper()
+	m := e.roundtrip(Request{Op: "list"})
+	e.wantOK(m)
+	ints, ok := m["integrations"].([]any)
+	if !ok || len(ints) != 1 {
+		e.t.Fatalf("want 1 integration, got %v", m["integrations"])
+	}
+	return ints[0].(map[string]any)
+}
+
+func profileByName(gh map[string]any, name string) map[string]any {
+	profiles, _ := gh["profiles"].([]any)
+	for _, p := range profiles {
+		pm := p.(map[string]any)
+		if pm["name"] == name {
+			return pm
+		}
+	}
+	return nil
 }
 
 func TestPeerAllowedRejectsOtherUid(t *testing.T) {
@@ -171,93 +209,100 @@ func TestPeerAllowedRejectsOtherUid(t *testing.T) {
 
 func TestListEmptyState(t *testing.T) {
 	e := newTestEnv(t, 0)
-	m := e.roundtrip(Request{Op: "list"})
-	e.wantOK(m)
-
-	ints, ok := m["integrations"].([]any)
-	if !ok || len(ints) != 1 {
-		t.Fatalf("want 1 integration, got %v", m["integrations"])
-	}
-	gh := ints[0].(map[string]any)
+	gh := e.githubInfo()
 	if gh["name"] != "github" || gh["description"] != "GitHub" || gh["enabled"] != false {
 		t.Fatalf("unexpected integration: %v", gh)
 	}
-	secrets := gh["secrets"].([]any)
-	if len(secrets) != 2 {
-		t.Fatalf("want 2 secrets, got %v", secrets)
+	if gh["multiProfile"] != true {
+		t.Fatalf("want multiProfile=true, got %v", gh["multiProfile"])
 	}
-	for _, s := range secrets {
-		sm := s.(map[string]any)
-		if sm["set"] != false {
-			t.Fatalf("want set=false on empty state, got %v", sm)
-		}
+	if secrets := gh["secrets"].([]any); len(secrets) != 1 || secrets[0].(map[string]any)["name"] != "token" {
+		t.Fatalf("want [token] secret schema, got %v", secrets)
 	}
-}
-
-func TestSetSecretWritesCredAndFlipsSet(t *testing.T) {
-	e := newTestEnv(t, 0)
-	e.setSecret("github", "token", "hunter2")
-
-	// No extension: the cred path matches the unit's LoadCredentialEncrypted.
-	cred := filepath.Join(e.stateDir, "github", "token")
-	data, err := os.ReadFile(cred)
-	if err != nil {
-		t.Fatal(err)
+	if cfg := gh["config"].([]any); len(cfg) != 1 || cfg[0].(map[string]any)["name"] != "owner" {
+		t.Fatalf("want [owner] config schema, got %v", cfg)
 	}
-	if string(data) != "ENC(hunter2)" {
-		t.Fatalf("stub encryptor output mismatch: %q", data)
-	}
-
-	// Secret dir + state dir private; enabled.json owner-only.
-	if fi, err := os.Stat(filepath.Join(e.stateDir, "github")); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("secret dir perms: %v %v", fi.Mode(), err)
-	}
-	if fi, err := os.Stat(filepath.Join(e.stateDir, "enabled.json")); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("enabled.json perms: %v %v", fi.Mode(), err)
-	}
-
-	st := e.enabledState()
-	if !st.Integrations["github"].Secrets["token"] {
-		t.Fatalf("want secrets.token=true, got %+v", st)
-	}
-	if st.Integrations["github"].Enabled {
-		t.Fatal("set-secret must not enable")
-	}
-
-	// list reflects it.
-	m := e.roundtrip(Request{Op: "list"})
-	gh := m["integrations"].([]any)[0].(map[string]any)
-	for _, s := range gh["secrets"].([]any) {
-		sm := s.(map[string]any)
-		want := sm["name"] == "token"
-		if sm["set"] != want {
-			t.Fatalf("secret %v: want set=%v", sm["name"], want)
-		}
+	if profs := gh["profiles"].([]any); len(profs) != 0 {
+		t.Fatalf("want no profiles on empty state, got %v", profs)
 	}
 }
 
-func TestSetSecretUnknownNames(t *testing.T) {
+func TestSetFieldStoresConfigPlainAndSecretSealed(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.wantError(e.roundtrip(Request{Op: "set-secret", Integration: "nope", Name: "token", Value: "x"}), "unknown integration")
-	e.wantError(e.roundtrip(Request{Op: "set-secret", Integration: "github", Name: "nope", Value: "x"}), "unknown secret")
+	e.setField("github", "work", "owner", "acme")
+	e.setField("github", "work", "token", "hunter2")
+
+	// Config is plaintext on disk.
+	cfg, err := os.ReadFile(filepath.Join(e.stateDir, "github", "config.toml"))
+	if err != nil || !strings.Contains(string(cfg), "acme") {
+		t.Fatalf("config.toml missing owner value: %q %v", cfg, err)
+	}
+	// Secrets are sealed: the blob is not raw plaintext (carries the ENC header).
+	sealed, err := os.ReadFile(filepath.Join(e.stateDir, "github", "secrets"))
+	if err != nil || !strings.HasPrefix(string(sealed), "ENC\n") {
+		t.Fatalf("secrets blob not sealed: %q %v", sealed, err)
+	}
+	// config.toml must never carry the secret.
+	if strings.Contains(string(cfg), "hunter2") {
+		t.Fatal("secret leaked into config.toml")
+	}
+
+	// list reflects the profile: owner value visible, token set (never value).
+	p := profileByName(e.githubInfo(), "work")
+	if p == nil {
+		t.Fatal("profile 'work' not listed")
+	}
+	if got := p["config"].(map[string]any)["owner"]; got != "acme" {
+		t.Fatalf("want owner=acme, got %v", got)
+	}
+	if p["secrets"].(map[string]any)["token"] != true {
+		t.Fatalf("want token set, got %v", p["secrets"])
+	}
+	if p["complete"] != true {
+		t.Fatalf("profile with required token set must be complete, got %v", p)
+	}
 }
 
-func TestEnableFailsWithMissingSecrets(t *testing.T) {
+func TestMultiProfileIsolation(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "missing secrets: extra, token")
+	e.setField("github", "work", "token", "w-tok")
+	e.setField("github", "personal", "token", "p-tok")
+
+	gh := e.githubInfo()
+	if profileByName(gh, "work") == nil || profileByName(gh, "personal") == nil {
+		t.Fatalf("both profiles must list, got %v", gh["profiles"])
+	}
+	// Decrypt the sealed blob (via the stub) and confirm both rows coexist.
+	sealed, _ := os.ReadFile(filepath.Join(e.stateDir, "github", "secrets"))
+	body := strings.SplitN(string(sealed), "\n", 2)[1] // drop the ENC header
+	if !strings.Contains(body, "w-tok") || !strings.Contains(body, "p-tok") {
+		t.Fatalf("both profile secrets must persist, got %q", body)
+	}
+}
+
+func TestSetFieldUnknown(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.wantError(e.roundtrip(Request{Op: "set-field", Integration: "nope", Profile: "work", Field: "token", Value: "x"}), "unknown integration")
+	e.wantError(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: "work", Field: "nope", Value: "x"}), "unknown field")
+}
+
+func TestEnableRequiresCompleteProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "no complete profile")
 	if calls := e.systemctlCalls(); calls != nil {
 		t.Fatalf("systemctl must not run, got %v", calls)
 	}
-
-	// One of two set: still missing the other.
-	e.setSecret("github", "token", "x")
-	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "missing secrets: extra")
+	// Optional config alone does not complete a profile (token is required).
+	e.setField("github", "work", "owner", "acme")
+	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "no complete profile")
+	// Setting the required secret completes it.
+	e.setField("github", "work", "token", "x")
+	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
 }
 
 func TestEnableStartsSocketUnit(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.setSecret("github", "token", "x")
-	e.setSecret("github", "extra", "y")
+	e.setField("github", "work", "token", "x")
 	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
 
 	calls := e.systemctlCalls()
@@ -268,34 +313,28 @@ func TestEnableStartsSocketUnit(t *testing.T) {
 	if !e.enabledState().Integrations["github"].Enabled {
 		t.Fatal("want enabled=true in enabled.json")
 	}
-
-	m := e.roundtrip(Request{Op: "list"})
-	gh := m["integrations"].([]any)[0].(map[string]any)
-	if gh["enabled"] != true {
-		t.Fatalf("list must report enabled, got %v", gh)
+	if e.githubInfo()["enabled"] != true {
+		t.Fatal("list must report enabled")
 	}
 }
 
 func TestEnableRollsBackOnSystemctlFailure(t *testing.T) {
 	e := newTestEnv(t, 1)
-	e.setSecret("github", "token", "x")
-	e.setSecret("github", "extra", "y")
+	e.setField("github", "work", "token", "x")
 	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "systemctl start failed")
 
-	st := e.enabledState()
-	if st.Integrations["github"].Enabled {
+	if e.enabledState().Integrations["github"].Enabled {
 		t.Fatal("enabled.json must be rolled back to enabled=false")
 	}
-	// Secrets survive the rollback.
-	if !st.Integrations["github"].Secrets["token"] {
-		t.Fatal("rollback must not drop secrets state")
+	// The store survives the rollback: the profile is still complete.
+	if profileByName(e.githubInfo(), "work")["complete"] != true {
+		t.Fatal("rollback must not drop the store")
 	}
 }
 
 func TestDisableStopsBothUnits(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.setSecret("github", "token", "x")
-	e.setSecret("github", "extra", "y")
+	e.setField("github", "work", "token", "x")
 	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
 	e.wantOK(e.roundtrip(Request{Op: "disable", Integration: "github"}))
 
@@ -309,14 +348,29 @@ func TestDisableStopsBothUnits(t *testing.T) {
 	}
 }
 
+func TestRemoveProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.setField("github", "work", "token", "w")
+	e.setField("github", "personal", "token", "p")
+	e.wantOK(e.roundtrip(Request{Op: "remove-profile", Integration: "github", Profile: "work"}))
+
+	gh := e.githubInfo()
+	if profileByName(gh, "work") != nil {
+		t.Fatal("removed profile must not list")
+	}
+	if profileByName(gh, "personal") == nil {
+		t.Fatal("other profile must survive removal")
+	}
+}
+
 func TestBadNamesRejected(t *testing.T) {
 	e := newTestEnv(t, 0)
 	bad := []string{"../etc", "Git Hub", "a/b", "a@b", "", "UPPER"}
 	for _, name := range bad {
 		e.wantError(e.roundtrip(Request{Op: "enable", Integration: name}), "invalid integration name")
 		e.wantError(e.roundtrip(Request{Op: "disable", Integration: name}), "invalid integration name")
-		e.wantError(e.roundtrip(Request{Op: "set-secret", Integration: name, Name: "token", Value: "x"}), "invalid integration name")
-		e.wantError(e.roundtrip(Request{Op: "set-secret", Integration: "github", Name: name, Value: "x"}), "invalid secret name")
+		e.wantError(e.roundtrip(Request{Op: "set-field", Integration: name, Profile: "work", Field: "token", Value: "x"}), "invalid integration name")
+		e.wantError(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: name, Field: "token", Value: "x"}), "invalid profile name")
 	}
 	if calls := e.systemctlCalls(); calls != nil {
 		t.Fatalf("systemctl must not run for bad names, got %v", calls)
