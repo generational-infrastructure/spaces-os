@@ -62,6 +62,42 @@ def store_profile(profile, kinds=("config", "secrets")):
     return out
 
 
+def store_profiles(kinds=("config", "secrets")):
+    """Sorted names of every provisioned profile (union across the config and
+    secrets blobs)."""
+    names = set()
+    for kind in kinds:
+        text = read_credential(kind)
+        if not text:
+            continue
+        try:
+            doc = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            continue
+        for _skill, profiles in doc.items():
+            if isinstance(profiles, dict):
+                names.update(k for k, v in profiles.items() if isinstance(v, dict))
+    return sorted(names)
+
+
+def resolve_profile(arguments):
+    """Pick the profile a tool call targets: (name, error_text). Uses
+    arguments["profile"] when given; else the sole provisioned profile; errors
+    when the name is unknown, when several exist and none was named, or when none
+    is provisioned. Mirrors himalaya's default-account behaviour."""
+    profs = store_profiles()
+    want = arguments.get("profile")
+    if want:
+        if want not in profs:
+            return None, f"profile '{want}' is not provisioned"
+        return want, None
+    if len(profs) == 1:
+        return profs[0], None
+    if not profs:
+        return None, "no profile provisioned; add one in the panel first"
+    return None, f"multiple profiles ({', '.join(profs)}); pass a profile argument"
+
+
 def _handle_request(req, ctx):
     """Return a JSON-RPC response dict, or None when no reply is owed."""
     server_name, server_version, tools, call_tool = ctx
