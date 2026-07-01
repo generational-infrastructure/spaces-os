@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spaces-integration-mcp"
+version = "0.1.0"
+description = "Shared MCP server scaffold for spaces integrations"
+license = "MIT"
+requires-python = ">=3.10"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["spaces_integration_mcp.py"]
