@@ -173,9 +173,17 @@ in
       description = "Whisper model size for voice-to-text (engine = whisper).";
     };
     whisperLanguage = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.either lib.types.str (lib.types.listOf lib.types.str);
       default = "auto";
-      description = "Whisper language (e.g. 'en', 'auto').";
+      example = [
+        "en"
+        "ru"
+      ];
+      description = ''
+        Whisper language (e.g. 'en', 'auto'). A list of languages enables
+        voxtype's multilingual dictation, serialized as a TOML array
+        (language = ["en","ru"]).
+      '';
     };
     initialPrompt = lib.mkOption {
       type = lib.types.str;
