@@ -53,7 +53,15 @@ in
       # it; the agent edits the tree with its native file tools. Lives outside
       # the private StateDirectory the agent's domain denies wholesale.
       sharedDir = "%t/spaces-integration-share/${name}";
-      secretNames = lib.attrNames manifest.secrets;
+      hasSecrets = manifest.secrets != { };
+      hasConfig = manifest.config != { };
+      # Per-integration store the broker manages under its StateDirectory
+      # (spaces-integrationd): config.toml is plaintext config rows -> the
+      # `config` LoadCredential; `secrets` is the host+tpm2-sealed secrets.toml
+      # blob -> the `secrets` LoadCredentialEncrypted. Profiles are rows INSIDE
+      # these two blobs, so the credential set is fixed (at most config+secrets)
+      # while accounts stay dynamic (unified blob-credential store).
+      storeDir = "%S/spaces-integrationd/${name}";
 
       # Static half of the Landlock policy; the CLI folds in the per-user paths
       # at start. connectPorts is the port-granular TCP egress allowlist (the
@@ -77,8 +85,10 @@ in
           network
           connectPorts
           autoRun
+          multiProfile
           ;
-        secrets = lib.mapAttrs (_: s: { inherit (s) description; }) manifest.secrets;
+        config = lib.mapAttrs (_: c: { inherit (c) description required; }) manifest.config;
+        secrets = lib.mapAttrs (_: s: { inherit (s) description required; }) manifest.secrets;
         socket = "%t/${unitName}.sock";
       };
       definitionFile = jsonFormat.generate "${unitName}.json" definition;
@@ -105,11 +115,14 @@ in
           Environment = [ "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}" ];
           RuntimeDirectory = unitName;
           StateDirectory = unitName;
-          # Decrypted secrets land in $CREDENTIALS_DIRECTORY/<name> (ro), in a
-          # private mount the agent's Landlock domain never grants. Ciphertexts
-          # are written user-scoped (host+tpm2) by the broker to %S/spaces-
-          # integrationd/<name>/<secret> (step 2).
-          LoadCredentialEncrypted = map (s: "${s}:%S/spaces-integrationd/${name}/${s}") secretNames;
+          # The broker delivers the whole store as two fixed credentials:
+          # `config` (plaintext rows, ro) and `secrets` (host+tpm2 blob,
+          # decrypted ro), each in a private mount the agent's Landlock domain
+          # never grants. Profiles live inside, so the credential set never grows
+          # with accounts. Each is emitted only when the manifest declares fields
+          # of that kind.
+          LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml";
+          LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
           # Coarse egress gate: AF_INET(6) only when the manifest opts in; the
           # passed activation socket is always AF_UNIX. Landlock netPort refines
           # WHICH ports when network is on.
