@@ -142,5 +142,34 @@ in
         '';
       };
     };
+
+    # The reverse leg: spice-vdagent only reads the X11 CLIPBOARD, so a
+    # Wayland copy in the guest (niri, the quickshell panel) never reaches
+    # the host. Watch the Wayland clipboard and mirror each change into
+    # X11, where spice-vdagent picks it up and forwards it to the host.
+    # Dedup against the current X value so the X->Wayland path can't loop
+    # ($(...) strips trailing newlines, so both directions compare equal).
+    systemd.user.services.spice-clipboard-from-wayland = lib.mkIf (!cfg.headless) {
+      description = "Mirror the Wayland clipboard into X11 (for spice-vdagent -> host)";
+      partOf = [ "graphical-session.target" ];
+      after = [
+        "graphical-session.target"
+        "spice-vdagent.service"
+      ];
+      wantedBy = [ "graphical-session.target" ];
+      serviceConfig = {
+        Type = "simple";
+        Restart = "on-failure";
+        RestartSec = 2;
+        ExecStart = "${pkgs.wl-clipboard}/bin/wl-paste --watch ${pkgs.writeShellScript "spice-clipboard-from-wayland-sync" ''
+          export DISPLAY=:0
+          val=$(cat) || exit 0
+          [ -n "$val" ] || exit 0
+          cur=$(${pkgs.xclip}/bin/xclip -selection clipboard -o 2>/dev/null || true)
+          [ "$val" = "$cur" ] && exit 0
+          printf %s "$val" | ${pkgs.xclip}/bin/xclip -selection clipboard -i
+        ''}";
+      };
+    };
   };
 }
