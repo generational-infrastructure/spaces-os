@@ -1,5 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,8 +15,10 @@ import {
   callIntegrationTool,
   type DiscoveredTool,
   discoverTools,
+  enabledMtimeMs,
   INTEGRATION_TOOL_SPEC_FILE,
   integrationNames,
+  refreshRegistry,
   type Registry,
   sessionSharedDirs,
   toolSpec,
@@ -194,6 +203,67 @@ test("buildRegistry skips disabled integrations and missing definitions", async 
 test("buildRegistry yields nothing when enabled.json is unreadable/malformed", async () => {
   const m = setupManifest("reg3", { github: { autoRun: [] } }, "{oops");
   expect((await buildRegistry(m, fakeDiscover({}))).size).toBe(0);
+});
+
+// ---- enabledMtimeMs + refreshRegistry (runtime enable/disable) --------------
+
+test("enabledMtimeMs is 0 when absent, positive once the file exists", () => {
+  expect(enabledMtimeMs(join(root, "no-such-enabled.json"))).toBe(0);
+  const m = setupManifest(
+    "mtime",
+    { github: { autoRun: [] } },
+    { integrations: {} },
+  );
+  expect(enabledMtimeMs(m.enabledPath)).toBe(statSync(m.enabledPath).mtimeMs);
+  expect(enabledMtimeMs(m.enabledPath)).toBeGreaterThan(0);
+});
+
+test("refreshRegistry rebuilds only when enabled.json's mtime moves", async () => {
+  const m = setupManifest(
+    "refresh",
+    { github: { autoRun: ["get_repo"] } },
+    { integrations: { github: { enabled: true } } },
+  );
+  const discover = fakeDiscover({
+    [join(m.socketDir, "spaces-integration-github.sock")]: DISCOVERED,
+  });
+
+  // First refresh (no prior mtime) discovers and registers the tools.
+  const first = await refreshRegistry(
+    m,
+    { mtimeMs: -1, registry: new Map() },
+    discover,
+  );
+  expect(first.rebuilt).toBe(true);
+  expect([...first.registry.keys()]).toEqual([
+    "github_get_repo",
+    "github_create_issue",
+  ]);
+  expect(first.mtimeMs).toBeGreaterThan(0);
+
+  // Unchanged file ⇒ no re-discovery; the same registry instance is reused.
+  const again = await refreshRegistry(
+    m,
+    { mtimeMs: first.mtimeMs, registry: first.registry },
+    discover,
+  );
+  expect(again.rebuilt).toBe(false);
+  expect(again.registry).toBe(first.registry);
+
+  // A runtime disable rewrites enabled.json (new mtime) ⇒ rebuild drops it.
+  writeFileSync(
+    m.enabledPath,
+    JSON.stringify({ integrations: { github: { enabled: false } } }),
+  );
+  const later = new Date(first.mtimeMs + 5000);
+  utimesSync(m.enabledPath, later, later);
+  const after = await refreshRegistry(
+    m,
+    { mtimeMs: first.mtimeMs, registry: first.registry },
+    discover,
+  );
+  expect(after.rebuilt).toBe(true);
+  expect(after.registry.size).toBe(0);
 });
 
 // ---- file exchange: integration names + session shared dirs (step 6) --------

@@ -18,6 +18,10 @@ Item {
   property var backend: null
   property var chat: backend?.chat || null
 
+  // Emitted when the header gear is clicked. shell.qml owns the settings
+  // window (a FloatingWindow), so the Panel just signals up.
+  signal settingsRequested()
+
   // Daemon pushes this in the status event — single source of truth is
   // the hm-module's displayName option, not a separate plugin setting.
   readonly property string peerName: root.chat?.peerName || tr("panel.default-peer-name")
@@ -210,9 +214,16 @@ Item {
           if (item) root.chat.setModel(item.provider, item.id);
         }
       }
-      // Overflow "more" menu: search, memory toggle, wipe and reset all
-      // live in optionsPopup now, keeping the header to just the model
-      // selector plus this button (and the relay status dot).
+      // Header actions: a settings gear (opens the settings window) and the
+      // overflow "more" menu (search, memory toggle, wipe, reset — all live in
+      // optionsPopup), plus the relay status dot.
+      NIconButton {
+        id: settingsButton
+        icon: "settings"
+        tooltipText: root.tr("panel.settings-tooltip")
+        baseSize: Style.baseWidgetSize * 0.9
+        onClicked: root.settingsRequested()
+      }
       NIconButton {
         id: optionsButton
         icon: "dots-vertical"

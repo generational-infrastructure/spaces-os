@@ -63,6 +63,7 @@ PanelWindow {
   Panel {
     anchors.fill: parent
     backend: backend
+    onSettingsRequested: shell.openSettings()
   }
 
   // Second layer-shell surface in this same process: the bottom-center

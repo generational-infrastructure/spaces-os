@@ -26,6 +26,7 @@
     "signal-approve": "送信",
     "signal-deny": "キャンセル",
     "options-tooltip": "Display options",
+    "settings-tooltip": "設定",
     "options-thinking-hide": "Hide thinking in chat",
     "options-thinking-show": "Show thinking in chat",
     "options-tps-hide": "Hide inference speed",

@@ -26,6 +26,7 @@
     "signal-approve": "Senden",
     "signal-deny": "Abbrechen",
     "options-tooltip": "Display options",
+    "settings-tooltip": "Einstellungen",
     "options-thinking-hide": "Hide thinking in chat",
     "options-thinking-show": "Show thinking in chat",
     "options-tps-hide": "Hide inference speed",

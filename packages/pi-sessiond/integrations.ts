@@ -13,7 +13,7 @@
  * owns the side-channel interception, the approval prompt, and session grants.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 
@@ -238,6 +238,41 @@ export async function buildRegistry(
     }
   }
   return registry;
+}
+
+// enabled.json's mtime in ms, or 0 when absent/unstat-able. The gateway gates
+// re-discovery on this: the broker rewrites enabled.json on every runtime
+// enable/disable, so a moved mtime is the signal that the enabled set changed.
+export function enabledMtimeMs(enabledPath: string): number {
+  try {
+    return statSync(enabledPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+export interface RegistryRefresh {
+  registry: Registry;
+  mtimeMs: number;
+  rebuilt: boolean;
+}
+
+// Rebuild the registry only when enabled.json changed since `since.mtimeMs`.
+// Lets the supervisor discover integrations lazily at session create so a
+// runtime enable/disable takes effect on the next new chat — not only after a
+// daemon restart. Never throws (buildRegistry swallows its own failures), so a
+// broken integration can't block session creation.
+export async function refreshRegistry(
+  opts: { defsDir: string; enabledPath: string; socketDir: string },
+  since: { mtimeMs: number; registry: Registry },
+  discover?: (socketPath: string) => Promise<DiscoveredTool[]>,
+): Promise<RegistryRefresh> {
+  const mtimeMs = enabledMtimeMs(opts.enabledPath);
+  if (mtimeMs === since.mtimeMs) {
+    return { registry: since.registry, mtimeMs, rebuilt: false };
+  }
+  const registry = await buildRegistry(opts, discover);
+  return { registry, mtimeMs, rebuilt: true };
 }
 
 // The distinct integration names behind the registry's tools (stable order) —
