@@ -234,6 +234,30 @@ def cmd_list(args, paths: Paths) -> None:
     config_doc = load_toml(paths.config_toml)
     secrets_doc = load_toml(paths.secrets_toml)
 
+    if getattr(args, "json", False):
+        if not args.target:
+            sys.exit("error: --json requires a <skill> target")
+        skill = resolve_skill(paths.skills_dir, args.target.split(".")[0])
+        cfg_fields, sec_fields = load_schema(paths, skill)
+        all_profiles = sorted(
+            set(list_profiles(config_doc, skill)) | set(list_profiles(secrets_doc, skill))
+        )
+        out = {"skill": skill, "profiles": {}}
+        for profile in all_profiles:
+            cfg_section = section_get(config_doc, skill, profile)
+            sec_section = section_get(secrets_doc, skill, profile)
+            out["profiles"][profile] = {
+                "config": {
+                    name: cfg_section[name] for name in cfg_fields if name in cfg_section
+                },
+                # set-status only — a secret VALUE never leaves the store here.
+                "secrets": {
+                    name: sec_section.get(name) is not None for name in sec_fields
+                },
+            }
+        print(json.dumps(out))
+        return
+
     if args.target:
         parts = args.target.split(".")
         skill = resolve_skill(paths.skills_dir, parts[0])
@@ -472,6 +496,13 @@ def main() -> None:
 
     p_list = sub.add_parser("list", help="show skills, profiles, and field state")
     p_list.add_argument("target", nargs="?", help="<skill> or <skill>.<profile>")
+    p_list.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="machine-readable output for <skill>: profiles with config values "
+        "and secret set-status (never secret values)",
+    )
 
     p_remove = sub.add_parser("remove", help="delete a profile from both stores")
     p_remove.add_argument("skill")

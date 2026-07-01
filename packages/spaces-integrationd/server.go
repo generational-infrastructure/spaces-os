@@ -18,37 +18,50 @@ import (
 	"syscall"
 )
 
-// Integration and secret names build filesystem paths and systemd unit names;
+// Integration and profile names build filesystem paths and systemd unit names;
 // anything outside this set is rejected before it touches either.
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// Field names additionally allow underscores (imap_host, refresh_token).
+var fieldPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
 // Server handles one JSON request per connection. Definitions are re-read from
-// defsDir on every request (a handful of small files); state mutations are
-// serialised by mu. It runs as the user, so all state is that user's own:
+// defsDir on every request; state mutations are serialised by mu. It runs as
+// the user, so all state is that user's own:
 //
 //	<stateDir>/enabled.json          which integrations are on (0600)
-//	<stateDir>/<integration>/<sec>   the host+tpm2 ciphertext (0700 dir)
+//	<stateDir>/<integration>/config.toml   plaintext config rows (0700 dir)
+//	<stateDir>/<integration>/secrets       host+tpm2-sealed secrets.toml blob
 //
-// The ciphertext path matches the integration unit's
-// LoadCredentialEncrypted=<sec>:%S/spaces-integrationd/<integration>/<sec>.
+// The credential paths match the integration unit's
+// LoadCredential=config:%S/spaces-integrationd/<int>/config.toml and
+// LoadCredentialEncrypted=secrets:%S/spaces-integrationd/<int>/secrets.
 type Server struct {
 	defsDir      string
 	stateDir     string
+	runtimeDir   string
 	selfUid      uint32
-	credsEncrypt []string // argv prefix, invoked as <prefix...> --name=<secret> - <dest>
-	systemctl    []string // argv prefix, invoked as <prefix...> start|stop <units...>
+	credsEncrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
+	credsDecrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
+	systemctl    []string // argv prefix: <prefix...> start|stop <units...>
+	skillConfig  []string // argv prefix: <prefix...> <verb> ...
 	mu           sync.Mutex
 }
 
-func NewServer(defsDir, stateDir string, credsEncrypt, systemctl []string) *Server {
+func NewServer(defsDir, stateDir, runtimeDir string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
 	return &Server{
 		defsDir:      defsDir,
 		stateDir:     stateDir,
+		runtimeDir:   runtimeDir,
 		selfUid:      uint32(os.Getuid()),
 		credsEncrypt: credsEncrypt,
+		credsDecrypt: credsDecrypt,
 		systemctl:    systemctl,
+		skillConfig:  skillConfig,
 	}
 }
+
+func errAck(msg string) Ack { return Ack{Op: "error", Error: msg} }
 
 // Serve accepts connections until the listener is closed.
 func (s *Server) Serve(l net.Listener) {
@@ -125,8 +138,10 @@ func (s *Server) dispatch(raw json.RawMessage) any {
 	switch req.Op {
 	case "list":
 		return s.list()
-	case "set-secret":
-		return s.setSecret(req.Integration, req.Name, req.Value)
+	case "set-field":
+		return s.setField(req.Integration, req.Profile, req.Field, req.Value)
+	case "remove-profile":
+		return s.removeProfile(req.Integration, req.Profile)
 	case "enable":
 		return s.enable(req.Integration)
 	case "disable":
@@ -204,6 +219,19 @@ func (s *Server) saveState(st EnabledState) error {
 	return os.WriteFile(s.enabledPath(), data, 0o600)
 }
 
+func fieldInfos(m map[string]FieldSchema) []FieldInfo {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]FieldInfo, 0, len(names))
+	for _, n := range names {
+		out = append(out, FieldInfo{Name: n, Description: m[n].Description, Required: m[n].Required})
+	}
+	return out
+}
+
 func (s *Server) list() any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,38 +247,33 @@ func (s *Server) list() any {
 	infos := make([]IntegrationInfo, 0, len(defs))
 	for _, name := range names {
 		d := defs[name]
-		istate := st.Integrations[name]
-
-		secretNames := make([]string, 0, len(d.Secrets))
-		for sn := range d.Secrets {
-			secretNames = append(secretNames, sn)
+		profiles, err := s.storeProfiles(d)
+		if err != nil {
+			log.Printf("list %s: %v", name, err)
+			profiles = []ProfileInfo{}
 		}
-		sort.Strings(secretNames)
-		secrets := make([]SecretInfo, 0, len(secretNames))
-		for _, sn := range secretNames {
-			secrets = append(secrets, SecretInfo{
-				Name:        sn,
-				Description: d.Secrets[sn].Description,
-				Set:         istate.Secrets[sn],
-			})
-		}
-
 		infos = append(infos, IntegrationInfo{
-			Name:        name,
-			Description: d.Description,
-			Enabled:     istate.Enabled,
-			Secrets:     secrets,
+			Name:         name,
+			Description:  d.Description,
+			MultiProfile: d.MultiProfile,
+			Enabled:      st.Integrations[name].Enabled,
+			Config:       fieldInfos(d.Config),
+			Secrets:      fieldInfos(d.Secrets),
+			Profiles:     profiles,
 		})
 	}
 	return ListReply{Op: "ok", Integrations: infos}
 }
 
-func (s *Server) setSecret(integration, secret, value string) Ack {
+func (s *Server) setField(integration, profile, field, value string) Ack {
 	if !namePattern.MatchString(integration) {
-		return Ack{Op: "error", Error: "invalid integration name"}
+		return errAck("invalid integration name")
 	}
-	if !namePattern.MatchString(secret) {
-		return Ack{Op: "error", Error: "invalid secret name"}
+	if !namePattern.MatchString(profile) {
+		return errAck("invalid profile name")
+	}
+	if !fieldPattern.MatchString(field) {
+		return errAck("invalid field name")
 	}
 
 	s.mu.Lock()
@@ -259,53 +282,89 @@ func (s *Server) setSecret(integration, secret, value string) Ack {
 	defs := s.loadDefs()
 	d, ok := defs[integration]
 	if !ok {
-		return Ack{Op: "error", Error: "unknown integration: " + integration}
+		return errAck("unknown integration: " + integration)
 	}
-	if _, ok := d.Secrets[secret]; !ok {
-		return Ack{Op: "error", Error: "unknown secret: " + secret}
+	_, isConfig := d.Config[field]
+	_, isSecret := d.Secrets[field]
+	if !isConfig && !isSecret {
+		return errAck("unknown field: " + field)
 	}
 
-	secretDir := filepath.Join(s.stateDir, integration)
-	if err := os.MkdirAll(secretDir, 0o700); err != nil {
-		return Ack{Op: "error", Error: "state dir: " + err.Error()}
+	if err := os.MkdirAll(s.storeDir(integration), 0o700); err != nil {
+		return errAck("state dir: " + err.Error())
 	}
-	// No extension: the path must equal the integration unit's
-	// LoadCredentialEncrypted=<secret>:%S/spaces-integrationd/<name>/<secret>.
-	dest := filepath.Join(secretDir, secret)
+	work, err := s.workDir("set")
+	if err != nil {
+		return errAck("workdir: " + err.Error())
+	}
+	defer os.RemoveAll(work)
+	schemaPath, err := writeSchema(work, d)
+	if err != nil {
+		return errAck("schema: " + err.Error())
+	}
+	secretsWork := filepath.Join(work, "secrets.toml")
 
-	args := append(append([]string{}, s.credsEncrypt[1:]...), "--name="+secret, "-", dest)
-	cmd := exec.Command(s.credsEncrypt[0], args...)
-	cmd.Stdin = strings.NewReader(value)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// A failed encrypt may have created dest; leave no partial state.
-		_ = os.Remove(dest)
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
+	// Secret edits round-trip through the sealed blob so no plaintext persists.
+	if isSecret {
+		if err := s.unseal(s.sealedSecrets(integration), secretsWork); err != nil {
+			return errAck("unseal: " + err.Error())
 		}
-		log.Printf("encrypt %s/%s failed: %s", integration, secret, msg)
-		return Ack{Op: "error", Error: "encrypt failed: " + msg}
+	}
+	key := fmt.Sprintf("%s.%s.%s", integration, profile, field)
+	if _, err := s.runSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), "set", key, value); err != nil {
+		return errAck("set: " + err.Error())
+	}
+	if isSecret {
+		if err := s.seal(secretsWork, s.sealedSecrets(integration)); err != nil {
+			return errAck("seal: " + err.Error())
+		}
+	}
+	log.Printf("set-field %s.%s.%s", integration, profile, field)
+	return Ack{Op: "ok"}
+}
+
+func (s *Server) removeProfile(integration, profile string) Ack {
+	if !namePattern.MatchString(integration) {
+		return errAck("invalid integration name")
+	}
+	if !namePattern.MatchString(profile) {
+		return errAck("invalid profile name")
 	}
 
-	st := s.loadState()
-	istate := st.Integrations[integration]
-	if istate.Secrets == nil {
-		istate.Secrets = make(map[string]bool)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	defs := s.loadDefs()
+	d, ok := defs[integration]
+	if !ok {
+		return errAck("unknown integration: " + integration)
 	}
-	istate.Secrets[secret] = true
-	st.Integrations[integration] = istate
-	if err := s.saveState(st); err != nil {
-		return Ack{Op: "error", Error: "write state: " + err.Error()}
+	work, err := s.workDir("rm")
+	if err != nil {
+		return errAck("workdir: " + err.Error())
 	}
-	log.Printf("set-secret %s/%s", integration, secret)
+	defer os.RemoveAll(work)
+	schemaPath, err := writeSchema(work, d)
+	if err != nil {
+		return errAck("schema: " + err.Error())
+	}
+	secretsWork := filepath.Join(work, "secrets.toml")
+	if err := s.unseal(s.sealedSecrets(integration), secretsWork); err != nil {
+		return errAck("unseal: " + err.Error())
+	}
+	if _, err := s.runSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), "remove", integration, profile); err != nil {
+		return errAck("remove: " + err.Error())
+	}
+	if err := s.seal(secretsWork, s.sealedSecrets(integration)); err != nil {
+		return errAck("seal: " + err.Error())
+	}
+	log.Printf("remove-profile %s.%s", integration, profile)
 	return Ack{Op: "ok"}
 }
 
 func (s *Server) enable(integration string) Ack {
 	if !namePattern.MatchString(integration) {
-		return Ack{Op: "error", Error: "invalid integration name"}
+		return errAck("invalid integration name")
 	}
 
 	s.mu.Lock()
@@ -314,38 +373,53 @@ func (s *Server) enable(integration string) Ack {
 	defs := s.loadDefs()
 	d, ok := defs[integration]
 	if !ok {
-		return Ack{Op: "error", Error: "unknown integration: " + integration}
+		return errAck("unknown integration: " + integration)
+	}
+
+	profiles, err := s.storeProfiles(d)
+	if err != nil {
+		return errAck("read store: " + err.Error())
+	}
+	complete := false
+	for _, p := range profiles {
+		if p.Complete {
+			complete = true
+			break
+		}
+	}
+	if !complete {
+		return errAck("no complete profile; set the required fields first")
+	}
+
+	// The unit's LoadCredential[Encrypted] sources must exist at start.
+	if len(d.Config) > 0 {
+		if err := ensureFile(s.configFile(integration)); err != nil {
+			return errAck("config store: " + err.Error())
+		}
+	}
+	if len(d.Secrets) > 0 {
+		if _, err := os.Stat(s.sealedSecrets(integration)); errors.Is(err, os.ErrNotExist) {
+			if err := s.sealEmpty(integration); err != nil {
+				return errAck("secrets store: " + err.Error())
+			}
+		}
 	}
 
 	st := s.loadState()
-	istate := st.Integrations[integration]
-	var missing []string
-	for sn := range d.Secrets {
-		if !istate.Secrets[sn] {
-			missing = append(missing, sn)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return Ack{Op: "error", Error: "missing secrets: " + strings.Join(missing, ", ")}
-	}
-
-	istate.Enabled = true
-	st.Integrations[integration] = istate
+	st.Integrations[integration] = IntegrationState{Enabled: true}
 	if err := s.saveState(st); err != nil {
-		return Ack{Op: "error", Error: "write state: " + err.Error()}
+		return errAck("write state: " + err.Error())
 	}
 
 	unit := fmt.Sprintf("spaces-integration-%s.socket", integration)
 	if msg, err := s.runSystemctl("start", unit); err != nil {
 		// Roll back: enabled.json must not claim an integration whose socket
-		// unit failed to start. Secret state survives the rollback.
-		istate.Enabled = false
-		st.Integrations[integration] = istate
+		// unit failed to start. Store survives the rollback.
+		st.Integrations[integration] = IntegrationState{Enabled: false}
 		if serr := s.saveState(st); serr != nil {
 			log.Printf("rollback enabled.json: %v", serr)
 		}
-		return Ack{Op: "error", Error: "systemctl start failed: " + msg}
+		return errAck("systemctl start failed: " + msg)
 	}
 	log.Printf("enable %s", integration)
 	return Ack{Op: "ok"}
@@ -353,7 +427,7 @@ func (s *Server) enable(integration string) Ack {
 
 func (s *Server) disable(integration string) Ack {
 	if !namePattern.MatchString(integration) {
-		return Ack{Op: "error", Error: "invalid integration name"}
+		return errAck("invalid integration name")
 	}
 
 	s.mu.Lock()
@@ -361,7 +435,7 @@ func (s *Server) disable(integration string) Ack {
 
 	defs := s.loadDefs()
 	if _, ok := defs[integration]; !ok {
-		return Ack{Op: "error", Error: "unknown integration: " + integration}
+		return errAck("unknown integration: " + integration)
 	}
 
 	sock := fmt.Sprintf("spaces-integration-%s.socket", integration)
@@ -373,14 +447,41 @@ func (s *Server) disable(integration string) Ack {
 	}
 
 	st := s.loadState()
-	istate := st.Integrations[integration]
-	istate.Enabled = false
-	st.Integrations[integration] = istate
+	st.Integrations[integration] = IntegrationState{Enabled: false}
 	if err := s.saveState(st); err != nil {
-		return Ack{Op: "error", Error: "write state: " + err.Error()}
+		return errAck("write state: " + err.Error())
 	}
 	log.Printf("disable %s", integration)
 	return Ack{Op: "ok"}
+}
+
+// ensureFile creates an empty file (and its 0700 parent) when absent.
+func ensureFile(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(path, nil, 0o600)
+	}
+	return nil
+}
+
+// sealEmpty seals an empty secrets.toml so an all-optional-secret integration
+// still has a `secrets` credential source at enable.
+func (s *Server) sealEmpty(integration string) error {
+	work, err := s.workDir("seal")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	empty := filepath.Join(work, "secrets.toml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.storeDir(integration), 0o700); err != nil {
+		return err
+	}
+	return s.seal(empty, s.sealedSecrets(integration))
 }
 
 // runSystemctl invokes the configured systemctl prefix with verb + units.

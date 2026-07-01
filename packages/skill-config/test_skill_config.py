@@ -113,3 +113,23 @@ def test_skill_md_mode_unchanged(tmp_path):
     assert "https://dav.example" in (store / "config.toml").read_text()
     assert "pw" in (store / "secrets.toml").read_text()
     assert run(["get", "calendar.home.url"], {}, tmp_path).stdout.strip() == "https://dav.example"
+
+
+def test_env_schema_list_json_reports_values_and_set_status(tmp_path):
+    import json as _json
+
+    _schema, _cfg, _sec, env = _env_schema(tmp_path)
+    run(["set", "mail.work.imap_host", "imap.corp.com"], env, tmp_path)
+    run(["set", "mail.work.password", "hunter2"], env, tmp_path)
+    run(["set", "mail.home.imap_host", "imap.home.net"], env, tmp_path)
+
+    r = run(["list", "mail", "--json"], env, tmp_path)
+    assert r.returncode == 0, r.stderr
+    doc = _json.loads(r.stdout)
+    assert doc["skill"] == "mail"
+    assert set(doc["profiles"]) == {"work", "home"}
+    # config carries values; secrets carry set-status only, never the value.
+    assert doc["profiles"]["work"]["config"]["imap_host"] == "imap.corp.com"
+    assert doc["profiles"]["work"]["secrets"]["password"] is True
+    assert doc["profiles"]["home"]["secrets"]["password"] is False
+    assert "hunter2" not in r.stdout
