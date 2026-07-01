@@ -55,8 +55,14 @@ class Paths:
         )
         self.skills_dir = self.state_dir / "skills-defs"
         self.cfg_dir = self.state_dir / "skill-config"
-        self.config_toml = self.cfg_dir / "config.toml"
-        self.secrets_toml = self.cfg_dir / "secrets.toml"
+        env_config = os.environ.get("SKILL_CONFIG_CONFIG_FILE")
+        env_secrets = os.environ.get("SKILL_CONFIG_SECRETS_FILE")
+        self.config_toml = (
+            Path(env_config) if env_config else self.cfg_dir / "config.toml"
+        )
+        self.secrets_toml = (
+            Path(env_secrets) if env_secrets else self.cfg_dir / "secrets.toml"
+        )
 
 
 def resolve_instance(flag: str | None) -> str:
@@ -103,6 +109,30 @@ def schema(skill_dir: Path) -> tuple[dict, dict]:
     if not isinstance(cfg, dict) or not isinstance(sec, dict):
         sys.exit(f"error: malformed config:/secrets: in {skill_dir}/SKILL.md")
     return cfg, sec
+
+
+def load_schema(paths: "Paths", skill: str) -> tuple[dict, dict]:
+    """(config_fields, secret_fields) for a skill.
+
+    Prefers $SKILL_CONFIG_SCHEMA — a JSON {"config": {...}, "secrets": {...}}
+    map used by the relocated integration store (no SKILL.md on disk) — over
+    the skill's SKILL.md frontmatter.
+    """
+    env_schema = os.environ.get("SKILL_CONFIG_SCHEMA")
+    if env_schema:
+        try:
+            doc = json.loads(Path(env_schema).read_text())
+        except (OSError, ValueError) as e:
+            sys.exit(f"error: cannot read SKILL_CONFIG_SCHEMA {env_schema}: {e}")
+        cfg = doc.get("config") or {}
+        sec = doc.get("secrets") or {}
+        if not isinstance(cfg, dict) or not isinstance(sec, dict):
+            sys.exit(f"error: malformed config:/secrets: in {env_schema}")
+        return cfg, sec
+    skill_dir = paths.skills_dir / skill
+    if not skill_dir.exists():
+        sys.exit(f"error: skill '{skill}' not found at {skill_dir}")
+    return schema(skill_dir)
 
 
 def load_toml(path: Path) -> tomlkit.TOMLDocument:
@@ -180,10 +210,7 @@ def cmd_get(args, paths: Paths) -> None:
     skill, profile, field = parts
     skill = resolve_skill(paths.skills_dir, skill)
 
-    skill_dir = paths.skills_dir / skill
-    if not skill_dir.exists():
-        sys.exit(f"error: skill '{skill}' not found at {skill_dir}")
-    cfg_fields, sec_fields = schema(skill_dir)
+    cfg_fields, sec_fields = load_schema(paths, skill)
 
     if field in cfg_fields:
         doc = load_toml(paths.config_toml)
@@ -210,10 +237,7 @@ def cmd_list(args, paths: Paths) -> None:
     if args.target:
         parts = args.target.split(".")
         skill = resolve_skill(paths.skills_dir, parts[0])
-        skill_dir = paths.skills_dir / skill
-        if not skill_dir.exists():
-            sys.exit(f"error: skill '{skill}' not found")
-        cfg_fields, sec_fields = schema(skill_dir)
+        cfg_fields, sec_fields = load_schema(paths, skill)
 
         if len(parts) == 2:
             profiles = [parts[1]]
@@ -268,10 +292,7 @@ def cmd_set(args, paths: Paths) -> None:
     skill, profile, field = parts
     skill = resolve_skill(paths.skills_dir, skill)
 
-    skill_dir = paths.skills_dir / skill
-    if not skill_dir.exists():
-        sys.exit(f"error: skill '{skill}' not found at {skill_dir}")
-    cfg_fields, sec_fields = schema(skill_dir)
+    cfg_fields, sec_fields = load_schema(paths, skill)
 
     if field in cfg_fields:
         path, mode = paths.config_toml, CONFIG_MODE
@@ -289,10 +310,7 @@ def cmd_set(args, paths: Paths) -> None:
 
 def cmd_schema(args, paths: Paths) -> None:
     skill = resolve_skill(paths.skills_dir, args.skill)
-    skill_dir = paths.skills_dir / skill
-    if not skill_dir.exists():
-        sys.exit(f"error: skill '{args.skill}' not found at {skill_dir}")
-    cfg_fields, sec_fields = schema(skill_dir)
+    cfg_fields, sec_fields = load_schema(paths, skill)
     out = {}
     if cfg_fields:
         out["config"] = dict(cfg_fields)
@@ -330,10 +348,7 @@ def cmd_request_input(args, paths: Paths) -> None:
     skill = resolve_skill(paths.skills_dir, skill)
     args.key = f"{skill}.{profile}.{field}"
 
-    skill_dir = paths.skills_dir / skill
-    if not skill_dir.exists():
-        sys.exit(f"error: skill '{skill}' not found at {skill_dir}")
-    cfg_fields, sec_fields = schema(skill_dir)
+    cfg_fields, sec_fields = load_schema(paths, skill)
     if field in cfg_fields:
         description = cfg_fields[field]
         is_secret = False

@@ -9,5 +9,8 @@ pkgs.python3Packages.buildPythonApplication {
     tomlkit
     pyyaml
   ];
+  doCheck = true;
+  nativeCheckInputs = [ pkgs.python3Packages.pytestCheckHook ];
+  pytestFlags = [ "test_skill_config.py" ];
   meta.mainProgram = "skill-config";
 }
