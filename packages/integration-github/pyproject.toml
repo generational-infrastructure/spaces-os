@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "GitHub MCP integration server (spaces integration POC)"
 license = "MIT"
 requires-python = ">=3.10"
+dependencies = ["spaces-integration-mcp"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["integration_github.py"]
 
 [project.scripts]
 integration-github = "integration_github:main"
