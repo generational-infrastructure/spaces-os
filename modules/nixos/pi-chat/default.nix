@@ -46,10 +46,7 @@ let
   googleCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.google-cli;
   osmCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.osm-cli;
   wikipediaCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikipedia-cli;
-  caldavCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.caldav-cli;
   wikidataCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikidata-cli;
-  contactsCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.contacts-cli;
-  mailCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.mail-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   desktopEntriesPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-desktop-entries;
 
@@ -139,9 +136,6 @@ let
     wikipedia = "${skillsDir}/wikipedia";
     notifications = "${skillsDir}/notifications";
     skill-config = "${skillsDir}/skill-config";
-    calendar = "${skillsDir}/calendar";
-    contacts = "${skillsDir}/contacts";
-    email = "${skillsDir}/email";
     google = "${skillsDir}/google";
     wikidata = "${skillsDir}/wikidata";
   }
@@ -742,10 +736,7 @@ in
       googleCliPkg
       osmCliPkg
       wikipediaCliPkg
-      caldavCliPkg
       wikidataCliPkg
-      contactsCliPkg
-      mailCliPkg
       sedimentPkg
       # Quickshell ships the `quickshell` binary used by the user
       # service AND the `quickshell ipc` CLI used by the toggle

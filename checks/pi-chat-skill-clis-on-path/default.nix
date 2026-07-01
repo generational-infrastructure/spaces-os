@@ -57,9 +57,6 @@ let
     maps = [ "osm-cli" ];
     wikidata = [ "wikidata-cli" ];
     wikipedia = [ "wikipedia-cli" ];
-    calendar = [ "caldav" ];
-    contacts = [ "contacts" ];
-    email = [ "mail" ];
     skill-config = [ "skill-config" ];
   };
 

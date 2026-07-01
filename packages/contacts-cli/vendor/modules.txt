@@ -1,8 +1,0 @@
-# github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff
-## explicit; go 1.13
-github.com/emersion/go-vcard
-# github.com/emersion/go-webdav v0.7.0
-## explicit; go 1.13
-github.com/emersion/go-webdav
-github.com/emersion/go-webdav/carddav
-github.com/emersion/go-webdav/internal
