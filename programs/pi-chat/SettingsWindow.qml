@@ -38,6 +38,99 @@ FloatingWindow {
     Component.onCompleted: refresh()
   }
 
+  // One profile's provisioning form: config fields (plain) + secret fields
+  // (masked), each saved through the broker via setField. Reused for every
+  // profile of a multi-account integration, for the "add account" draft, and
+  // for the implicit "default" profile of a single-account integration.
+  component ProfileEditor: ColumnLayout {
+    id: pe
+    property string intName: ""
+    property string profileName: ""
+    property var configSchema: []
+    property var secretSchema: []
+    property var configValues: ({})
+    property var secretStatus: ({})
+    property bool removable: false
+    property bool showName: true
+    Layout.fillWidth: true
+    spacing: Style.marginXS
+
+    RowLayout {
+      visible: pe.showName
+      Layout.fillWidth: true
+      spacing: Style.marginS
+      NText {
+        text: pe.profileName
+        font.bold: true
+        color: Color.mOnSurface
+        pointSize: Style.fontSizeS
+      }
+      Item { Layout.fillWidth: true }
+      NButton {
+        visible: pe.removable
+        text: I18n.tr("settings.integrations-profile-remove")
+        onClicked: integrations.removeProfile(pe.intName, pe.profileName)
+      }
+    }
+
+    Repeater {
+      model: pe.configSchema
+      delegate: RowLayout {
+        id: cfgRow
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NText {
+          text: cfgRow.modelData.name + (cfgRow.modelData.required ? " *" : "")
+          color: Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeS
+        }
+        NTextInput {
+          id: cfgInput
+          Layout.fillWidth: true
+          text: (pe.configValues && pe.configValues[cfgRow.modelData.name]) || ""
+          placeholderText: cfgRow.modelData.description || cfgRow.modelData.name
+        }
+        NButton {
+          text: I18n.tr("settings.integrations-secret-save")
+          enabled: cfgInput.text.length > 0
+          onClicked: integrations.setField(pe.intName, pe.profileName, cfgRow.modelData.name, cfgInput.text)
+        }
+      }
+    }
+
+    Repeater {
+      model: pe.secretSchema
+      delegate: RowLayout {
+        id: secRow
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NText {
+          text: secRow.modelData.name + " · " + ((pe.secretStatus && pe.secretStatus[secRow.modelData.name])
+            ? I18n.tr("settings.integrations-secret-set")
+            : I18n.tr("settings.integrations-secret-unset"))
+          color: (pe.secretStatus && pe.secretStatus[secRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeS
+        }
+        NTextInput {
+          id: secInput
+          Layout.fillWidth: true
+          echoMode: TextInput.Password
+          placeholderText: secRow.modelData.description || secRow.modelData.name
+        }
+        NButton {
+          text: I18n.tr("settings.integrations-secret-save")
+          enabled: secInput.text.length > 0
+          onClicked: {
+            integrations.setField(pe.intName, pe.profileName, secRow.modelData.name, secInput.text);
+            secInput.text = "";
+          }
+        }
+      }
+    }
+  }
+
   ScrollView {
     id: scroller
     anchors.fill: parent
@@ -150,36 +243,60 @@ FloatingWindow {
             pointSize: Style.fontSizeS
           }
 
-          Repeater {
-            model: intRow.modelData.secrets || []
-            delegate: RowLayout {
-              id: secretRow
-              required property var modelData
-              Layout.fillWidth: true
-              spacing: Style.marginS
+          // Multi-account: each provisioned profile, plus an "add account" draft.
+          ColumnLayout {
+            visible: intRow.modelData.multiProfile === true
+            Layout.fillWidth: true
+            spacing: Style.marginS
 
-              NText {
-                text: secretRow.modelData.name + " · " + (secretRow.modelData.set
-                  ? I18n.tr("settings.integrations-secret-set")
-                  : I18n.tr("settings.integrations-secret-unset"))
-                color: secretRow.modelData.set ? Color.mTertiary : Color.mOnSurfaceVariant
-                pointSize: Style.fontSizeS
-              }
-              NTextInput {
-                id: secretField
+            Repeater {
+              model: intRow.modelData.profiles || []
+              delegate: ProfileEditor {
+                id: profRow
+                required property var modelData
                 Layout.fillWidth: true
-                echoMode: TextInput.Password
-                placeholderText: secretRow.modelData.description || secretRow.modelData.name
-              }
-              NButton {
-                text: I18n.tr("settings.integrations-secret-save")
-                enabled: secretField.text.length > 0
-                onClicked: {
-                  integrations.setSecret(intRow.modelData.name, secretRow.modelData.name, secretField.text);
-                  secretField.text = "";
-                }
+                intName: intRow.modelData.name
+                profileName: profRow.modelData.name
+                configSchema: intRow.modelData.config || []
+                secretSchema: intRow.modelData.secrets || []
+                configValues: profRow.modelData.config || ({})
+                secretStatus: profRow.modelData.secrets || ({})
+                removable: true
+                showName: true
               }
             }
+
+            NTextInput {
+              id: newProfile
+              Layout.fillWidth: true
+              placeholderText: I18n.tr("settings.integrations-profile-add")
+            }
+            // Draft editor for the typed-in account name; saving any field
+            // creates the profile (the broker materialises it on first set-field).
+            ProfileEditor {
+              visible: newProfile.text.length > 0
+              Layout.fillWidth: true
+              intName: intRow.modelData.name
+              profileName: newProfile.text
+              configSchema: intRow.modelData.config || []
+              secretSchema: intRow.modelData.secrets || []
+              removable: false
+              showName: false
+            }
+          }
+
+          // Single-account: the implicit "default" profile, no profile chrome.
+          ProfileEditor {
+            visible: intRow.modelData.multiProfile !== true
+            Layout.fillWidth: true
+            intName: intRow.modelData.name
+            profileName: "default"
+            configSchema: intRow.modelData.config || []
+            secretSchema: intRow.modelData.secrets || []
+            configValues: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0].config : ({})
+            secretStatus: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0].secrets : ({})
+            removable: false
+            showName: false
           }
         }
       }

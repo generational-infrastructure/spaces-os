@@ -57,7 +57,9 @@
     "integrations-secret-set": "definido",
     "integrations-secret-unset": "sin definir",
     "integrations-secret-save": "Guardar",
-    "integrations-error": "La solicitud de integración falló: {error}"
+    "integrations-error": "La solicitud de integración falló: {error}",
+    "integrations-profile-remove": "Eliminar",
+    "integrations-profile-add": "Añadir cuenta (nombre de perfil)"
   },
   "menu": {
     "open-chat": "Abrir chat",

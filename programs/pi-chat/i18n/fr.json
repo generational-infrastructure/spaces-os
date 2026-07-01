@@ -57,7 +57,9 @@
     "integrations-secret-set": "défini",
     "integrations-secret-unset": "non défini",
     "integrations-secret-save": "Enregistrer",
-    "integrations-error": "Échec de la requête d'intégration : {error}"
+    "integrations-error": "Échec de la requête d'intégration : {error}",
+    "integrations-profile-remove": "Supprimer",
+    "integrations-profile-add": "Ajouter un compte (nom du profil)"
   },
   "menu": {
     "open-chat": "Ouvrir le chat",

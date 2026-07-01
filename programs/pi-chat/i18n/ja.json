@@ -57,7 +57,9 @@
     "integrations-secret-set": "設定済み",
     "integrations-secret-unset": "未設定",
     "integrations-secret-save": "保存",
-    "integrations-error": "統合リクエストに失敗しました: {error}"
+    "integrations-error": "統合リクエストに失敗しました: {error}",
+    "integrations-profile-remove": "削除",
+    "integrations-profile-add": "アカウントを追加（プロファイル名）"
   },
   "menu": {
     "open-chat": "チャットを開く",

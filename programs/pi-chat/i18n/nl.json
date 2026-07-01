@@ -57,7 +57,9 @@
     "integrations-secret-set": "ingesteld",
     "integrations-secret-unset": "niet ingesteld",
     "integrations-secret-save": "Opslaan",
-    "integrations-error": "Integratieverzoek mislukt: {error}"
+    "integrations-error": "Integratieverzoek mislukt: {error}",
+    "integrations-profile-remove": "Verwijderen",
+    "integrations-profile-add": "Account toevoegen (profielnaam)"
   },
   "menu": {
     "open-chat": "Chat openen",
