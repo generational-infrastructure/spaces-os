@@ -138,7 +138,7 @@ pkgs.testers.runNixOSTest {
     GH_SOCK = ALICE_RT + "/spaces-integration-github.sock"
     PRIVATE = ALICE_RT + "/spaces-integration-github/landlock.json"
     WS_DIR = ALICE_RT + "/spaces-integration-share/github/hello"
-    CRED = "/home/alice/.local/state/spaces-integrationd/github/token"
+    CRED = "/home/alice/.local/state/spaces-integrationd/github/secrets"
     STATE = "/home/alice/.local/state/spaces-integrationd"
 
     PY = "${py}/bin/python3"
@@ -172,8 +172,8 @@ pkgs.testers.runNixOSTest {
         lst = broker("list")
         gh = next(i for i in lst["integrations"] if i["name"] == "github")
         assert not gh["enabled"], gh
-        tok = next(s for s in gh["secrets"] if s["name"] == "token")
-        assert not tok["set"], tok
+        # github is single-account (multiProfile off): no profile provisioned yet.
+        assert gh["profiles"] == [], gh
 
     with subtest("3. host+tpm2 user-scoped encrypt succeeds for the non-root user"):
         # (asserted before set-secret so a failure here localises the cause)
@@ -183,8 +183,8 @@ pkgs.testers.runNixOSTest {
             + "--with-key=host+tpm2 - - >/dev/null'"
         )
 
-    with subtest("2. set-secret stores host+tpm2 ciphertext, no plaintext at rest"):
-        assert broker("set-secret", "github", "token", PAT)["op"] == "ok"
+    with subtest("2. set-field seals host+tpm2 ciphertext, no plaintext at rest"):
+        assert broker("set-field", "github", "default", "token", PAT)["op"] == "ok"
         machine.succeed(f"test -f {CRED}")
         # the plaintext token must appear nowhere under the broker state dir
         machine.fail(f"grep -rqF '{PAT}' {STATE}")
