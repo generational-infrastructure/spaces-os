@@ -133,66 +133,77 @@ def main() -> None:
     def integrations():
         return json.loads(ipc("integrationsJson"))
 
-    def github():
+    def mail():
         for it in integrations():
-            if it.get("name") == "github":
+            if it.get("name") == "mail":
                 return it
         return None
 
-    def token_set():
-        gh = github()
-        if not gh:
-            return None
-        for s in gh.get("secrets", []):
-            if s.get("name") == "token":
-                return s.get("set")
+    def profile(name):
+        for p in (mail() or {}).get("profiles", []):
+            if p.get("name") == name:
+                return p
         return None
 
     try:
         if not wait_until(ipc_ready, timeout_s=20):
             die("quickshell never bound the test:integrations IPC target")
 
-        # list → github present, disabled, token unset.
+        # list → mail present, multi-profile, disabled, no profiles yet.
         ipc("refresh")
         if not wait_until(lambda: ipc("loaded") == "true", timeout_s=15):
             die("bridge never loaded the broker's integration list")
-        gh = github()
-        if not gh:
-            die(f"github integration missing from list: {integrations()!r}")
-        if gh.get("enabled") is not False:
-            die(f"github should start disabled: {gh!r}")
-        if token_set() is not False:
-            die(f"token should start unset: {gh!r}")
+        m = mail()
+        if not m:
+            die(f"mail integration missing from list: {integrations()!r}")
+        if m.get("multiProfile") is not True:
+            die(f"mail should be multiProfile: {m!r}")
+        if m.get("enabled") is not False or m.get("profiles"):
+            die(f"mail should start disabled with no profiles: {m!r}")
 
-        # enable refused while the secret is unset — error surfaced, stays off.
-        ipc("enable", "github")
-        if not wait_until(lambda: "missing secrets" in ipc("lastError"), timeout_s=15):
-            die(
-                f"enable without a secret should be refused (lastError={ipc('lastError')!r})"
-            )
-        if github().get("enabled") is True:
-            die("github became enabled despite the unset secret")
+        # enable refused with no complete profile — error surfaced, stays off.
+        ipc("enable", "mail")
+        if not wait_until(lambda: "no complete profile" in ipc("lastError"), timeout_s=15):
+            die(f"enable with no profile should be refused (lastError={ipc('lastError')!r})")
+        if mail().get("enabled") is True:
+            die("mail became enabled despite no complete profile")
 
-        # set-secret flips the marker.
-        ipc("setSecret", "github", "token", "ghp_example")
-        if not wait_until(lambda: token_set() is True, timeout_s=15):
-            die(f"token never marked set after set-secret: {github()!r}")
+        # set a config field → the profile appears but is not yet complete.
+        ipc("setField", "mail", "work", "imap_host", "imap.example.com")
+        if not wait_until(lambda: profile("work") is not None, timeout_s=15):
+            die(f"profile 'work' never appeared after set-field: {mail()!r}")
+        if profile("work").get("config", {}).get("imap_host") != "imap.example.com":
+            die(f"config value not reflected: {profile('work')!r}")
+        if profile("work").get("complete") is True:
+            die("profile complete before the required secret was set")
+
+        # set the required secret → profile becomes complete (value never echoed).
+        ipc("setField", "mail", "work", "password", "hunter2")
+        if not wait_until(lambda: profile("work") and profile("work").get("complete") is True, timeout_s=15):
+            die(f"profile never completed after the secret was set: {mail()!r}")
+        if profile("work").get("secrets", {}).get("password") is not True:
+            die(f"secret set-marker not flipped: {profile('work')!r}")
 
         # enable now succeeds; error clears.
-        ipc("enable", "github")
-        if not wait_until(lambda: github().get("enabled") is True, timeout_s=15):
-            die(f"github never enabled after the secret was set: {github()!r}")
+        ipc("enable", "mail")
+        if not wait_until(lambda: mail().get("enabled") is True, timeout_s=15):
+            die(f"mail never enabled after a complete profile: {mail()!r}")
         if not wait_until(lambda: ipc("lastError") == "", timeout_s=10):
-            die(
-                f"lastError not cleared after a successful enable: {ipc('lastError')!r}"
-            )
+            die(f"lastError not cleared after a successful enable: {ipc('lastError')!r}")
 
         # disable flips it back.
-        ipc("disable", "github")
-        if not wait_until(lambda: github().get("enabled") is False, timeout_s=15):
-            die(f"github never disabled: {github()!r}")
+        ipc("disable", "mail")
+        if not wait_until(lambda: mail().get("enabled") is False, timeout_s=15):
+            die(f"mail never disabled: {mail()!r}")
 
-        sys.stderr.write("PASS: list + enable-guard + set-secret + enable + disable\n")
+        # remove-profile drops the account.
+        ipc("removeProfile", "mail", "work")
+        if not wait_until(lambda: profile("work") is None, timeout_s=15):
+            die(f"profile 'work' never removed: {mail()!r}")
+
+        sys.stderr.write(
+            "PASS: list + enable-guard + set-field(config,secret) + complete + enable + disable + remove-profile\n"
+        )
     finally:
         qs.terminate()
         try:

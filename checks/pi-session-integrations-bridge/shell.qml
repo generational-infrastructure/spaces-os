@@ -20,8 +20,11 @@ Item {
     target: "test:integrations"
 
     function refresh() { bridge.refresh(); }
-    function setSecret(integration: string, name: string, value: string) {
-      bridge.setSecret(integration, name, value);
+    function setField(integration: string, profile: string, field: string, value: string) {
+      bridge.setField(integration, profile, field, value);
+    }
+    function removeProfile(integration: string, profile: string) {
+      bridge.removeProfile(integration, profile);
     }
     function enable(integration: string) { bridge.enable(integration); }
     function disable(integration: string) { bridge.disable(integration); }
