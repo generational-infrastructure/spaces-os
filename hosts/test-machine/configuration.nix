@@ -18,7 +18,10 @@ in
 {
   # Optional openrouter mode (gated on $OPENROUTER_API_KEY, --impure).
   # No-op under pure eval. Shared with checks/test-machine.nix.
-  imports = [ ./openrouter.nix ];
+  imports = [
+    ./openrouter.nix
+    ./integrations.nix
+  ];
 
   networking.hostName = "test-machine";
 

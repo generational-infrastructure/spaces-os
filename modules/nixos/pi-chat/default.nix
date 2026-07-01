@@ -295,6 +295,9 @@ in
     # dual-role clan machine (this client + the executor role, which imports
     # the same module) collapses the two imports into one.
     (inputs.self.nixosModules.pi-sessiond // { key = "spaces/nixosModules/pi-sessiond"; })
+    # Agent integrations: broker + Landlock-confined MCP units. Imported here so
+    # every pi-chat consumer gets the feature; enabled by default below.
+    inputs.self.nixosModules.spaces-integrations
   ];
 
   options.services.pi-chat = {
@@ -608,6 +611,11 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Agent integrations ride with the panel: the broker + Landlock-confined MCP
+    # units come up (inert until an integration is declared, or added at runtime
+    # via Settings -> Integrations). Overridable per-host.
+    services.spaces-integrations.enable = lib.mkDefault true;
+
     assertions = [
       {
         assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;

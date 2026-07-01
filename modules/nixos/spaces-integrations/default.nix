@@ -15,12 +15,13 @@
 # neutral data onto the NixOS user-unit / etc surfaces, so a home-manager
 # adapter can reuse the same lib. The broker (step 2) owns enable/disable +
 # secret provisioning at runtime — using an integration stays rootless (req 10).
-# Imported by no other module; inert until enabled AND integrations declared.
+# Bundled by modules/nixos/spaces.nix; inert until enabled AND integrations declared.
 { inputs, ... }:
 {
   config,
   lib,
   pkgs,
+  options,
   ...
 }:
 let
@@ -126,6 +127,23 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Each user runs their own per-user broker, which seals that user's secrets
+    # with `systemd-creds --with-key=host+tpm2` (§5.2) and so needs TPM device
+    # access. security.tpm2 provides it — it creates the `tss` group and the
+    # /dev/tpmrm0 udev rule. Access is by group membership (the rule carries no
+    # uaccess tag), and there is no "all users" group, so grant `tss` to every
+    # normal user rather than a single hardcoded account. A VM build of an
+    # integrations host also needs a software TPM: set it too, but guarded to
+    # where the option exists (a vmVariant / nixosTest node) — never on real
+    # hardware, which has a real one.
+    security.tpm2.enable = lib.mkDefault true;
+    virtualisation = lib.optionalAttrs (options.virtualisation ? tpm) {
+      tpm.enable = lib.mkDefault true;
+    };
+    users.groups.tss.members = builtins.attrNames (
+      lib.filterAttrs (_: u: u.isNormalUser) config.users.users
+    );
+
     # The broker runs whenever integrations are enabled (even with none declared
     # yet): it owns enable/disable + secret provisioning over
     # %t/spaces-integrations.sock and starts/stops each integration's socket.
