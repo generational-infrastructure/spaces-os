@@ -1,22 +1,27 @@
-# Skill → integration migration plan: mail, caldav, contacts
+# Skill → integration migration: mail, caldav, contacts
 
-**Status:** proposed; awaiting review before implementation. Execution plan
-for migrating the first three secret-bearing *skills* (`email`, `calendar`,
-`contacts`) onto the `spaces-integrations` machinery from the
-[POC](./agent-integrations-poc-plan.md), **keeping `skill-config` as the
-config/secret store** but relocating it behind the integration wall. Read
-[agent-integrations-design.md](./agent-integrations-design.md) for the
-architecture and requirements (req-1…req-11); read this for *what moves, how,
-and in what order*.
+**Status:** IMPLEMENTED (2026-07-01). The three secret-bearing skills (`email`,
+`calendar`, `contacts`) now run as sandboxed MCP integrations on the unified,
+host+tpm2-sealed profile store; `skill-config` is relocated behind the wall as
+the store engine (still used unchanged by the agent-facing `google`/`signal`
+skills). Built on Option 3 (blob-credential store; TPM-at-rest parity with
+GitHub). Read [agent-integrations-design.md](./agent-integrations-design.md) for
+the architecture; this doc records the plan and what shipped.
 
-**Scope:** three multi-account integrations end to end — `mail` (IMAP/SMTP via
-himalaya), `caldav` (CalDAV), `contacts` (CardDAV) — plus the shared plumbing
-(unified store, broker rework, panel form). **Not** in scope: `google`
-(needs OAuth, deferred §9.5), `signal` (needs the §5.5 QR channel), and
-deleting the `skill-config` *binary* (it lives on inside the trusted
-boundary — see step 7). Public/no-secret skills (`wikipedia`, `wikidata`,
-`maps`, `datetime`, `location`, `notifications`) carry no secret and are out
-of scope.
+**Verified:** the `--user --uid=self` host+tpm2 decrypt build-gate (round-trips);
+per-package unit tests (scaffold, skill-config, broker Go, integration-github,
+integration-{caldav,contacts,mail}); the broker Go tests drive the REAL
+skill-config; `spaces-integrations-nix-eval` (blob credentials + schema),
+`spaces-integrations-migrated-nix-eval` (autoRun split), and the profile-aware
+`pi-session-integrations-bridge` check (real quickshell + the panel bridge
+against the new protocol); the test-machine host evaluates; SettingsWindow +
+ProfileEditor parse/instantiate under headless quickshell. **Pending:** live
+visual QA of the provisioning form's per-profile delegates (agent-vm) and a
+full mail/caldav/contacts e2e against real servers.
+
+**Scope delivered:** three multi-account integrations end to end, the unified
+store + broker rework, the panel, and the cutover. **Not** in scope (unchanged):
+`google` (OAuth), `signal` (QR channel), and deleting the `skill-config` binary.
 
 ## The core realization
 
