@@ -4,7 +4,7 @@ connection, print the JSON reply (the panel's IntegrationsBridge speaks the same
 wire). The broker authorises via SO_PEERCRED (uid == self), so this must run as
 the owning user.
 
-usage: broker.py <socket> <op> [integration] [name] [value]
+usage: broker.py <socket> <op> [integration] [profile] [field] [value]
 """
 
 import json
@@ -15,7 +15,7 @@ import sys
 def main():
     sockpath, op = sys.argv[1], sys.argv[2]
     req = {"op": op}
-    for key, idx in (("integration", 3), ("name", 4), ("value", 5)):
+    for key, idx in (("integration", 3), ("profile", 4), ("field", 5), ("value", 6)):
         if len(sys.argv) > idx:
             req[key] = sys.argv[idx]
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
