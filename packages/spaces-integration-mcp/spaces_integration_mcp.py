@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import sys
+import tomllib
 
 PROTOCOL_VERSION = "2025-03-26"
 
@@ -38,6 +39,27 @@ def read_credential(name):
 def shared_dir():
     """The per-pair file-exchange dir, or None when none was provisioned."""
     return os.environ.get("SPACES_INTEGRATION_SHARED_DIR")
+
+
+def store_profile(profile, kinds=("config", "secrets")):
+    """Merged field values for one profile, read from the store's credential
+    blobs ($CREDENTIALS_DIRECTORY/config and .../secrets). The blobs are
+    skill-config TOML: a single [<skill>.<profile>] table tree per integration.
+    Returns {} when a blob is absent or unparseable — a missing field surfaces
+    as a tool error at the call site, never a crash."""
+    out = {}
+    for kind in kinds:
+        text = read_credential(kind)
+        if not text:
+            continue
+        try:
+            doc = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            continue
+        for _skill, profiles in doc.items():
+            if isinstance(profiles, dict) and isinstance(profiles.get(profile), dict):
+                out.update(profiles[profile])
+    return out
 
 
 def _handle_request(req, ctx):
