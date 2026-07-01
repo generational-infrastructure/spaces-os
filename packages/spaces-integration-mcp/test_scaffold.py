@@ -196,3 +196,33 @@ def test_store_profile_absent_blobs(tmp_path, monkeypatch):
     assert mcp.store_profile("work") == {}
     monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     assert mcp.store_profile("work") == {}
+
+
+def test_store_profiles_and_resolve(tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text('[mail.work]\nimap_host = "a"\n[mail.home]\nimap_host = "b"\n')
+    (creds / "secrets").write_text('[mail.work]\npassword = "p"\n')
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profiles() == ["home", "work"]
+    # explicit, valid
+    assert mcp.resolve_profile({"profile": "home"}) == ("home", None)
+    # explicit, unknown
+    name, err = mcp.resolve_profile({"profile": "nope"})
+    assert name is None and "not provisioned" in err
+    # ambiguous (several, none named)
+    name, err = mcp.resolve_profile({})
+    assert name is None and "multiple profiles" in err
+
+
+def test_resolve_profile_single_and_none(tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    # none provisioned
+    name, err = mcp.resolve_profile({})
+    assert name is None and "no profile" in err
+    # exactly one → used implicitly
+    (creds / "secrets").write_text('[mail.only]\npassword = "p"\n')
+    assert mcp.resolve_profile({}) == ("only", None)
