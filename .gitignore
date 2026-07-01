@@ -29,3 +29,6 @@ __pycache__/
 
 # remote-agent-vm workdir (server/client qcow2 + qmp.socks + serial logs)
 .remote-agent-vm/
+
+# test-vm/agent-vm swtpm runtime state (pid, lock, TPM blob, log)
+test-machine-swtpm/
