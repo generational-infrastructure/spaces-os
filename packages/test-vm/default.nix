@@ -29,6 +29,8 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
     name = "run-test-machine-vm";
     runtimeInputs = [
       pkgs.coreutils
+      # pgrep, for the stale-swtpm reaper below.
+      pkgs.procps
       # remote-viewer: the SPICE client the launcher spawns for the
       # interactive display (see the spice wiring in vm-debug.nix).
       pkgs.virt-viewer
@@ -50,6 +52,12 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
       done
       mkdir -p -- "$state_dir"
       export NIX_DISK_IMAGE="$state_dir/test-vm.qcow2"
+      ${builtins.readFile ../agent-vm/reap-swtpm.sh}
+      # The runner resolves NIX_SWTPM_DIR relative to $PWD (default
+      # test-machine-swtpm) and its swtpm daemon can outlive a hard-killed
+      # QEMU, wedging every later launch on the TPM state lock. Reap any
+      # orphan first; abort if that swtpm still serves a live VM.
+      reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
 
       # One EXIT trap for everything: temp files to delete and the SPICE
       # client to reap. A second `trap … EXIT` would clobber the first,
