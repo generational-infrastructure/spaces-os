@@ -3,10 +3,11 @@
 # Applied via virtualisation.vmVariant so they only affect builds of
 # `system.build.vm` (e.g. `nix build .#test-vm`), not the installed
 # system. Two display modes:
-#   - GUI (default): SPICE display shown through remote-viewer, with
-#     host↔guest clipboard via spice-vdagent and intel-hda duplex audio
-#     via host PipeWire. (A local GTK window can't sync the clipboard —
-#     nixpkgs ships QEMU's gtk_clipboard feature disabled.)
+#   - GUI (default): QEMU's native GTK window, with host↔guest clipboard
+#     via QEMU's built-in qemu-vdagent chardev (guest side: spice-vdagent)
+#     and intel-hda duplex audio via host PipeWire. Needs a QEMU built
+#     with gtk_clipboard (see the package override below); under Wayland
+#     the GTK window inherits the compositor's hi-DPI scale factor.
 #   - headless (services.spaces.vm-debug.headless = true): no window,
 #     QMP control socket on /tmp/agent-vm-qmp.sock, VNC on
 #     127.0.0.1:5999, serial on stdio. Intended for agent-driven dev
@@ -21,29 +22,26 @@
 let
   cfg = config.services.spaces.vm-debug;
   guiOpts = [
-    # `nix run .#test-vm` shows the guest through a SPICE client
-    # (remote-viewer), not a local QEMU window: QEMU's GTK clipboard
-    # bridge ships disabled in nixpkgs (the gtk_clipboard meson feature,
-    # flagged "EXPERIMENTAL, MAY HANG" upstream), so a GTK window can
-    # never sync the host<->guest clipboard. SPICE's clipboard is a
-    # separate, always-compiled path. virtio-vga-gl + SPICE gl=on give
-    # the guest accelerated GL and hand the scanout to remote-viewer;
-    # SPICE registers the sole host GL context, so no -display is set
-    # (with SPICE on, QEMU defaults to no local window). The launcher
-    # (packages/test-vm) spawns that client against the socket below and
-    # tears it down when QEMU exits.
+    # `nix run .#test-vm` shows the guest in QEMU's own GTK window.
+    # virtio-vga-gl + gl=on give the guest accelerated GL.
+    # zoom-to-fit=off: 1 guest px = 1 logical px, so under Wayland the
+    # compositor scales the window by the host's hi-DPI factor and the
+    # guest renders at the size you expect (resize the window to zoom).
     "-device virtio-vga-gl"
-    "-spice unix=on,addr=\${TEST_VM_SPICE_SOCK:-/tmp/test-vm-spice.sock},disable-ticketing=on,gl=on"
+    "-display gtk,gl=on,zoom-to-fit=off"
     "-audiodev pipewire,id=snd0"
     "-device intel-hda"
     "-device hda-duplex,audiodev=snd0"
-    # SPICE agent channel: carries the host<->guest clipboard, bridged
-    # in the guest by spice-vdagent (configured below).
+    # Clipboard: QEMU >= 6.1 ships the HOST side of the vdagent protocol
+    # as a chardev (qemu-vdagent) - no SPICE server or client involved.
+    # It bridges the guest's spice-vdagent to the GTK window's clipboard
+    # (the gtk_clipboard feature the override below turns on). The guest
+    # side (spice-vdagent, configured below) is unchanged.
     "-device virtio-serial"
-    "-chardev spicevmc,id=vdagent,name=vdagent"
+    "-chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on"
     "-device virtserialport,chardev=vdagent,name=com.redhat.spice.0"
   ];
-  # Headless: no audio, no spice, no GL. Paths come from the
+  # Headless: no audio, no vdagent, no GL. Paths come from the
   # agent-vm wrapper via env vars so the same VM image can run in
   # any cwd / sandbox.
   headlessOpts = [
@@ -73,6 +71,17 @@ in
 
     virtualisation.qemu.options = if cfg.headless then headlessOpts else guiOpts;
 
+    # The GUI variant needs QEMU's GTK clipboard bridge, which nixpkgs
+    # ships disabled (upstream marks the meson feature "EXPERIMENTAL,
+    # MAY HANG", https://gitlab.com/qemu-project/qemu/-/issues/1150 -
+    # if a run ever wedges, suspect this first). Rebuild qemu_kvm with
+    # it enabled; the headless variant keeps the stock (cached) qemu.
+    virtualisation.qemu.package = lib.mkIf (!cfg.headless) (
+      pkgs.qemu_kvm.overrideAttrs (old: {
+        configureFlags = old.configureFlags ++ [ "--enable-gtk-clipboard" ];
+      })
+    );
+
     # GTK and headless modes use distinct host SSH ports so a developer
     # can run `nix build .#test-vm` and `nix build .#agent-vm` side by
     # side without QEMU port collisions.
@@ -98,7 +107,7 @@ in
     spaces.voxtype.whisperLanguage = "en";
 
     # Guest-side clipboard agent only makes sense with the GUI display
-    # — headless has no spice channel to attach to.
+    # — headless has no vdagent channel to attach to.
     services.spice-vdagentd.enable = !cfg.headless;
     systemd.user.services.spice-vdagent = lib.mkIf (!cfg.headless) {
       description = "Spice vdagent user session agent";

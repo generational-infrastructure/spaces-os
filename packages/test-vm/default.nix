@@ -31,9 +31,6 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
       pkgs.coreutils
       # pgrep, for the stale-swtpm reaper below.
       pkgs.procps
-      # remote-viewer: the SPICE client the launcher spawns for the
-      # interactive display (see the spice wiring in vm-debug.nix).
-      pkgs.virt-viewer
     ];
     text = ''
       # Keep QEMU's disk image out of the repo root. Resolve the repo
@@ -59,15 +56,11 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
       # orphan first; abort if that swtpm still serves a live VM.
       reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
 
-      # One EXIT trap for everything: temp files to delete and the SPICE
-      # client to reap. A second `trap … EXIT` would clobber the first,
-      # so both the OpenRouter keyfile and the viewer register here.
+      # One EXIT trap: the OpenRouter keyfile. (The display is QEMU's own
+      # GTK window now - see vm-debug.nix - so there is no viewer process
+      # or SPICE socket left to reap.)
       cleanup_files=()
-      viewer_pid=""
       cleanup() {
-        if [ -n "$viewer_pid" ]; then
-          kill "$viewer_pid" 2>/dev/null || true
-        fi
         if [ "''${#cleanup_files[@]}" -gt 0 ]; then
           rm -f "''${cleanup_files[@]}"
         fi
@@ -86,30 +79,8 @@ if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
         export QEMU_OPTS
       fi
 
-      # The guest opts (modules/nixos/vm-debug.nix) render the display to
-      # a SPICE unix socket rather than a local QEMU window, so the
-      # host<->guest clipboard works (QEMU's GTK clipboard bridge ships
-      # disabled in nixpkgs). Publish the socket path the guest opts read,
-      # then spawn the client once QEMU has created it. The wait loop
-      # covers the socket not existing yet at launch.
-      sockdir="''${XDG_RUNTIME_DIR:-/tmp}"
-      TEST_VM_SPICE_SOCK="$sockdir/test-vm-spice.sock"
-      export TEST_VM_SPICE_SOCK
-      rm -f "$TEST_VM_SPICE_SOCK"
-      cleanup_files+=("$TEST_VM_SPICE_SOCK")
-      (
-        tries=0
-        while [ ! -S "$TEST_VM_SPICE_SOCK" ] && [ "$tries" -lt 300 ]; do
-          sleep 0.1
-          tries=$((tries + 1))
-        done
-        exec remote-viewer "spice+unix://$TEST_VM_SPICE_SOCK"
-      ) &
-      viewer_pid=$!
-
-      # No exec: keep the shell alive so the trap cleans up (keyfile,
-      # socket, viewer) after QEMU exits — QEMU has already read fw_cfg
-      # by then.
+      # No exec: keep the shell alive so the trap cleans up the keyfile
+      # after QEMU exits - QEMU has already read fw_cfg by then.
       ${vm}/bin/run-test-machine-vm "$@"
     '';
   }
