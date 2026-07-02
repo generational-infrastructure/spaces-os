@@ -319,6 +319,7 @@ func (s *Server) setField(integration, profile, field, value string) Ack {
 			return errAck("seal: " + err.Error())
 		}
 	}
+	s.tryRestart(integration)
 	log.Printf("set-field %s.%s.%s", integration, profile, field)
 	return Ack{Op: "ok"}
 }
@@ -358,6 +359,7 @@ func (s *Server) removeProfile(integration, profile string) Ack {
 	if err := s.seal(secretsWork, s.sealedSecrets(integration)); err != nil {
 		return errAck("seal: " + err.Error())
 	}
+	s.tryRestart(integration)
 	log.Printf("remove-profile %s.%s", integration, profile)
 	return Ack{Op: "ok"}
 }
@@ -482,6 +484,20 @@ func (s *Server) sealEmpty(integration string) error {
 		return err
 	}
 	return s.seal(empty, s.sealedSecrets(integration))
+}
+
+// tryRestart bounces the integration's service after a successful store write.
+// The unit reads its credentials from a start-time snapshot
+// (LoadCredential[Encrypted]), so a running server would otherwise keep stale
+// values until the next activation. `try-restart` restarts a running unit and
+// no-ops an inactive one — the socket stays up either way, so the next
+// connection re-activates with fresh credentials. Best-effort: the write is
+// already durable, so a restart failure is logged, never surfaced as an error.
+func (s *Server) tryRestart(integration string) {
+	unit := fmt.Sprintf("spaces-integration-%s.service", integration)
+	if msg, err := s.runSystemctl("try-restart", unit); err != nil {
+		log.Printf("systemctl try-restart %s: %s", unit, msg)
+	}
 }
 
 // runSystemctl invokes the configured systemctl prefix with verb + units.
