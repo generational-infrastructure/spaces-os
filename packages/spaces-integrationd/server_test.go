@@ -307,8 +307,9 @@ func TestEnableStartsSocketUnit(t *testing.T) {
 
 	calls := e.systemctlCalls()
 	want := "start spaces-integration-github.socket"
-	if len(calls) != 1 || calls[0] != want {
-		t.Fatalf("want [%q], got %v", want, calls)
+	// calls[0] is set-field's try-restart; enable's socket start follows.
+	if len(calls) != 2 || calls[1] != want {
+		t.Fatalf("want second call %q, got %v", want, calls)
 	}
 	if !e.enabledState().Integrations["github"].Enabled {
 		t.Fatal("want enabled=true in enabled.json")
@@ -340,11 +341,53 @@ func TestDisableStopsBothUnits(t *testing.T) {
 
 	calls := e.systemctlCalls()
 	wantStop := "stop spaces-integration-github.socket spaces-integration-github.service"
-	if len(calls) != 2 || calls[1] != wantStop {
+	// calls: [set-field try-restart, enable start, disable stop].
+	if len(calls) != 3 || calls[2] != wantStop {
 		t.Fatalf("want stop call %q, got %v", wantStop, calls)
 	}
 	if e.enabledState().Integrations["github"].Enabled {
 		t.Fatal("want enabled=false after disable")
+	}
+}
+
+// A running integration reads its credentials from a start-time snapshot
+// (LoadCredential[Encrypted]), so a successful field write must bounce the
+// service — try-restart: restarts a running unit, no-ops an inactive one
+// (the socket stays up; the next connection re-activates with fresh creds).
+func TestSetFieldTryRestartsService(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.setField("github", "work", "token", "x")
+
+	calls := e.systemctlCalls()
+	want := "try-restart spaces-integration-github.service"
+	if len(calls) != 1 || calls[0] != want {
+		t.Fatalf("want [%q], got %v", want, calls)
+	}
+}
+
+func TestRemoveProfileTryRestartsService(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.setField("github", "work", "token", "w")
+	e.wantOK(e.roundtrip(Request{Op: "remove-profile", Integration: "github", Profile: "work"}))
+
+	calls := e.systemctlCalls()
+	want := "try-restart spaces-integration-github.service"
+	if len(calls) != 2 || calls[1] != want {
+		t.Fatalf("want second call %q, got %v", want, calls)
+	}
+}
+
+// The restart is best-effort: the store write is already durable and the next
+// socket activation picks up the new values, so a failed try-restart must not
+// fail the op.
+func TestSetFieldSucceedsWhenRestartFails(t *testing.T) {
+	e := newTestEnv(t, 1)
+	e.setField("github", "work", "token", "x")
+
+	calls := e.systemctlCalls()
+	want := "try-restart spaces-integration-github.service"
+	if len(calls) != 1 || calls[0] != want {
+		t.Fatalf("try-restart must still be attempted, want [%q], got %v", want, calls)
 	}
 }
 
