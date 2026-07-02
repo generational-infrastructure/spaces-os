@@ -50,6 +50,8 @@ else
       pkgs.sshpass
       pkgs.python3
       pkgs.coreutils
+      # pgrep, for the stale-swtpm reaper below.
+      pkgs.procps
     ];
     text = ''
       # Locate the repo root so state is the same regardless of cwd.
@@ -64,6 +66,8 @@ else
       done
       qmp="$state_dir/qmp.sock"
       serial="$state_dir/serial.log"
+
+      ${builtins.readFile ./reap-swtpm.sh}
 
       ssh_args=(
         -p 2223
@@ -82,6 +86,13 @@ else
           : >"$serial"
           echo "agent-vm: state at $state_dir (serial: $serial)"
           cd "$state_dir"
+          # The qemu-vm runner resolves NIX_SWTPM_DIR relative to $PWD
+          # (default test-machine-swtpm — here, under $state_dir thanks to
+          # the cd above) and its swtpm daemon can outlive a hard-killed
+          # QEMU (pueue kill, dropped terminal), wedging every later launch
+          # on the TPM state lock. Reap any orphan first; abort if that
+          # swtpm still serves a live VM.
+          reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
           export AGENT_VM_QMP="$qmp"
           export AGENT_VM_SERIAL="$serial"
           export NIX_DISK_IMAGE="$state_dir/test-machine.qcow2"
