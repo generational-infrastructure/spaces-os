@@ -6,7 +6,7 @@
 # voxtype-tuner "Apply" action) over the generated config, so tuning takes
 # effect on a plain `systemctl --user restart voxtype` — no nixos-rebuild.
 #
-# Two engines are supported:
+# Three engines are supported:
 #   - whisper  (default): whisper.cpp, batch transcription. Uses the
 #     `vulkan` package variant (AMD/Intel GPU, no CUDA) and a Nix-fetched
 #     ggml model so the closure is fully offline.
@@ -16,6 +16,12 @@
 #     (one of the `parakeet*` package variants) and a streaming-capable
 #     model directory, which voxtype downloads on first use into
 #     ~/.local/share/voxtype/models/.
+#   - nemotron: NVIDIA's multilingual (40-locale) cache-aware streaming
+#     ASR export, driven through parakeet-rs's `Nemotron` type. Reuses the
+#     `parakeet` ONNX feature, so it also needs a `parakeet*` variant. Its
+#     ~2.6 GB model is Nix-fetched (see `nemotronModels`) so a nemotron host
+#     stays offline like whisper — unlike parakeet, voxtype ships no
+#     first-use downloader for it. CPU-only (fp32) upstream today.
 #
 # Keybinding: Mod+Space  (defined in niri.nix)
 { inputs, ... }:
@@ -58,6 +64,46 @@ let
     };
   };
 
+  # Nemotron models, Nix-fetched so a nemotron host's closure stays offline
+  # exactly like the whisper ggml models above. Each entry is a directory of
+  # five files that MUST live together — encoder.onnx loads encoder.onnx.data
+  # by relative name. We symlink rather than copy so the 2.4 GB .data blob is
+  # not duplicated in the store; if onnxruntime is ever seen to canonicalise
+  # the model path (which would break relative external-data resolution through
+  # the symlink), switch `ln -s` to `cp`. Hashes are the git-LFS oids of the
+  # community ONNX export at altunenes/parakeet-rs.
+  nemotronModels = {
+    "nemotron-3.5-asr-streaming-0.6b" =
+      let
+        base = "https://huggingface.co/altunenes/parakeet-rs/resolve/main/nemotron-3.5-asr-streaming-0.6b-onnx";
+        file =
+          name: hash:
+          pkgs.fetchurl {
+            url = "${base}/${name}";
+            inherit hash;
+          };
+        files = {
+          "config.json" = file "config.json" "sha256-sCieGW0RoX48Zhu63+RVyH3kuv/BpeZSpXefXWh8XbA=";
+          "tokenizer.model" = file "tokenizer.model" "sha256-zjiV5AgG8Comw6IlFhuW72gtbABUuuMqJF3sQljX0pE=";
+          "encoder.onnx" = file "encoder.onnx" "sha256-1Wn754tI+7BOFp0yT10lRjg4zu17X8O/4gmHJEGXm9k=";
+          "decoder_joint.onnx" =
+            file "decoder_joint.onnx" "sha256-Y0363yTLT3PC+uFws2YR1o20gYZCaILLyPfgLtnyuyk=";
+          "encoder.onnx.data" =
+            file "encoder.onnx.data" "sha256-dYT4Xfdrya5vvfpTqo2XsHqEJSXRxQHVNtd/2eT1esc=";
+        };
+      in
+      pkgs.runCommand "nemotron-3.5-asr-streaming-0.6b" { } (
+        ''
+          mkdir -p "$out"
+        ''
+        + lib.concatStrings (
+          lib.mapAttrsToList (name: src: ''
+            ln -s ${src} "$out/${name}"
+          '') files
+        )
+      );
+  };
+
   defaultSettings = builtins.fromTOML (builtins.readFile "${inputs.voxtype}/config/default.toml");
 
   # Engine-specific settings, deep-merged onto the upstream defaults.
@@ -77,6 +123,18 @@ let
           streaming_chunk_secs = 0.56;
           streaming_left_context_secs = 5.6;
           streaming_right_context_secs = 0.56;
+        };
+      }
+    else if cfg.engine == "nemotron" then
+      {
+        engine = "nemotron";
+        nemotron = {
+          # A known registry name resolves to the Nix-fetched offline model
+          # directory; any other value passes through as an absolute path or a
+          # name voxtype resolves under ~/.local/share/voxtype/models/.
+          model = toString (nemotronModels.${cfg.nemotronModel} or cfg.nemotronModel);
+          target_lang = cfg.nemotronTargetLang;
+          inherit (cfg) streaming;
         };
       }
     else
@@ -178,6 +236,7 @@ in
       type = lib.types.enum [
         "whisper"
         "parakeet"
+        "nemotron"
       ];
       default = "whisper";
       description = "Transcription engine.";
@@ -187,9 +246,9 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        Enable Parakeet cache-aware streaming: live partial transcripts
-        while recording, final transcript typed on release. Only takes
-        effect when engine = "parakeet".
+        Enable cache-aware streaming: live partial transcripts while
+        recording, final transcript typed on release. Only takes effect
+        when engine = "parakeet" or engine = "nemotron".
       '';
     };
 
@@ -201,6 +260,33 @@ in
         downloaded on first use) or an absolute path to a model directory.
         Streaming requires a streaming-capable model (TDT v3 family with
         tokenizer.model), of which this is the default.
+      '';
+    };
+
+    nemotronModel = lib.mkOption {
+      type = lib.types.str;
+      default = "nemotron-3.5-asr-streaming-0.6b";
+      description = ''
+        Model for engine = "nemotron". A known registry name (currently only
+        "nemotron-3.5-asr-streaming-0.6b") resolves to a Nix-fetched model
+        directory baked into the closure, so the host stays offline like the
+        whisper engine. Any other value is passed through verbatim — either an
+        absolute path to a model directory you provide, or a registry name
+        voxtype resolves under ~/.local/share/voxtype/models/ (note: voxtype
+        ships no first-use downloader for nemotron, so a bare name only works
+        if you have placed the files there yourself).
+      '';
+    };
+
+    nemotronTargetLang = lib.mkOption {
+      type = lib.types.str;
+      default = "auto";
+      example = "de-DE";
+      description = ''
+        Target locale for the multilingual nemotron model, as a BCP-47-ish key
+        the model's prompt dictionary accepts (e.g. "en-US", "es-ES", "de-DE",
+        "ja-JP", "zh-CN"). "auto" lets the model detect the language itself.
+        Only takes effect when engine = "nemotron".
       '';
     };
 
@@ -275,10 +361,12 @@ in
   config = {
     assertions = [
       {
-        assertion = cfg.engine == "parakeet" -> lib.hasPrefix "parakeet" cfg.variant;
+        assertion =
+          (cfg.engine == "parakeet" || cfg.engine == "nemotron") -> lib.hasPrefix "parakeet" cfg.variant;
         message = ''
-          spaces.voxtype.engine = "parakeet" requires a parakeet-capable
-          package variant. Set spaces.voxtype.variant to one of:
+          spaces.voxtype.engine = "${cfg.engine}" requires a parakeet-capable
+          package variant (nemotron reuses the parakeet ONNX feature). Set
+          spaces.voxtype.variant to one of:
           ${lib.concatStringsSep ", " (builtins.filter (lib.hasPrefix "parakeet") (builtins.attrNames voxtypePackages))}.
         '';
       }

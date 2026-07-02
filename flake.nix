@@ -16,7 +16,9 @@
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     llm-agents.inputs.blueprint.follows = "blueprint";
     llm-agents.inputs.systems.follows = "systems";
-    voxtype.url = "github:peteonrails/voxtype";
+    # Fork branch adds the nemotron multilingual streaming ASR engine (reuses
+    # the parakeet ONNX feature). Not yet upstream in peteonrails/voxtype.
+    voxtype.url = "github:a-kenji/voxtype/ke-init-nemotron-support-streaming";
     voxtype.inputs.nixpkgs.follows = "nixpkgs";
     voxtype.inputs.flake-utils.inputs.systems.follows = "systems";
     home-manager.url = "github:nix-community/home-manager";
