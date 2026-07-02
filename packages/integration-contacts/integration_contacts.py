@@ -11,12 +11,11 @@ target account is resolved from arguments["profile"] (or the sole profile).
 import base64
 import hashlib
 import json
-import os
 import re
 import sys
-import uuid
 import urllib.error
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 from urllib.parse import quote, urljoin, urlsplit
 from xml.sax.saxutils import escape as _xml_escape
@@ -61,7 +60,12 @@ TOOLS = [
         "name": "get",
         "description": "Fetch one contact's vCard by its href/path",
         "inputSchema": _schema(
-            {"path": {"type": "string", "description": "contact href, path, or resource name"}},
+            {
+                "path": {
+                    "type": "string",
+                    "description": "contact href, path, or resource name",
+                }
+            },
             ["path"],
         ),
     },
@@ -78,9 +82,18 @@ TOOLS = [
         "description": "Replace an existing contact's vCard (PUT), optionally guarded by an If-Match ETag",
         "inputSchema": _schema(
             {
-                "path": {"type": "string", "description": "contact href, path, or resource name"},
-                "vcard": {"type": "string", "description": "the replacement vCard body"},
-                "etag": {"type": "string", "description": "ETag guard sent as If-Match (optional)"},
+                "path": {
+                    "type": "string",
+                    "description": "contact href, path, or resource name",
+                },
+                "vcard": {
+                    "type": "string",
+                    "description": "the replacement vCard body",
+                },
+                "etag": {
+                    "type": "string",
+                    "description": "ETag guard sent as If-Match (optional)",
+                },
             },
             ["path", "vcard"],
         ),
@@ -89,7 +102,12 @@ TOOLS = [
         "name": "delete",
         "description": "Delete a contact by its href/path",
         "inputSchema": _schema(
-            {"path": {"type": "string", "description": "contact href, path, or resource name"}},
+            {
+                "path": {
+                    "type": "string",
+                    "description": "contact href, path, or resource name",
+                }
+            },
             ["path"],
         ),
     },
@@ -134,8 +152,11 @@ def _http(method, url, user, password, body=None, extra_headers=None):
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.getcode(), dict(resp.headers), resp.read(), None
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers or {}), e.read() or b"", (
-            f"CardDAV error: HTTP {e.code} for {method} {url}"
+        return (
+            e.code,
+            dict(e.headers or {}),
+            e.read() or b"",
+            (f"CardDAV error: HTTP {e.code} for {method} {url}"),
         )
     except (urllib.error.URLError, OSError) as e:
         return None, {}, b"", f"CardDAV request failed: {e.__class__.__name__}: {e}"
@@ -200,8 +221,12 @@ def _vcard_uid(vcard):
 def _tool_discover(args, vals):
     collection = _collection(vals)
     _, _, raw, err = _http(
-        "PROPFIND", collection, vals["user"], vals["password"],
-        body=_PROPFIND_BODY, extra_headers=_XML_HEADERS,
+        "PROPFIND",
+        collection,
+        vals["user"],
+        vals["password"],
+        body=_PROPFIND_BODY,
+        extra_headers=_XML_HEADERS,
     )
     if err:
         return err, True
@@ -216,8 +241,12 @@ def _tool_search(args, vals):
     collection = _collection(vals)
     query = (args.get("query") or "").strip()
     _, _, raw, err = _http(
-        "REPORT", collection, vals["user"], vals["password"],
-        body=_search_body(query), extra_headers=_XML_HEADERS,
+        "REPORT",
+        collection,
+        vals["user"],
+        vals["password"],
+        body=_search_body(query),
+        extra_headers=_XML_HEADERS,
     )
     if err:
         return err, True
@@ -243,8 +272,15 @@ def _tool_new(args, vals):
     name = (_vcard_uid(vcard) or str(uuid.uuid4())) + ".vcf"
     url = collection.rstrip("/") + "/" + quote(name, safe="")
     _, _, _, err = _http(
-        "PUT", url, vals["user"], vals["password"], body=vcard,
-        extra_headers={"Content-Type": "text/vcard; charset=utf-8", "If-None-Match": "*"},
+        "PUT",
+        url,
+        vals["user"],
+        vals["password"],
+        body=vcard,
+        extra_headers={
+            "Content-Type": "text/vcard; charset=utf-8",
+            "If-None-Match": "*",
+        },
     )
     if err:
         return err, True
@@ -264,7 +300,12 @@ def _tool_edit(args, vals):
     if etag:
         headers["If-Match"] = etag
     _, resp_headers, _, err = _http(
-        "PUT", url, vals["user"], vals["password"], body=vcard, extra_headers=headers,
+        "PUT",
+        url,
+        vals["user"],
+        vals["password"],
+        body=vcard,
+        extra_headers=headers,
     )
     if err:
         return err, True

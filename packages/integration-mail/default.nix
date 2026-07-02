@@ -9,7 +9,12 @@ pkgs.python3Packages.buildPythonApplication {
   src = ./.;
   build-system = [ pkgs.python3Packages.hatchling ];
   dependencies = [ spaces-integration-mcp ];
-  makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.himalaya ]) ];
+  makeWrapperArgs = [
+    "--prefix"
+    "PATH"
+    ":"
+    (pkgs.lib.makeBinPath [ pkgs.himalaya ])
+  ];
   doCheck = true;
   nativeCheckInputs = [ pkgs.python3Packages.pytestCheckHook ];
   pytestFlags = [ "test_integration_mail.py" ];

@@ -163,8 +163,12 @@ def main() -> None:
 
         # enable refused with no complete profile — error surfaced, stays off.
         ipc("enable", "mail")
-        if not wait_until(lambda: "no complete profile" in ipc("lastError"), timeout_s=15):
-            die(f"enable with no profile should be refused (lastError={ipc('lastError')!r})")
+        if not wait_until(
+            lambda: "no complete profile" in ipc("lastError"), timeout_s=15
+        ):
+            die(
+                f"enable with no profile should be refused (lastError={ipc('lastError')!r})"
+            )
         if mail().get("enabled") is True:
             die("mail became enabled despite no complete profile")
 
@@ -179,7 +183,10 @@ def main() -> None:
 
         # set the required secret → profile becomes complete (value never echoed).
         ipc("setField", "mail", "work", "password", "hunter2")
-        if not wait_until(lambda: profile("work") and profile("work").get("complete") is True, timeout_s=15):
+        if not wait_until(
+            lambda: profile("work") and profile("work").get("complete") is True,
+            timeout_s=15,
+        ):
             die(f"profile never completed after the secret was set: {mail()!r}")
         if profile("work").get("secrets", {}).get("password") is not True:
             die(f"secret set-marker not flipped: {profile('work')!r}")
@@ -189,7 +196,9 @@ def main() -> None:
         if not wait_until(lambda: mail().get("enabled") is True, timeout_s=15):
             die(f"mail never enabled after a complete profile: {mail()!r}")
         if not wait_until(lambda: ipc("lastError") == "", timeout_s=10):
-            die(f"lastError not cleared after a successful enable: {ipc('lastError')!r}")
+            die(
+                f"lastError not cleared after a successful enable: {ipc('lastError')!r}"
+            )
 
         # disable flips it back.
         ipc("disable", "mail")

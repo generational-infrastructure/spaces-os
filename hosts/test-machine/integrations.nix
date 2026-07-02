@@ -51,7 +51,11 @@ in
           user.description = "CalDAV username";
         };
         secrets.password.description = "CalDAV password";
-        autoRun = [ "list" "get" "etag" ];
+        autoRun = [
+          "list"
+          "get"
+          "etag"
+        ];
       };
 
       # Migrated from the contacts skill: CardDAV.
@@ -70,7 +74,11 @@ in
           };
         };
         secrets.password.description = "CardDAV password";
-        autoRun = [ "discover" "search" "get" ];
+        autoRun = [
+          "discover"
+          "search"
+          "get"
+        ];
       };
 
       # Migrated from the email skill: IMAP/SMTP via himalaya. send confirms.
@@ -78,7 +86,13 @@ in
         description = "Email (IMAP/SMTP)";
         command = exe "integration-mail";
         network = true;
-        connectPorts = [ 993 587 465 143 25 ];
+        connectPorts = [
+          993
+          587
+          465
+          143
+          25
+        ];
         multiProfile = true;
         config = {
           email.description = "Email address of the account";
@@ -114,7 +128,10 @@ in
           };
         };
         secrets.password.description = "Mailbox password";
-        autoRun = [ "envelope_list" "message_read" ];
+        autoRun = [
+          "envelope_list"
+          "message_read"
+        ];
       };
     };
   };

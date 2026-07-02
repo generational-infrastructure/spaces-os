@@ -24,7 +24,7 @@ def _multistatus(hrefs):
     body = "".join(
         f"  <d:response>\n"
         f"    <d:href>{h}</d:href>\n"
-        f"    <d:propstat><d:prop><d:getetag>\"etag-{i}\"</d:getetag></d:prop>"
+        f'    <d:propstat><d:prop><d:getetag>"etag-{i}"</d:getetag></d:prop>'
         f"<d:status>HTTP/1.1 200 OK</d:status></d:propstat>\n"
         f"  </d:response>\n"
         for i, h in enumerate(hrefs)
@@ -69,7 +69,7 @@ class StubCalDAV(BaseHTTPRequestHandler):
                 '<?xml version="1.0"?>\n<d:multistatus xmlns:d="DAV:" '
                 'xmlns:c="urn:ietf:params:xml:ns:caldav">\n'
                 f"  <d:response>\n    <d:href>{href}</d:href>\n"
-                "    <d:propstat><d:prop><d:getetag>\"etag-0\"</d:getetag>"
+                '    <d:propstat><d:prop><d:getetag>"etag-0"</d:getetag>'
                 f"<c:calendar-data>{data}</c:calendar-data></d:prop>"
                 "<d:status>HTTP/1.1 200 OK</d:status></d:propstat>\n"
                 "  </d:response>\n</d:multistatus>\n"
@@ -96,7 +96,9 @@ class StubCalDAV(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         self._record()
-        self._reply(200, b"", "text/calendar; charset=utf-8", headers={"ETag": '"etag-head"'})
+        self._reply(
+            200, b"", "text/calendar; charset=utf-8", headers={"ETag": '"etag-head"'}
+        )
 
     def do_PUT(self):
         self._record(self._read_body())
@@ -119,7 +121,9 @@ def _config_toml(port):
 
 
 def _secrets_toml():
-    return "".join(f'[caldav.{p}]\npassword = "{pw}"\n\n' for p, (_u, pw) in PROFILES.items())
+    return "".join(
+        f'[caldav.{p}]\npassword = "{pw}"\n\n' for p, (_u, pw) in PROFILES.items()
+    )
 
 
 @pytest.fixture(scope="module")
@@ -203,7 +207,11 @@ def _decoded_auth(headers):
 def test_initialize_handshake(client):
     resp = client.rpc(
         "initialize",
-        {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}},
+        {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "t", "version": "0"},
+        },
     )
     assert resp["id"] == 1
     result = resp["result"]
@@ -238,7 +246,9 @@ def test_secret_fingerprint_not_listed(client):
 def test_list_time_range_and_auth(client):
     StubCalDAV.requests.clear()
     resp = call_tool(
-        client, "list", {"profile": "work", "start": "20260101T000000Z", "end": "20260201T000000Z"}
+        client,
+        "list",
+        {"profile": "work", "start": "20260101T000000Z", "end": "20260201T000000Z"},
     )
     assert resp["result"]["isError"] is False
     assert "calendar-data" in _text(resp) and "Standup" in _text(resp)
@@ -304,7 +314,9 @@ def test_put_with_etag_resolves_and_sends_if_match(client):
     StubCalDAV.requests.clear()
     ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:edit-me\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
     resp = call_tool(
-        client, "put", {"profile": "work", "id": "edit-me", "ics": ics, "etag": '"etag-head"'}
+        client,
+        "put",
+        {"profile": "work", "id": "edit-me", "ics": ics, "etag": '"etag-head"'},
     )
     assert resp["result"]["isError"] is False
     kinds = [(m, p) for (m, p, _h, _b) in StubCalDAV.requests]
@@ -325,8 +337,16 @@ def test_delete_resolves_and_deletes(client):
 
 def test_multi_profile_isolation(client):
     StubCalDAV.requests.clear()
-    call_tool(client, "list", {"profile": "work", "start": "20260101T000000Z", "end": "20260201T000000Z"})
-    call_tool(client, "list", {"profile": "home", "start": "20260101T000000Z", "end": "20260201T000000Z"})
+    call_tool(
+        client,
+        "list",
+        {"profile": "work", "start": "20260101T000000Z", "end": "20260201T000000Z"},
+    )
+    call_tool(
+        client,
+        "list",
+        {"profile": "home", "start": "20260101T000000Z", "end": "20260201T000000Z"},
+    )
     reqs = StubCalDAV.requests
     work = next(r for r in reqs if r[1] == "/dav/work")
     home = next(r for r in reqs if r[1] == "/dav/home")
@@ -343,7 +363,9 @@ def test_unknown_profile_is_error(client):
 def test_missing_password_is_error(client, env, tmp_path):
     creds = tmp_path / "solo-creds"
     creds.mkdir()
-    (creds / "config").write_text(f'[caldav.solo]\nurl = "http://127.0.0.1:{env["port"]}/dav/solo/"\nuser = "carol"\n')
+    (creds / "config").write_text(
+        f'[caldav.solo]\nurl = "http://127.0.0.1:{env["port"]}/dav/solo/"\nuser = "carol"\n'
+    )
     os.environ["CREDENTIALS_DIRECTORY"] = str(creds)
     try:
         resp = call_tool(client, "get", {"id": "whatever"})

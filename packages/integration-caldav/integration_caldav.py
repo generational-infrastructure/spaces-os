@@ -38,8 +38,14 @@ TOOLS = [
             "type": "object",
             "properties": {
                 **_PROFILE_PROP,
-                "start": {"type": "string", "description": "range start (YYYYMMDDTHHMMSSZ)"},
-                "end": {"type": "string", "description": "range end (YYYYMMDDTHHMMSSZ)"},
+                "start": {
+                    "type": "string",
+                    "description": "range start (YYYYMMDDTHHMMSSZ)",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "range end (YYYYMMDDTHHMMSSZ)",
+                },
             },
             "required": ["start", "end"],
         },
@@ -51,7 +57,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 **_PROFILE_PROP,
-                "id": {"type": "string", "description": "iCalendar UID or resource name"},
+                "id": {
+                    "type": "string",
+                    "description": "iCalendar UID or resource name",
+                },
             },
             "required": ["id"],
         },
@@ -63,7 +72,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 **_PROFILE_PROP,
-                "id": {"type": "string", "description": "iCalendar UID or resource name"},
+                "id": {
+                    "type": "string",
+                    "description": "iCalendar UID or resource name",
+                },
             },
             "required": ["id"],
         },
@@ -78,9 +90,15 @@ TOOLS = [
             "type": "object",
             "properties": {
                 **_PROFILE_PROP,
-                "id": {"type": "string", "description": "UID (new event) or UID/resource (edit)"},
+                "id": {
+                    "type": "string",
+                    "description": "UID (new event) or UID/resource (edit)",
+                },
                 "ics": {"type": "string", "description": "the iCalendar body to store"},
-                "etag": {"type": "string", "description": "If-Match guard for an edit (optional)"},
+                "etag": {
+                    "type": "string",
+                    "description": "If-Match guard for an edit (optional)",
+                },
             },
             "required": ["id", "ics"],
         },
@@ -92,7 +110,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 **_PROFILE_PROP,
-                "id": {"type": "string", "description": "iCalendar UID or resource name"},
+                "id": {
+                    "type": "string",
+                    "description": "iCalendar UID or resource name",
+                },
             },
             "required": ["id"],
         },
@@ -100,7 +121,9 @@ TOOLS = [
 ]
 
 # <d:href>...</d:href> text, tolerant of any namespace prefix (mirrors caldav.sh).
-_HREF_RE = re.compile(r"<[A-Za-z0-9]*:?href[^>]*>([^<]+)</[A-Za-z0-9]*:?href>", re.IGNORECASE)
+_HREF_RE = re.compile(
+    r"<[A-Za-z0-9]*:?href[^>]*>([^<]+)</[A-Za-z0-9]*:?href>", re.IGNORECASE
+)
 
 
 def _resolve_xml(value):
@@ -151,7 +174,12 @@ def _profile_ctx(profile):
     origin = m.group(1) if m else base
     userpass = f"{vals['user']}:{vals['password']}"
     auth = "Basic " + base64.b64encode(userpass.encode("utf-8")).decode("ascii")
-    return {"base": base, "origin": origin, "auth": auth, "password": vals["password"]}, None
+    return {
+        "base": base,
+        "origin": origin,
+        "auth": auth,
+        "password": vals["password"],
+    }, None
 
 
 def _http(ctx, url, method, body=None, headers=None):
@@ -163,7 +191,11 @@ def _http(ctx, url, method, body=None, headers=None):
     req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return {"status": resp.status, "body": resp.read(), "headers": resp.headers}, None
+            return {
+                "status": resp.status,
+                "body": resp.read(),
+                "headers": resp.headers,
+            }, None
     except urllib.error.HTTPError as e:
         return None, f"CalDAV error: HTTP {e.code} for {method} {url}"
     except (urllib.error.URLError, OSError, ValueError) as e:

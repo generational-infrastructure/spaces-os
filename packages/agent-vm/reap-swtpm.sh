@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # reap_swtpm <swtpm-state-dir> — reap an orphaned swtpm before (re)launch.
 #
 # nixpkgs' qemu-vm runner starts `swtpm socket --tpmstate dir=<D> … --daemon`

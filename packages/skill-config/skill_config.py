@@ -240,7 +240,8 @@ def cmd_list(args, paths: Paths) -> None:
         skill = resolve_skill(paths.skills_dir, args.target.split(".")[0])
         cfg_fields, sec_fields = load_schema(paths, skill)
         all_profiles = sorted(
-            set(list_profiles(config_doc, skill)) | set(list_profiles(secrets_doc, skill))
+            set(list_profiles(config_doc, skill))
+            | set(list_profiles(secrets_doc, skill))
         )
         out = {"skill": skill, "profiles": {}}
         for profile in all_profiles:
@@ -248,7 +249,9 @@ def cmd_list(args, paths: Paths) -> None:
             sec_section = section_get(secrets_doc, skill, profile)
             out["profiles"][profile] = {
                 "config": {
-                    name: cfg_section[name] for name in cfg_fields if name in cfg_section
+                    name: cfg_section[name]
+                    for name in cfg_fields
+                    if name in cfg_section
                 },
                 # set-status only — a secret VALUE never leaves the store here.
                 "secrets": {

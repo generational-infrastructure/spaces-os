@@ -34,17 +34,25 @@ def _env_schema(tmp):
     )
     cfg = tmp / "config.toml"
     sec = tmp / "secrets.toml"
-    return schema, cfg, sec, {
-        "SKILL_CONFIG_SCHEMA": str(schema),
-        "SKILL_CONFIG_CONFIG_FILE": str(cfg),
-        "SKILL_CONFIG_SECRETS_FILE": str(sec),
-    }
+    return (
+        schema,
+        cfg,
+        sec,
+        {
+            "SKILL_CONFIG_SCHEMA": str(schema),
+            "SKILL_CONFIG_CONFIG_FILE": str(cfg),
+            "SKILL_CONFIG_SECRETS_FILE": str(sec),
+        },
+    )
 
 
 def test_env_schema_routes_config_and_secret_to_the_named_files(tmp_path):
     _schema, cfg, sec, env = _env_schema(tmp_path)
 
-    assert run(["set", "mail.work.imap_host", "imap.corp.com"], env, tmp_path).returncode == 0
+    assert (
+        run(["set", "mail.work.imap_host", "imap.corp.com"], env, tmp_path).returncode
+        == 0
+    )
     assert run(["set", "mail.work.password", "hunter2"], env, tmp_path).returncode == 0
 
     # Each value lands in its schema-designated blob, and only there.
@@ -107,12 +115,20 @@ def test_skill_md_mode_unchanged(tmp_path):
         "secrets:\n  password: CalDAV password\n"
         "---\nbody\n"
     )
-    assert run(["set", "calendar.home.url", "https://dav.example"], {}, tmp_path).returncode == 0
+    assert (
+        run(
+            ["set", "calendar.home.url", "https://dav.example"], {}, tmp_path
+        ).returncode
+        == 0
+    )
     assert run(["set", "calendar.home.password", "pw"], {}, tmp_path).returncode == 0
     store = tmp_path / "state" / "skill-config"
     assert "https://dav.example" in (store / "config.toml").read_text()
     assert "pw" in (store / "secrets.toml").read_text()
-    assert run(["get", "calendar.home.url"], {}, tmp_path).stdout.strip() == "https://dav.example"
+    assert (
+        run(["get", "calendar.home.url"], {}, tmp_path).stdout.strip()
+        == "https://dav.example"
+    )
 
 
 def test_env_schema_list_json_reports_values_and_set_status(tmp_path):

@@ -65,11 +65,19 @@ def list_reply() -> dict:
                 "multiProfile": info["multiProfile"],
                 "enabled": info["enabled"],
                 "config": [
-                    {"name": f, "description": s["description"], "required": s["required"]}
+                    {
+                        "name": f,
+                        "description": s["description"],
+                        "required": s["required"],
+                    }
                     for f, s in info["config"].items()
                 ],
                 "secrets": [
-                    {"name": f, "description": s["description"], "required": s["required"]}
+                    {
+                        "name": f,
+                        "description": s["description"],
+                        "required": s["required"],
+                    }
                     for f, s in info["secrets"].items()
                 ],
                 "profiles": profiles,

@@ -57,17 +57,19 @@ class Client:
         self.sock.close()
 
 
-def _serve(sock_path):
+sock_path = f"/tmp/spaces-mcp-test-{os.getpid()}.sock"
+
+
+def _serve():
     os.environ["SPACES_INTEGRATION_SOCKET"] = sock_path
     os.environ.pop("LISTEN_FDS", None)
     mcp.run("test-integration", "9.9.9", TOOLS, call_tool)
 
 
-def setup_module(module):
-    module.sock_path = f"/tmp/spaces-mcp-test-{os.getpid()}.sock"
-    threading.Thread(target=_serve, args=(module.sock_path,), daemon=True).start()
+def setup_module():
+    threading.Thread(target=_serve, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(module.sock_path):
+    while not os.path.exists(sock_path):
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
@@ -201,7 +203,9 @@ def test_store_profile_absent_blobs(tmp_path, monkeypatch):
 def test_store_profiles_and_resolve(tmp_path, monkeypatch):
     creds = tmp_path / "creds"
     creds.mkdir()
-    (creds / "config").write_text('[mail.work]\nimap_host = "a"\n[mail.home]\nimap_host = "b"\n')
+    (creds / "config").write_text(
+        '[mail.work]\nimap_host = "a"\n[mail.home]\nimap_host = "b"\n'
+    )
     (creds / "secrets").write_text('[mail.work]\npassword = "p"\n')
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
 

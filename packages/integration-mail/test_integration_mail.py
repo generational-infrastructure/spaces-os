@@ -6,15 +6,15 @@ import stat
 import sys
 import threading
 import time
-import tomllib
 
 import integration_mail
 import pytest
+import tomllib
 
 # Stub himalaya binary: records argv/stdin, copies its -c config aside, and
 # prints canned output per subcommand. Shebang is pinned to this interpreter so
 # it resolves regardless of PATH ordering.
-_STUB_HIMALAYA = r'''#!__PY__
+_STUB_HIMALAYA = r"""#!__PY__
 import os, sys, shutil
 d = os.environ["MAIL_STUB_DIR"]
 argv = sys.argv[1:]
@@ -35,11 +35,11 @@ elif "read" in argv:
     sys.stdout.write("From: a@b.test\nSubject: hi\n\nHello body")
 elif "send" in argv:
     sys.stdout.write("Message sent!")
-'''
+"""
 
 # A resolvable auth command: prints the sealed-store password for argv[1] and
 # nothing else. himalaya would call this via backend.auth.cmd (stubbed here).
-_STUB_AUTHCMD = r'''#!__PY__
+_STUB_AUTHCMD = r"""#!__PY__
 import os, sys, tomllib
 with open(os.path.join(os.environ["CREDENTIALS_DIRECTORY"], "secrets"), "rb") as f:
     doc = tomllib.load(f)
@@ -47,7 +47,7 @@ for _skill, profs in doc.items():
     if isinstance(profs, dict) and sys.argv[1] in profs:
         print(profs[sys.argv[1]]["password"])
         break
-'''
+"""
 
 CONFIG_BLOB = """\
 [mail.personal]

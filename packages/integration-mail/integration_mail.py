@@ -225,7 +225,11 @@ def _run_himalaya(cfg, sub_args, stdin=None):
     out = proc.stdout.decode("utf-8", "replace")
     err = proc.stderr.decode("utf-8", "replace")
     if proc.returncode != 0:
-        msg = err.strip() or out.strip() or f"{HIMALAYA} exited with status {proc.returncode}"
+        msg = (
+            err.strip()
+            or out.strip()
+            or f"{HIMALAYA} exited with status {proc.returncode}"
+        )
         return msg, True
     return out, False
 

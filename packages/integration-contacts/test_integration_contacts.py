@@ -25,7 +25,9 @@ class StubDAV(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         return self.rfile.read(n) if n else b""
 
-    def _send(self, code, data=b"", ctype="application/xml; charset=utf-8", headers=None):
+    def _send(
+        self, code, data=b"", ctype="application/xml; charset=utf-8", headers=None
+    ):
         self.send_response(code)
         for k, v in (headers or {}).items():
             self.send_header(k, v)
@@ -45,10 +47,10 @@ class StubDAV(BaseHTTPRequestHandler):
             f"<d:response><d:href>{self.path}</d:href><d:propstat><d:prop>"
             "<d:resourcetype><d:collection/></d:resourcetype></d:prop>"
             "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
-            f'<d:response><d:href>{base}/alice.vcf</d:href><d:propstat><d:prop>'
+            f"<d:response><d:href>{base}/alice.vcf</d:href><d:propstat><d:prop>"
             "<d:getcontenttype>text/vcard</d:getcontenttype><d:getetag>&quot;e1&quot;</d:getetag>"
             "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
-            f'<d:response><d:href>{base}/bob.vcf</d:href><d:propstat><d:prop>'
+            f"<d:response><d:href>{base}/bob.vcf</d:href><d:propstat><d:prop>"
             "<d:getcontenttype>text/vcard</d:getcontenttype><d:getetag>&quot;e2&quot;</d:getetag>"
             "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
             "</d:multistatus>"
@@ -60,7 +62,7 @@ class StubDAV(BaseHTTPRequestHandler):
         ms = (
             '<?xml version="1.0" encoding="utf-8"?>'
             '<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">'
-            f'<d:response><d:href>{self.path.rstrip("/")}/alice.vcf</d:href>'
+            f"<d:response><d:href>{self.path.rstrip('/')}/alice.vcf</d:href>"
             "<d:propstat><d:prop><d:getetag>&quot;e1&quot;</d:getetag>"
             "<c:address-data>BEGIN:VCARD&#10;VERSION:3.0&#10;FN:Alice&#10;END:VCARD</c:address-data>"
             "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
@@ -184,7 +186,11 @@ def _last(method):
 def test_initialize_handshake(client):
     resp = client.rpc(
         "initialize",
-        {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t"}},
+        {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "t"},
+        },
         id=1,
     )
     assert resp["id"] == 1
@@ -297,7 +303,9 @@ def test_edit_sends_if_match(client):
     StubDAV.requests.clear()
     vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:john-doe\r\nFN:Edited\r\nEND:VCARD\r\n"
     resp = call_tool(
-        client, "edit", {"profile": "work", "path": "john-doe.vcf", "vcard": vcard, "etag": '"e1"'}
+        client,
+        "edit",
+        {"profile": "work", "path": "john-doe.vcf", "vcard": vcard, "etag": '"e1"'},
     )
     assert _result(resp)["isError"] is False
     _m, path, headers, body = _last("PUT")
@@ -310,7 +318,9 @@ def test_edit_sends_if_match(client):
 def test_edit_without_etag_has_no_if_match(client):
     StubDAV.requests.clear()
     vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:x\r\nFN:X\r\nEND:VCARD\r\n"
-    resp = call_tool(client, "edit", {"profile": "work", "path": "x.vcf", "vcard": vcard})
+    resp = call_tool(
+        client, "edit", {"profile": "work", "path": "x.vcf", "vcard": vcard}
+    )
     assert _result(resp)["isError"] is False
     _m, _p, headers, _b = _last("PUT")
     assert "If-Match" not in headers
