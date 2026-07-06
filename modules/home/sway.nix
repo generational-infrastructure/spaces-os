@@ -1,6 +1,6 @@
 { config, lib, ... }:
 let
-  kb = import ./keybinds.nix { inherit lib; };
+  kb = import ../keybinds.nix { inherit lib; };
 
   cfg = config.wayland.windowManager.sway;
   # "Mod" -> the window-manager modifier (config.modifier, the native sway

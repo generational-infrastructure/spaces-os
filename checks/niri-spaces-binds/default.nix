@@ -1,4 +1,5 @@
-# Cheap nix-eval contract for the spaces-specific niri keybinds.
+# Cheap nix-eval contract for the spaces keybind model and its niri
+# rendering.
 #
 # Every spaces shortcut must spawn a controlled spaces-* wrapper (see
 # modules/nixos/spaces-commands.nix), never a raw command, so a failed
@@ -8,8 +9,41 @@
 # The standalone-chat migration once silently repurposed Mod+Shift+N
 # (noctalia bar reload) to pi-chat; the regression guard pins that the
 # bar-reload chord is not the chat-reload wrapper.
+#
+# The binds now live in modules/keybinds.nix (shared with the sway
+# renderer), so two model-level pins are added:
+#   1. every model niri bind renders as its exact expected kdl line, so
+#      the niri.nix sed renderer can't drift from the model;
+#   2. every model bind's chord appears in docs/keybindings.md, so
+#      adding a bind without a docs row fails this check instead of
+#      silently shipping undocumented.
 { pkgs, inputs, ... }:
 let
+  lib = inputs.nixpkgs.lib;
+  kb = import ../../modules/keybinds.nix { inherit lib; };
+
+  # Chord spellings: niri collapses SMod (spaces command modifier) to
+  # its own Mod (mirrors niriChord in modules/nixos/niri.nix); the docs
+  # additionally write `/` for the Slash keysym.
+  niriChord =
+    chord:
+    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (
+      lib.splitString "+" chord
+    );
+  docChord = chord: lib.replaceStrings [ "Slash" ] [ "/" ] (niriChord chord);
+
+  # Exact kdl lines niri.nix must have injected, one per model niri bind.
+  expectedKdlLines = pkgs.writeText "expected-niri-bind-lines" (
+    lib.concatMapStringsSep "\n" (
+      bind: "    ${niriChord bind.chord} hotkey-overlay-title=\"${bind.title}\" { spawn \"${bind.spawn}\"; }"
+    ) kb.niriSpawnBinds
+  );
+
+  # Every model bind (niri and sway alike) must be documented.
+  expectedDocChords = pkgs.writeText "expected-doc-chords" (
+    lib.concatStringsSep "\n" (lib.unique (map docChord (lib.attrNames kb.binds)))
+  );
+
   system = inputs.nixpkgs.lib.nixosSystem {
     specialArgs = {
       inherit inputs;
@@ -40,6 +74,8 @@ pkgs.runCommand "niri-spaces-binds-test"
     barReload = cmds.bar-reload.name;
     chatReload = cmds.chat-reload.name;
     screenLock = cmds.screen-lock.name;
+    inherit expectedKdlLines expectedDocChords;
+    docs = ../../docs/keybindings.md;
   }
   ''
     set -euo pipefail
@@ -74,6 +110,20 @@ pkgs.runCommand "niri-spaces-binds-test"
     if grep -qE "Mod\+Shift\+N .*spawn \"$chatReload\"" "$niriConfig"; then
       fail "Mod+Shift+N is bound to the pi-chat reload — noctalia bar reload was clobbered"
     fi
+
+    # Renderer pin: each model niri bind is present as its exact kdl line.
+    while IFS= read -r line; do
+      grep -qxF "$line" "$niriConfig" \
+        || fail "model bind not rendered into config.kdl: $line"
+    done < "$expectedKdlLines"
+
+    # Docs pin: every model bind's chord is documented in
+    # docs/keybindings.md (as \`chord\`). Adding a model bind without a
+    # docs row fails here.
+    while IFS= read -r chord; do
+      grep -qF "\`$chord\`" "$docs" \
+        || fail "model bind $chord missing from docs/keybindings.md"
+    done < "$expectedDocChords"
 
     touch "$out"
   ''

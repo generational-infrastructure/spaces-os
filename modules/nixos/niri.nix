@@ -31,6 +31,42 @@
 let
   cfg = config.services.spaces.niri;
   cmds = config.services.spaces.commands;
+
+  # Declarative keybind model (single source of truth, shared with
+  # modules/home/sway.nix and pinned against docs/keybindings.md by
+  # checks/niri-spaces-binds). This module renders the model's
+  # `niriSpawnBinds` view into upstream default-config.kdl below.
+  kb = import ../keybinds.nix { inherit lib; };
+
+  # niri has no separate spaces command modifier: its own mod-key
+  # (cfg.modKey) covers both roles, so the model's "SMod" token
+  # collapses to "Mod" here.
+  niriChord =
+    chord:
+    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (
+      lib.splitString "+" chord
+    );
+
+  # Every spaces-* spawn must be a notifying wrapper actually built by
+  # spaces-commands.nix — fail eval loudly if the model names one that
+  # doesn't exist (e.g. after a wrapper rename).
+  wrapperNames = lib.mapAttrsToList (_attr: c: c.name) cmds;
+  checkedSpawn =
+    spawn:
+    if lib.hasPrefix "spaces-" spawn && !(lib.elem spawn wrapperNames) then
+      throw "niri.nix: keybind spawn '${spawn}' is not a spaces-commands wrapper (known: ${lib.concatStringsSep ", " wrapperNames})"
+    else
+      spawn;
+
+  # One sed line per model bind, injected right after `binds {`. Each
+  # `a\` prepends relative to the previous one, so ascending model
+  # `order` renders in DESCENDING file order — keep the orders stable:
+  # the rendered kdl is pinned by checks/niri-spaces-binds.
+  bindSedLine =
+    bind:
+    ''sed -i '/^binds {$/a\    ${niriChord bind.chord} hotkey-overlay-title="${bind.title}" { spawn "${checkedSpawn bind.spawn}"; }' $out'';
+  spacesBindLines = lib.concatMapStringsSep "\n    " bindSedLine kb.niriSpawnBinds;
+
   niriConfig = pkgs.runCommand "niri-config.kdl" { } ''
         cp ${pkgs.niri.src}/resources/default-config.kdl $out
         chmod +w $out
@@ -55,25 +91,17 @@ let
         }\
 
     ' $out
-        # Mod+A toggles the standalone pi-chat panel.
-        sed -i '/^binds {$/a\    Mod+A hotkey-overlay-title="Toggle AI Chat" { spawn "${cmds.chat-toggle.name}"; }' $out
-        # Mod+/ summons the quick-launch agent bar (fire-and-forget).
-        # XKB keysym for `/` is Slash.
-        sed -i '/^binds {$/a\    Mod+Slash hotkey-overlay-title="Quick-launch Agent" { spawn "${cmds.chat-quick-launch.name}"; }' $out
-        # Mod+S toggles voice-to-text recording.
-        sed -i '/^binds {$/a\    Mod+S hotkey-overlay-title="Voice to Text" { spawn "${cmds.voice-record-toggle.name}"; }' $out
-        # Mod+Shift+N reloads the noctalia bar; Mod+Shift+A reloads the
-        # pi-chat agent (see spaces-commands.nix for what each wrapper
-        # does) — no session logout needed.
-        sed -i '/^binds {$/a\    Mod+Shift+N hotkey-overlay-title="Reload Noctalia Bar" { spawn "${cmds.bar-reload.name}"; }' $out
-        sed -i '/^binds {$/a\    Mod+Shift+A hotkey-overlay-title="Reload pi-chat" { spawn "${cmds.chat-reload.name}"; }' $out
-        # Mod+L and Ctrl+Alt+L lock the screen with swaylock. Mod+L
-        # overrides upstream's focus-column-right (Mod+Right / Mod+L
-        # both did that — Mod+Right still works).
+        # Spaces shortcut binds, one sed line per model entry — see
+        # modules/keybinds.nix for the model (chords, wrappers, overlay
+        # titles) and the niri-specific notes (XKB keysym for `/` is
+        # Slash; Mod+Shift+N vs Mod+Shift+A reload the bar vs pi-chat).
+        #
+        # Mod+L (screen lock) overrides upstream's focus-column-right
+        # (Mod+Right / Mod+L both did that — Mod+Right still works), so
+        # drop the upstream bind first.
         grep -q '^    Mod+L     { focus-column-right; }$' $out  # fail loudly if upstream renamed it
         sed -i '/^    Mod+L     { focus-column-right; }$/d' $out
-        sed -i '/^binds {$/a\    Mod+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "${cmds.screen-lock.name}"; }' $out
-        sed -i '/^binds {$/a\    Ctrl+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "${cmds.screen-lock.name}"; }' $out
+        ${spacesBindLines}
   '';
 in
 {
