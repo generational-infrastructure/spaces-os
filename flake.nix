@@ -55,15 +55,10 @@
       # variants can come later if/when there's demand.
       debugSystems = [ "x86_64-linux" ];
 
-      # ISO outputs are per-architecture: each system points at the
-      # matching installer host. Keep this list in sync with the
-      # `installer-<arch>` host dirs under ./hosts.
-      isoSystems = [
-        "x86_64-linux"
-        "aarch64-linux"
-      ];
-
-      installerHostFor = system: if system == "aarch64-linux" then "installer-aarch64" else "installer";
+      # Per-architecture installer host names, published by
+      # ./lib/default.nix as the single source of truth shared with
+      # the host dirs and modules/nixos/installer-iso.nix.
+      inherit (base.lib) installerHosts;
 
       mkDebug =
         system:
@@ -108,14 +103,14 @@
     base
     // {
       debug = lib.genAttrs debugSystems mkDebug;
-      # Bootable ISO image, exposed outside `packages` so it doesn't
-      # get pulled into `nix flake check`. Per-system: each entry
+      # Bootable ISO image per architecture, exposed outside `packages`
+      # so it doesn't get pulled into `nix flake check`. Each entry
       # picks the installer host whose hostPlatform matches.
       #   nix build .#iso.x86_64-linux.installer
       #   nix build .#iso.aarch64-linux.installer
-      iso = lib.genAttrs isoSystems (system: {
-        installer = base.nixosConfigurations.${installerHostFor system}.config.system.build.isoImage;
-      });
+      iso = lib.mapAttrs (_system: hosts: {
+        installer = base.nixosConfigurations.${hosts.installer}.config.system.build.isoImage;
+      }) installerHosts;
 
       # Clan service modules. Consumers (e.g. pinpox/nixos) import the
       # spaces-os flake as a clan input and reference services by name:

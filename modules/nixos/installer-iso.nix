@@ -24,17 +24,12 @@
 }:
 let
   inherit (inputs.nixpkgs) lib;
-  inherit (flake.lib) spacesSrc;
+  inherit (flake.lib) spacesSrc installerHosts;
 
   # Pre-stage the installed-system closure that matches the live
-  # medium's arch. Keep this map in sync with the `installer-<arch>`
-  # host dirs.
-  installerTargetFor =
-    {
-      "x86_64-linux" = "installer-target";
-      "aarch64-linux" = "installer-target-aarch64";
-    }
-    .${pkgs.stdenv.hostPlatform.system};
+  # medium's arch, looked up in the shared per-arch host map from
+  # ./../../lib/default.nix.
+  installerTargetFor = installerHosts.${pkgs.stdenv.hostPlatform.system}.target;
 
   # Direct input names declared by spaces's flake.lock. Source of truth
   # for which inputs need an `--override-input spaces/<name>` at install

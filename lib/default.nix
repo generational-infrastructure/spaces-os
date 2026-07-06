@@ -3,7 +3,62 @@
 # Blueprint auto-imports `lib/default.nix` with specialArgs
 # `{ inputs, flake, ... }` and publishes the result as `flake.lib`.
 { inputs, flake, ... }:
+let
+  # Single source of truth for the per-architecture installer hosts.
+  # Everything arch-related derives from this map:
+  #   - the `hosts/<name>` blueprint dirs (one-line mkInstallerHost /
+  #     mkInstallerTarget calls),
+  #   - flake.nix's `iso.<system>` outputs,
+  #   - installer-iso.nix's pre-staged installed-system closure.
+  installerHosts = {
+    "x86_64-linux" = {
+      installer = "installer";
+      target = "installer-target";
+    };
+    "aarch64-linux" = {
+      installer = "installer-aarch64";
+      target = "installer-target-aarch64";
+    };
+  };
+in
 {
+  inherit installerHosts;
+
+  # Blueprint host body for the bootable graphical installer ISO of
+  # the given arch. Host dirs stay one-line calls because blueprint
+  # discovers hosts by directory, not by attrset.
+  mkInstallerHost = arch: {
+    class = "nixos";
+    value = inputs.nixpkgs.lib.nixosSystem {
+      specialArgs = {
+        inherit inputs flake;
+        hostName = installerHosts.${arch}.installer;
+      };
+      modules = [
+        { nixpkgs.hostPlatform = arch; }
+        ../modules/nixos/installer-iso.nix
+      ];
+    };
+  };
+
+  # Blueprint host body for the never-booted "installed system" of the
+  # given arch — the representative closure installer-iso.nix points
+  # `isoImage.storeContents` at so `nixos-install` resolves offline.
+  mkInstallerTarget = arch: {
+    class = "nixos";
+    value = inputs.nixpkgs.lib.nixosSystem {
+      specialArgs = {
+        inherit inputs flake;
+        hostName = installerHosts.${arch}.target;
+      };
+      modules = [
+        { nixpkgs.hostPlatform = arch; }
+        inputs.self.nixosModules.spaces
+        ../hosts/installer-target/configuration.nix
+      ];
+    };
+  };
+
   # Filtered store-path snapshot of the spaces flake source.
   #
   # Used as `inputs.spaces.url = "path:<spacesSrc>"` in the wrapper flake
