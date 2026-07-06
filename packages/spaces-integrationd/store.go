@@ -18,10 +18,25 @@ import (
 //	secrets       host+tpm2-sealed secrets.toml blob (`secrets` LoadCredentialEncrypted)
 //
 // Writes go through skill-config (one store implementation, shared with the
-// agent-facing skills). Secrets are unsealed to a tmpfs working copy for the
-// edit and re-sealed, so no plaintext secret ever persists on disk. Reads for
-// `list` also go through skill-config (--json), decrypting the blob into the
-// same tmpfs working area.
+// agent-facing skills) over its versioned `api` seam: one JSON request on
+// stdin, one {"v", "ok", "result"|"error"} envelope on stdout, so the broker
+// never parses human-oriented CLI output. Secrets are unsealed to a tmpfs
+// working copy for the edit and re-sealed, so no plaintext secret ever
+// persists on disk. Reads for `list` go through the same seam (op
+// "profiles"), decrypting the blob into the same tmpfs working area.
+
+// skillAPIVersion pins the skill-config api envelope this broker speaks.
+const skillAPIVersion = 1
+
+// skillRequest is one request over the skill-config api seam.
+type skillRequest struct {
+	V       int    `json:"v"`
+	Op      string `json:"op"`
+	Skill   string `json:"skill"`
+	Profile string `json:"profile,omitempty"`
+	Field   string `json:"field,omitempty"`
+	Value   *string `json:"value,omitempty"`
+}
 
 func (s *Server) storeDir(integration string) string {
 	return filepath.Join(s.stateDir, integration)
@@ -78,9 +93,19 @@ func (s *Server) skillEnv(integration, schemaPath, secretsWork, stateStub string
 	)
 }
 
-func (s *Server) runSkillConfig(env []string, args ...string) (string, error) {
-	cmd := exec.Command(s.skillConfig[0], append(append([]string{}, s.skillConfig[1:]...), args...)...)
+// callSkillConfig sends one request over the api seam and decodes the
+// envelope's `result` into result (which may be nil for ack-only ops).
+// Failures inside the store come back in the envelope's `error` field;
+// a non-zero exit or an unparseable envelope means the seam itself broke.
+func (s *Server) callSkillConfig(env []string, req skillRequest, result any) error {
+	req.V = skillAPIVersion
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(s.skillConfig[0], append(append([]string{}, s.skillConfig[1:]...), "api")...)
 	cmd.Env = env
+	cmd.Stdin = bytes.NewReader(payload)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -89,9 +114,29 @@ func (s *Server) runSkillConfig(env []string, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("%s", msg)
+		return fmt.Errorf("skill-config api: %s", msg)
 	}
-	return out.String(), nil
+	var envl struct {
+		V     int             `json:"v"`
+		OK    bool            `json:"ok"`
+		Error string          `json:"error"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envl); err != nil {
+		return fmt.Errorf("skill-config api: bad envelope: %w", err)
+	}
+	if envl.V != skillAPIVersion {
+		return fmt.Errorf("skill-config api: version %d (want %d)", envl.V, skillAPIVersion)
+	}
+	if !envl.OK {
+		return fmt.Errorf("%s", envl.Error)
+	}
+	if result != nil {
+		if err := json.Unmarshal(envl.Result, result); err != nil {
+			return fmt.Errorf("skill-config api: bad result: %w", err)
+		}
+	}
+	return nil
 }
 
 // seal encrypts plaintextFile -> dest (host+tpm2, --name=secrets). The blob is
@@ -128,7 +173,7 @@ func runCapture(bin string, args []string) error {
 // storeProfiles returns the provisioned profiles for an integration, with
 // config values, secret set-status, and per-profile completeness against the
 // schema's required fields. It decrypts the secrets blob into a tmpfs working
-// copy and reads everything back via `skill-config list --json`.
+// copy and reads everything back via the api seam's `profiles` op.
 func (s *Server) storeProfiles(d Definition) ([]ProfileInfo, error) {
 	work, err := s.workDir("list")
 	if err != nil {
@@ -145,22 +190,18 @@ func (s *Server) storeProfiles(d Definition) ([]ProfileInfo, error) {
 		return nil, fmt.Errorf("unseal: %w", err)
 	}
 
-	out, err := s.runSkillConfig(
-		s.skillEnv(d.Name, schemaPath, secretsWork, work),
-		"list", d.Name, "--json",
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	var parsed struct {
 		Profiles map[string]struct {
 			Config  map[string]string `json:"config"`
 			Secrets map[string]bool   `json:"secrets"`
 		} `json:"profiles"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		return nil, fmt.Errorf("parse skill-config list: %w", err)
+	if err := s.callSkillConfig(
+		s.skillEnv(d.Name, schemaPath, secretsWork, work),
+		skillRequest{Op: "profiles", Skill: d.Name},
+		&parsed,
+	); err != nil {
+		return nil, err
 	}
 
 	names := make([]string, 0, len(parsed.Profiles))

@@ -310,8 +310,8 @@ func (s *Server) setField(integration, profile, field, value string) Ack {
 			return errAck("unseal: " + err.Error())
 		}
 	}
-	key := fmt.Sprintf("%s.%s.%s", integration, profile, field)
-	if _, err := s.runSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), "set", key, value); err != nil {
+	req := skillRequest{Op: "set", Skill: integration, Profile: profile, Field: field, Value: &value}
+	if err := s.callSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), req, nil); err != nil {
 		return errAck("set: " + err.Error())
 	}
 	if isSecret {
@@ -353,7 +353,8 @@ func (s *Server) removeProfile(integration, profile string) Ack {
 	if err := s.unseal(s.sealedSecrets(integration), secretsWork); err != nil {
 		return errAck("unseal: " + err.Error())
 	}
-	if _, err := s.runSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), "remove", integration, profile); err != nil {
+	req := skillRequest{Op: "remove-profile", Skill: integration, Profile: profile}
+	if err := s.callSkillConfig(s.skillEnv(integration, schemaPath, secretsWork, work), req, nil); err != nil {
 		return errAck("remove: " + err.Error())
 	}
 	if err := s.seal(secretsWork, s.sealedSecrets(integration)); err != nil {

@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
-"""skill-config: per-skill config and secrets store for pi-chat.
+"""skill-config: CLI front end over the skill_store engine.
 
-Layout (paths identical on host and inside the container, because the state
-directory is bind-mounted at the same path):
+Two audiences, one binary:
 
-    /var/lib/spaces-pi-chat-<instance>/skills-defs/<skill>/SKILL.md   # schema source
-    /var/lib/spaces-pi-chat-<instance>/skill-config/config.toml       # mode 0644
-    /var/lib/spaces-pi-chat-<instance>/skill-config/secrets.toml      # mode 0600
+  * Agent-facing verbs (get/set/list/schema/remove/request-input): human-
+    oriented output, `error: …` on stderr, non-zero exit on failure. The
+    store layout and schema syntax are documented in skill_store.
+  * `api`: the versioned JSON request/response seam machine callers
+    (spaces-integrationd) drive; see cmd_api.
 
-Schema lives in YAML frontmatter of SKILL.md:
-
-    ---
-    name: Calendar
-    config:
-      url: Full CalDAV collection URL ...
-      user: CalDAV username
-    secrets:
-      password: CalDAV password ...
-    ---
-
-Each field belongs to exactly one of `config:` or `secrets:`; that decides
-which TOML file holds the value. Field name = TOML key.
+This module only parses argv, talks to the popup daemon, and maps
+skill_store exceptions to exit codes + messages. All store logic —
+TOML round-trips, schema routing (SKILL.md frontmatter vs
+$SKILL_CONFIG_SCHEMA), file modes — lives in skill_store.
 """
 
 from __future__ import annotations
@@ -31,195 +23,35 @@ import os
 import socket
 import sys
 import time
-from pathlib import Path
 
-import tomlkit
 import yaml
 
-DEFAULT_INSTANCE = "local"
-CONFIG_MODE = 0o644
-SECRETS_MODE = 0o600
-DIR_MODE = 0o750
+import skill_store
+from skill_store import (
+    Paths,
+    SkillStore,
+    SkillStoreError,
+    load_toml,
+    save_toml,
+    section_get,
+    section_set,
+    skill_md_schema,
+)
+
 DEFAULT_DAEMON_SOCKET = "/run/spaces-skill-config-default.sock"
 DAEMON_CONNECT_TIMEOUT = 3.0  # seconds, retried while daemon is starting
 
-
-class Paths:
-    def __init__(self, instance: str):
-        self.instance = instance
-        env_state = os.environ.get("SPACES_PI_CHAT_STATE_DIR")
-        self.state_dir = (
-            Path(env_state)
-            if env_state
-            else Path(f"/var/lib/spaces-pi-chat-{instance}")
-        )
-        self.skills_dir = self.state_dir / "skills-defs"
-        self.cfg_dir = self.state_dir / "skill-config"
-        env_config = os.environ.get("SKILL_CONFIG_CONFIG_FILE")
-        env_secrets = os.environ.get("SKILL_CONFIG_SECRETS_FILE")
-        self.config_toml = (
-            Path(env_config) if env_config else self.cfg_dir / "config.toml"
-        )
-        self.secrets_toml = (
-            Path(env_secrets) if env_secrets else self.cfg_dir / "secrets.toml"
-        )
+API_VERSION = 1
 
 
-def resolve_instance(flag: str | None) -> str:
-    if flag:
-        return flag
-    env = os.environ.get("SPACES_PI_CHAT_INSTANCE")
-    if env:
-        return env
-    # If state dir is overridden, instance name doesn't matter for path resolution.
-    if os.environ.get("SPACES_PI_CHAT_STATE_DIR"):
-        return DEFAULT_INSTANCE
-    candidates = sorted(
-        p.name[len("spaces-pi-chat-") :]
-        for p in Path("/var/lib").glob("spaces-pi-chat-*")
-        if p.is_dir()
-    )
-    if len(candidates) == 1:
-        return candidates[0]
-    if not candidates:
-        return DEFAULT_INSTANCE
-    sys.exit(
-        f"error: multiple spaces-pi-chat instances found ({', '.join(candidates)}); "
-        "pass --instance or set SPACES_PI_CHAT_INSTANCE"
-    )
-
-
-def load_frontmatter(skill_dir: Path) -> dict:
-    md = skill_dir / "SKILL.md"
-    if not md.exists():
-        sys.exit(f"error: {md} not found")
-    text = md.read_text()
-    if not text.startswith("---\n"):
-        return {}
-    end = text.find("\n---", 4)
-    if end == -1:
-        return {}
-    return yaml.safe_load(text[4 : end + 1]) or {}
-
-
-def schema(skill_dir: Path) -> tuple[dict, dict]:
-    fm = load_frontmatter(skill_dir)
-    cfg = fm.get("config") or {}
-    sec = fm.get("secrets") or {}
-    if not isinstance(cfg, dict) or not isinstance(sec, dict):
-        sys.exit(f"error: malformed config:/secrets: in {skill_dir}/SKILL.md")
-    return cfg, sec
-
-
-def load_schema(paths: "Paths", skill: str) -> tuple[dict, dict]:
-    """(config_fields, secret_fields) for a skill.
-
-    Prefers $SKILL_CONFIG_SCHEMA — a JSON {"config": {...}, "secrets": {...}}
-    map used by the relocated integration store (no SKILL.md on disk) — over
-    the skill's SKILL.md frontmatter.
-    """
-    env_schema = os.environ.get("SKILL_CONFIG_SCHEMA")
-    if env_schema:
-        try:
-            doc = json.loads(Path(env_schema).read_text())
-        except (OSError, ValueError) as e:
-            sys.exit(f"error: cannot read SKILL_CONFIG_SCHEMA {env_schema}: {e}")
-        cfg = doc.get("config") or {}
-        sec = doc.get("secrets") or {}
-        if not isinstance(cfg, dict) or not isinstance(sec, dict):
-            sys.exit(f"error: malformed config:/secrets: in {env_schema}")
-        return cfg, sec
-    skill_dir = paths.skills_dir / skill
-    if not skill_dir.exists():
-        sys.exit(f"error: skill '{skill}' not found at {skill_dir}")
-    return schema(skill_dir)
-
-
-def load_toml(path: Path) -> tomlkit.TOMLDocument:
-    if not path.exists():
-        return tomlkit.document()
-    return tomlkit.parse(path.read_text())
-
-
-def save_toml(path: Path, doc: tomlkit.TOMLDocument, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(tomlkit.dumps(doc))
-    tmp.chmod(mode)
-    tmp.rename(path)
-
-
-def section_get(doc: tomlkit.TOMLDocument, skill: str, profile: str) -> dict:
-    return dict(doc.get(skill, {}).get(profile, {}) or {})
-
-
-def section_set(
-    doc: tomlkit.TOMLDocument, skill: str, profile: str, values: dict
-) -> None:
-    if skill not in doc:
-        doc[skill] = tomlkit.table(is_super_table=True)
-    doc[skill][profile] = values
-
-
-def section_delete(doc: tomlkit.TOMLDocument, skill: str, profile: str) -> bool:
-    skill_t = doc.get(skill)
-    if not skill_t or profile not in skill_t:
-        return False
-    del skill_t[profile]
-    if len(skill_t) == 0:
-        del doc[skill]
-    return True
-
-
-def list_skills(skills_dir: Path) -> list[str]:
-    if not skills_dir.exists():
-        return []
-    return sorted(p.name for p in skills_dir.iterdir() if (p / "SKILL.md").exists())
-
-
-def resolve_skill(skills_dir: Path, name: str) -> str:
-    """Map a user/agent-supplied skill name to its on-disk directory name.
-
-    Skills live at <skills_dir>/<dirname>/SKILL.md. Directory names are
-    lowercase but the SKILL.md `name:` field is a Title Case display
-    string, and small LLMs often pass that back as the lookup key.
-    Match case-insensitively so `schema Calendar` resolves to `calendar`.
-    """
-    candidates = list_skills(skills_dir)
-    for c in candidates:
-        if c == name:
-            return c
-    lowered = name.lower()
-    for c in candidates:
-        if c.lower() == lowered:
-            return c
-    return name  # fall through; caller will raise its usual not-found error
-
-
-def list_profiles(doc: tomlkit.TOMLDocument, skill: str) -> list[str]:
-    skill_t = doc.get(skill)
-    if not skill_t:
-        return []
-    return sorted(skill_t.keys())
-
-
-def cmd_get(args, paths: Paths) -> None:
+def cmd_get(args, store: SkillStore) -> None:
     parts = args.key.split(".")
     if len(parts) != 3:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
-    skill = resolve_skill(paths.skills_dir, skill)
+    skill = store.resolve_skill(skill)
 
-    cfg_fields, sec_fields = load_schema(paths, skill)
-
-    if field in cfg_fields:
-        doc = load_toml(paths.config_toml)
-    elif field in sec_fields:
-        doc = load_toml(paths.secrets_toml)
-    else:
-        sys.exit(f"error: unknown field '{field}' for skill '{skill}'")
-
-    val = doc.get(skill, {}).get(profile, {}).get(field)
+    val = store.get(skill, profile, field)
     if val is None:
         sys.exit(
             f"error: {args.key} is not set. "
@@ -230,49 +62,27 @@ def cmd_get(args, paths: Paths) -> None:
     print(val)
 
 
-def cmd_list(args, paths: Paths) -> None:
+def cmd_list(args, store: SkillStore) -> None:
+    paths = store.paths
     config_doc = load_toml(paths.config_toml)
     secrets_doc = load_toml(paths.secrets_toml)
 
     if getattr(args, "json", False):
         if not args.target:
             sys.exit("error: --json requires a <skill> target")
-        skill = resolve_skill(paths.skills_dir, args.target.split(".")[0])
-        cfg_fields, sec_fields = load_schema(paths, skill)
-        all_profiles = sorted(
-            set(list_profiles(config_doc, skill))
-            | set(list_profiles(secrets_doc, skill))
-        )
-        out = {"skill": skill, "profiles": {}}
-        for profile in all_profiles:
-            cfg_section = section_get(config_doc, skill, profile)
-            sec_section = section_get(secrets_doc, skill, profile)
-            out["profiles"][profile] = {
-                "config": {
-                    name: cfg_section[name]
-                    for name in cfg_fields
-                    if name in cfg_section
-                },
-                # set-status only — a secret VALUE never leaves the store here.
-                "secrets": {
-                    name: sec_section.get(name) is not None for name in sec_fields
-                },
-            }
-        print(json.dumps(out))
+        skill = store.resolve_skill(args.target.split(".")[0])
+        print(json.dumps(store.profiles_snapshot(skill)))
         return
 
     if args.target:
         parts = args.target.split(".")
-        skill = resolve_skill(paths.skills_dir, parts[0])
-        cfg_fields, sec_fields = load_schema(paths, skill)
+        skill = store.resolve_skill(parts[0])
+        cfg_fields, sec_fields = store.load_schema(skill)
 
         if len(parts) == 2:
             profiles = [parts[1]]
         else:
-            all_profiles = set(list_profiles(config_doc, skill)) | set(
-                list_profiles(secrets_doc, skill)
-            )
-            profiles = sorted(all_profiles)
+            profiles = store.profile_names(skill)
             if not profiles:
                 print(f"{skill}: no profiles configured")
                 return
@@ -291,19 +101,16 @@ def cmd_list(args, paths: Paths) -> None:
             print()
         return
 
-    skills = list_skills(paths.skills_dir)
+    skills = store.list_skills()
     if not skills:
         print(f"(no skills found in {paths.skills_dir})")
         return
     for skill in skills:
-        cfg_fields, sec_fields = schema(paths.skills_dir / skill)
+        cfg_fields, sec_fields = skill_md_schema(paths.skills_dir / skill)
         if not cfg_fields and not sec_fields:
             print(f"{skill}  (no schema)")
             continue
-        all_profiles = set(list_profiles(config_doc, skill)) | set(
-            list_profiles(secrets_doc, skill)
-        )
-        profiles = sorted(all_profiles)
+        profiles = store.profile_names(skill)
         if not profiles:
             print(f"{skill}  (not configured)")
         else:
@@ -312,32 +119,18 @@ def cmd_list(args, paths: Paths) -> None:
                 print(f"  - {p}")
 
 
-def cmd_set(args, paths: Paths) -> None:
+def cmd_set(args, store: SkillStore) -> None:
     parts = args.key.split(".")
     if len(parts) != 3:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
-    skill = resolve_skill(paths.skills_dir, skill)
-
-    cfg_fields, sec_fields = load_schema(paths, skill)
-
-    if field in cfg_fields:
-        path, mode = paths.config_toml, CONFIG_MODE
-    elif field in sec_fields:
-        path, mode = paths.secrets_toml, SECRETS_MODE
-    else:
-        sys.exit(f"error: unknown field '{field}' for skill '{skill}'")
-
-    doc = load_toml(path)
-    section = section_get(doc, skill, profile)
-    section[field] = args.value
-    section_set(doc, skill, profile, section)
-    save_toml(path, doc, mode)
+    skill = store.resolve_skill(skill)
+    store.set(skill, profile, field, args.value)
 
 
-def cmd_schema(args, paths: Paths) -> None:
-    skill = resolve_skill(paths.skills_dir, args.skill)
-    cfg_fields, sec_fields = load_schema(paths, skill)
+def cmd_schema(args, store: SkillStore) -> None:
+    skill = store.resolve_skill(args.skill)
+    cfg_fields, sec_fields = store.load_schema(skill)
     out = {}
     if cfg_fields:
         out["config"] = dict(cfg_fields)
@@ -367,23 +160,15 @@ def daemon_connect() -> socket.socket:
     sys.exit(3)
 
 
-def cmd_request_input(args, paths: Paths) -> None:
+def cmd_request_input(args, store: SkillStore) -> None:
     parts = args.key.split(".")
     if len(parts) != 3:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
-    skill = resolve_skill(paths.skills_dir, skill)
+    skill = store.resolve_skill(skill)
     args.key = f"{skill}.{profile}.{field}"
 
-    cfg_fields, sec_fields = load_schema(paths, skill)
-    if field in cfg_fields:
-        description = cfg_fields[field]
-        is_secret = False
-    elif field in sec_fields:
-        description = sec_fields[field]
-        is_secret = True
-    else:
-        sys.exit(f"error: unknown field '{field}' for skill '{skill}'")
+    route = store.route(skill, field)
 
     sock = daemon_connect()
     sock_file = sock.makefile("rwb")
@@ -393,8 +178,8 @@ def cmd_request_input(args, paths: Paths) -> None:
         "skill": skill,
         "profile": profile,
         "field": field,
-        "description": str(description),
-        "secret": is_secret,
+        "description": route.description,
+        "secret": route.secret,
         "timeout_secs": args.timeout,
     }
     sock_file.write((json.dumps(request) + "\n").encode())
@@ -420,15 +205,11 @@ def cmd_request_input(args, paths: Paths) -> None:
         if not isinstance(value, str):
             sys.exit("error: daemon returned non-string value")
         # Route to the right TOML based on schema.
-        if is_secret:
-            path, mode = paths.secrets_toml, SECRETS_MODE
-        else:
-            path, mode = paths.config_toml, CONFIG_MODE
-        doc = load_toml(path)
+        doc = load_toml(route.path)
         section = section_get(doc, skill, profile)
         section[field] = value
         section_set(doc, skill, profile, section)
-        save_toml(path, doc, mode)
+        save_toml(route.path, doc, route.mode)
         # Print a confirmation so the agent has a visible signal that
         # the user submitted (small LLMs treat empty stdout as "nothing
         # happened" even when the exit code is 0).
@@ -443,23 +224,71 @@ def cmd_request_input(args, paths: Paths) -> None:
     sys.exit(f"error: unexpected terminal op: {op}")
 
 
-def cmd_remove(args, paths: Paths) -> None:
-    skill = resolve_skill(paths.skills_dir, args.skill)
-    config_doc = load_toml(paths.config_toml)
-    secrets_doc = load_toml(paths.secrets_toml)
-
-    removed = False
-    if section_delete(config_doc, skill, args.profile):
-        save_toml(paths.config_toml, config_doc, CONFIG_MODE)
-        removed = True
-    if section_delete(secrets_doc, skill, args.profile):
-        save_toml(paths.secrets_toml, secrets_doc, SECRETS_MODE)
-        removed = True
-
-    if removed:
+def cmd_remove(args, store: SkillStore) -> None:
+    skill = store.resolve_skill(args.skill)
+    if store.remove_profile(skill, args.profile):
         print(f"✓ Removed profile '{args.profile}' for skill '{skill}'.")
     else:
         print(f"(nothing to remove for {skill}.{args.profile})")
+
+
+# ── the versioned machine seam ─────────────────────────────────────
+
+
+def api_dispatch(req: dict, store: SkillStore) -> dict:
+    """One api request -> its `result` payload. Raises SkillStoreError
+    (or ValueError for envelope-level problems) on failure."""
+    if req.get("v") != API_VERSION:
+        raise ValueError(f"unsupported api version {req.get('v')!r} (want {API_VERSION})")
+    op = req.get("op")
+    if op == "set":
+        store.set(req["skill"], req["profile"], req["field"], req["value"])
+        return {}
+    if op == "remove-profile":
+        return {"removed": store.remove_profile(req["skill"], req["profile"])}
+    if op == "profiles":
+        return store.profiles_snapshot(req["skill"])
+    raise ValueError(f"unknown op {op!r}")
+
+
+def cmd_api(args, store: SkillStore) -> None:
+    """The versioned JSON seam for machine callers (spaces-integrationd).
+
+    Reads ONE JSON request object from stdin and writes ONE response
+    envelope to stdout; the exit code is 0 whenever an envelope was
+    produced. Errors travel inside the envelope so callers never parse
+    human-oriented stderr:
+
+        request:  {"v": 1, "op": "...", ...}
+        response: {"v": 1, "ok": true,  "result": {...}}
+                | {"v": 1, "ok": false, "error": "message"}
+
+    Ops (store files/schema selected by the usual SKILL_CONFIG_SCHEMA /
+    SKILL_CONFIG_CONFIG_FILE / SKILL_CONFIG_SECRETS_FILE env overrides):
+
+        set            {skill, profile, field, value} -> {}
+        remove-profile {skill, profile}  -> {"removed": bool}
+        profiles       {skill}           -> {"skill", "profiles": {name:
+                          {"config": {field: value},
+                           "secrets": {field: is_set}}}}
+    """
+    try:
+        req = json.loads(sys.stdin.read())
+        if not isinstance(req, dict):
+            raise ValueError("request must be a JSON object")
+    except ValueError as e:
+        req, err = None, f"malformed request: {e}"
+    else:
+        err = None
+
+    if req is not None:
+        try:
+            result = api_dispatch(req, store)
+            print(json.dumps({"v": API_VERSION, "ok": True, "result": result}))
+            return
+        except (SkillStoreError, ValueError, KeyError) as e:
+            err = f"missing key {e}" if isinstance(e, KeyError) else str(e)
+    print(json.dumps({"v": API_VERSION, "ok": False, "error": err}))
 
 
 def main() -> None:
@@ -511,18 +340,32 @@ def main() -> None:
     p_remove.add_argument("skill")
     p_remove.add_argument("profile")
 
-    args = ap.parse_args()
-    instance = resolve_instance(args.instance)
-    paths = Paths(instance)
+    sub.add_parser(
+        "api",
+        help="versioned JSON request/response seam for machine callers "
+        "(one request on stdin, one envelope on stdout)",
+    )
 
-    {
+    args = ap.parse_args()
+    try:
+        instance = skill_store.resolve_instance(args.instance)
+    except SkillStoreError as e:
+        sys.exit(f"error: {e}")
+    store = SkillStore(Paths(instance))
+
+    handler = {
         "get": cmd_get,
         "set": cmd_set,
         "request-input": cmd_request_input,
         "schema": cmd_schema,
         "list": cmd_list,
         "remove": cmd_remove,
-    }[args.cmd](args, paths)
+        "api": cmd_api,
+    }[args.cmd]
+    try:
+        handler(args, store)
+    except SkillStoreError as e:
+        sys.exit(f"error: {e}")
 
 
 if __name__ == "__main__":

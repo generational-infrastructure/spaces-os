@@ -15,11 +15,13 @@ import (
 // current uid == the broker's own uid: checkPeer passes.
 //
 // The store engine is the REAL skill-config (found on PATH via the build's
-// nativeCheckInputs) — mocking it would have hidden broker↔skill-config
-// argument-vector bugs, exactly the class the POC's VM check surfaced. Only
-// systemd-creds (needs a TPM) and systemctl are stubbed: encrypt prepends an
-// "ENC" header line, decrypt strips it, so seal/unseal round-trips faithfully
-// while a sealed blob is still observably not plaintext.
+// nativeCheckInputs), driven over its versioned `api` JSON seam — mocking it
+// would have hidden broker↔skill-config seam bugs, exactly the class the
+// POC's VM check surfaced back when the broker scraped the human CLI's argv
+// and stdout. Only systemd-creds (needs a TPM) and systemctl are stubbed:
+// encrypt prepends an "ENC" header line, decrypt strips it, so seal/unseal
+// round-trips faithfully while a sealed blob is still observably not
+// plaintext.
 type testEnv struct {
 	t         *testing.T
 	sock      string

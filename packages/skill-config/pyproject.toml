@@ -15,3 +15,6 @@ dependencies = [
 
 [project.scripts]
 skill-config = "skill_config:main"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["skill_config.py", "skill_store.py"]
