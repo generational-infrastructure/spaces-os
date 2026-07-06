@@ -39,6 +39,18 @@ import { startCredentialProxy } from "./proxy";
 import { stageFile } from "./staging";
 import { isSessionId, SessionStore } from "./session-store";
 import {
+  attachedEnvelope,
+  deletedEnvelope,
+  errorEnvelope,
+  eventEnvelope,
+  parseClientEnvelope,
+  serializeEnvelope,
+  type ServerEnvelope,
+  sessionsEnvelope,
+  sidechannelResolvedEnvelope,
+  welcomeEnvelope,
+} from "./protocol";
+import {
   type DriverCallbacks,
   type Session as SupervisedSession,
   type SessionSpec,
@@ -298,9 +310,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
 
 
 // ---- model registry (local llama-swap provider, design §4.2) --------------
@@ -401,33 +410,24 @@ type Session = SupervisedSession<Conn>;
 // on socket close.
 const authedConns = new Set<Conn>();
 
-function send(ws: Conn, msg: unknown): void {
-  ws.send(JSON.stringify(msg));
+function send(ws: Conn, msg: ServerEnvelope): void {
+  ws.send(serializeEnvelope(msg));
 }
 
 // A session-scoped envelope failed. Echo the offending sessionId so a
 // client multiplexing many sessions over one socket can route the error
 // to the right one (e.g. drop a stale persisted id and recreate).
 function sendNoSuchSession(ws: Conn, sessionId: string): void {
-  send(ws, {
-    v: 1,
-    kind: "error",
-    error: "no such session",
-    ...(sessionId ? { sessionId } : {}),
-  });
+  send(ws, errorEnvelope("no such session", { sessionId }));
 }
 
 // Stamp a session event with the next monotonic seq and fan it out verbatim.
 function broadcast(session: Session, payload: unknown): void {
   session.lastActivity = Date.now();
   session.seq += 1;
-  const data = JSON.stringify({
-    v: 1,
-    kind: "event",
-    sessionId: session.id,
-    seq: session.seq,
-    payload,
-  });
+  const data = serializeEnvelope(
+    eventEnvelope(session.id, session.seq, payload),
+  );
   session.buffer.push({ seq: session.seq, data });
   if (session.buffer.length > BUFFER_CAP) session.buffer.shift();
   for (const ws of session.subscribers) ws.send(data);
@@ -443,11 +443,7 @@ function broadcast(session: Session, payload: unknown): void {
 // would be chatty.
 function broadcastSessionsList(): void {
   if (authedConns.size === 0) return;
-  const data = JSON.stringify({
-    v: 1,
-    kind: "sessions",
-    sessions: supervisor.list(),
-  });
+  const data = serializeEnvelope(sessionsEnvelope(supervisor.list()));
   for (const ws of authedConns) ws.send(data);
 }
 
@@ -606,22 +602,12 @@ function resolveSidechannel(
   if (id === undefined) return;
   const relay = session.ledger.claim(id);
   if (!relay) {
-    send(from, {
-      v: 1,
-      kind: "sidechannel_resolved",
-      sessionId: session.id,
-      id,
-      by: "",
-    });
+    send(from, sidechannelResolvedEnvelope(session.id, id, ""));
     return;
   }
-  const resolved = JSON.stringify({
-    v: 1,
-    kind: "sidechannel_resolved",
-    sessionId: session.id,
-    id,
-    by: from.data.id,
-  });
+  const resolved = serializeEnvelope(
+    sidechannelResolvedEnvelope(session.id, id, from.data.id),
+  );
   for (const other of session.subscribers) {
     if (other !== from) other.send(resolved);
   }
@@ -883,13 +869,7 @@ function errorPayload(
 }
 // Send an event envelope to a single client (query replies; not buffered).
 function sendEvent(ws: Conn, session: Session, payload: unknown): void {
-  send(ws, {
-    v: 1,
-    kind: "event",
-    sessionId: session.id,
-    seq: session.seq,
-    payload,
-  });
+  send(ws, eventEnvelope(session.id, session.seq, payload));
 }
 
 // Route a §12 `command` payload (pi's own rpc command shape) to the session's
@@ -1053,70 +1033,81 @@ async function dispatchCommand(
 // ---- envelope dispatch -----------------------------------------------------
 
 async function handleMessage(ws: Conn, text: string): Promise<void> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    send(ws, { v: 1, kind: "error", error: "invalid json" });
+  // Decode via the protocol module (tolerant client parse; see protocol.ts).
+  // An undecodable message is answered regardless of auth; an unknown kind is
+  // only named back to authenticated clients (below), like it always was.
+  const res = parseClientEnvelope(text);
+  if (!res.ok && !res.unknownKind) {
+    send(ws, errorEnvelope(res.error));
     return;
   }
-  if (!isRecord(parsed)) {
-    send(ws, { v: 1, kind: "error", error: "invalid envelope" });
-    return;
-  }
-  const kind = asString(parsed.kind);
 
-  if (kind === "hello") {
-    if (TOKEN.length > 0 && asString(parsed.token) !== TOKEN) {
-      send(ws, { v: 1, kind: "error", error: "unauthorized" });
+  if (res.ok && res.envelope.kind === "hello") {
+    if (TOKEN.length > 0 && res.envelope.token !== TOKEN) {
+      send(ws, errorEnvelope("unauthorized"));
       ws.close(4001, "unauthorized");
       return;
     }
     ws.data.authed = true;
     authedConns.add(ws);
-    send(ws, {
-      v: 1,
-      kind: "welcome",
-      connectionId: ws.data.id,
-      caps: { executor: EXECUTOR_ID },
-    });
+    send(ws, welcomeEnvelope(ws.data.id, EXECUTOR_ID));
     return;
   }
 
   if (!ws.data.authed) {
-    send(ws, { v: 1, kind: "error", error: "not authenticated" });
+    send(ws, errorEnvelope("not authenticated"));
     ws.close(4001, "unauthorized");
     return;
   }
 
-  switch (kind) {
+  if (!res.ok) {
+    send(ws, errorEnvelope(res.error));
+    return;
+  }
+
+  const env = res.envelope;
+  switch (env.kind) {
+    case "hello":
+      return; // handled above (pre-auth); unreachable here
     case "create_session": {
-      const provider = asString(parsed.provider) ?? DEFAULT_PROVIDER;
-      const model = asString(parsed.model) ?? DEFAULT_MODEL;
-      const name = asString(parsed.name) ?? "";
+      const provider = env.provider ?? DEFAULT_PROVIDER;
+      const model = env.model ?? DEFAULT_MODEL;
+      const name = env.name ?? "";
       // Pick up a runtime enable/disable so a freshly enabled integration's
       // tools are staged for this new session (design §9).
       await refreshIntegrations();
-      const session = supervisor.create(provider, model, name);
+      let session: Session;
+      try {
+        session = supervisor.create(provider, model, name);
+      } catch (err) {
+        // A correlated create must settle its requester: echo the requestId
+        // on the error ack so the client releases that pending create instead
+        // of waiting on the generic internal-error path.
+        console.error("pi-sessiond: create_session failed:", err);
+        send(
+          ws,
+          errorEnvelope("create_session failed", { requestId: env.requestId }),
+        );
+        return;
+      }
       session.subscribers.add(ws);
-      send(ws, {
-        v: 1,
-        kind: "attached",
-        sessionId: session.id,
-        seq: session.seq,
-        // Distinguishes a create ack from a plain attach ack: the client
-        // resolves its pending-create FIFO only on created acks, so a
-        // racing re-attach ack can't consume a create resolver and stamp
-        // the wrong daemon id onto a session entry.
-        created: true,
-      });
+      // `created` distinguishes this ack from a plain attach ack; `requestId`
+      // (when the client minted one) correlates it to THIS create, so clients
+      // need no FIFO/claim-window guessing across racing acks.
+      send(
+        ws,
+        attachedEnvelope(session.id, session.seq, {
+          created: true,
+          requestId: env.requestId,
+        }),
+      );
       // Fan the new entry out to every authenticated client so siblings'
       // tab strips refresh without polling (design §12 "n:m clients").
       broadcastSessionsList();
       return;
     }
     case "list_sessions": {
-      send(ws, { v: 1, kind: "sessions", sessions: supervisor.list() });
+      send(ws, sessionsEnvelope(supervisor.list()));
       return;
     }
     case "delete_session": {
@@ -1125,39 +1116,32 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       // then broadcast the updated list so every attached client (the
       // requester included) drops its tab. Idempotent: deleting a missing
       // id is a no-op + an error reply for diagnostics.
-      const sessionId = asString(parsed.sessionId) ?? "";
-      if (!isSessionId(sessionId)) {
-        sendNoSuchSession(ws, sessionId);
+      if (!isSessionId(env.sessionId)) {
+        sendNoSuchSession(ws, env.sessionId);
         return;
       }
-      await supervisor.delete(sessionId);
-      send(ws, { v: 1, kind: "deleted", sessionId });
+      await supervisor.delete(env.sessionId);
+      send(ws, deletedEnvelope(env.sessionId));
       broadcastSessionsList();
       return;
     }
     case "attach": {
-      const sessionId = asString(parsed.sessionId) ?? "";
-      if (!isSessionId(sessionId)) {
-        sendNoSuchSession(ws, sessionId);
+      if (!isSessionId(env.sessionId)) {
+        sendNoSuchSession(ws, env.sessionId);
         return;
       }
-      const live = supervisor.get(sessionId);
+      const live = supervisor.get(env.sessionId);
       // A cold restore stages the tool spec afresh; reflect the current
       // enabled set before it does.
       if (!live) await refreshIntegrations();
-      const session = live ?? supervisor.resume(sessionId);
+      const session = live ?? supervisor.resume(env.sessionId);
       if (!session) {
-        sendNoSuchSession(ws, sessionId);
+        sendNoSuchSession(ws, env.sessionId);
         return;
       }
       session.subscribers.add(ws);
-      send(ws, {
-        v: 1,
-        kind: "attached",
-        sessionId: session.id,
-        seq: session.seq,
-      });
-      const lastSeq = asNumber(parsed.lastSeq) ?? 0;
+      send(ws, attachedEnvelope(session.id, session.seq));
+      const lastSeq = env.lastSeq ?? 0;
       for (const ev of session.buffer) {
         if (ev.seq > lastSeq) ws.send(ev.data);
       }
@@ -1167,21 +1151,20 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     case "detach": {
-      const session = supervisor.get(asString(parsed.sessionId) ?? "");
+      const session = supervisor.get(env.sessionId);
       session?.subscribers.delete(ws);
       if (session) touch(session);
       return;
     }
     case "command": {
-      const sessionId = asString(parsed.sessionId) ?? "";
-      const session = supervisor.get(sessionId);
+      const session = supervisor.get(env.sessionId);
       if (!session) {
-        sendNoSuchSession(ws, sessionId);
+        sendNoSuchSession(ws, env.sessionId);
         return;
       }
       touch(session);
-      const payload = parsed.payload;
-      if (!isRecord(payload)) return;
+      const payload = env.payload;
+      if (!payload) return;
       // Side-channel responses (confirm/input/…) resolve pi's pending uiContext
       // promise in-process (first-answer-wins); they are not session commands.
       if (asString(payload.type) === "extension_ui_response") {
@@ -1201,12 +1184,6 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       await dispatchCommand(session, ws, payload);
       return;
     }
-    default:
-      send(ws, {
-        v: 1,
-        kind: "error",
-        error: `unknown kind: ${kind ?? "(none)"}`,
-      });
   }
 }
 
@@ -1268,18 +1245,17 @@ Bun.serve<ConnData>({
         handleMessage(ws, text).catch((err) => {
           console.error("pi-sessiond: envelope failed:", err);
           let sessionId: string | undefined;
+          let requestId: string | undefined;
           try {
             const parsed = JSON.parse(text);
-            if (isRecord(parsed)) sessionId = asString(parsed.sessionId);
+            if (isRecord(parsed)) {
+              sessionId = asString(parsed.sessionId);
+              requestId = asString(parsed.requestId);
+            }
           } catch {
             // unparseable text already got its "invalid json" reply
           }
-          send(ws, {
-            v: 1,
-            kind: "error",
-            error: "internal error",
-            ...(sessionId ? { sessionId } : {}),
-          });
+          send(ws, errorEnvelope("internal error", { sessionId, requestId }));
         }),
       );
     },

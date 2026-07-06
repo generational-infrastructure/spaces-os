@@ -1,0 +1,22 @@
+{
+  "description": "Auth handshake: hello → welcome; a bad token gets an error and the socket closes (canonical shapes for the fake daemons' hello handlers).",
+  "v": 1,
+  "frames": [
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "hello", "token": "secret", "client": { "name": "pi-web" } }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "welcome", "connectionId": "c1", "caps": { "executor": "host" } }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "hello", "token": "wrong" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "error", "error": "unauthorized" }
+    }
+  ]
+}

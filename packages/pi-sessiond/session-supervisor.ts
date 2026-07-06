@@ -8,6 +8,7 @@
 // driver factory (argv/sandbox staging) and hooks for the event fan-out, and
 // the subscriber type `C` is opaque — the supervisor only tracks membership.
 import { randomUUID } from "node:crypto";
+import type { SessionInfo, SessionState } from "./protocol";
 import type { RpcFrame } from "./rpc-driver";
 import type { SessionStore } from "./session-store";
 import { SidechannelLedger } from "./sidechannel-ledger";
@@ -42,15 +43,10 @@ export interface Session<C> {
   toolGrants: Set<string>;
 }
 
-export type SessionState = "cold" | "live-idle" | "live-busy" | "parked";
-
-export interface SessionInfo {
-  id: string;
-  name: string;
-  executor: string;
-  state: SessionState;
-  updated: number;
-}
+// The list-row shape (`kind: "sessions"`) and its state enum are wire shapes:
+// they live in protocol.ts (the §12 module) and are re-exported here for the
+// supervisor's own consumers.
+export type { SessionInfo, SessionState };
 
 // What the driver factory needs to spawn one pi rpc-mode child.
 export interface SessionSpec {

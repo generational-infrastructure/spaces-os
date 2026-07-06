@@ -1,0 +1,76 @@
+{
+  "description": "One streamed turn: command{prompt} → event envelopes carrying pi's typed event stream (agent_start → text deltas → agent_end), each stamped with the session's next monotonic seq. This is the stream the fake daemons' turn_events() generators emit.",
+  "v": 1,
+  "frames": [
+    {
+      "dir": "client",
+      "envelope": {
+        "v": 1,
+        "kind": "command",
+        "sessionId": "s1",
+        "payload": { "type": "prompt", "message": "hi", "streamingBehavior": "steer" }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "event", "sessionId": "s1", "seq": 1, "payload": { "type": "agent_start" } }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 2,
+        "payload": { "type": "message_update", "assistantMessageEvent": { "type": "text_start", "contentIndex": 0 } }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 3,
+        "payload": { "type": "message_update", "assistantMessageEvent": { "type": "text_delta", "contentIndex": 0, "delta": "Hello" } }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 4,
+        "payload": { "type": "message_update", "assistantMessageEvent": { "type": "text_end", "contentIndex": 0, "content": "Hello" } }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 5,
+        "payload": {
+          "type": "agent_end",
+          "messages": [{ "role": "assistant", "content": [{ "type": "text", "text": "Hello" }] }]
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "envelope": {
+        "v": 1,
+        "kind": "command",
+        "sessionId": "s1",
+        "payload": {
+          "type": "prompt",
+          "message": "",
+          "images": [{ "type": "image", "data": "aGk=", "mimeType": "image/png" }],
+          "streamingBehavior": "steer"
+        }
+      }
+    }
+  ]
+}

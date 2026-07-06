@@ -1,0 +1,66 @@
+{
+  "description": "Supervisor-minted response payloads riding event envelopes: the pi-rpc `response` shape (success and failure) the panel's _request promises correlate on via the echoed payload id, for round-trip commands (set_model/get_state/get_messages/get_available_models/set_memory).",
+  "v": 1,
+  "frames": [
+    {
+      "dir": "client",
+      "envelope": {
+        "v": 1,
+        "kind": "command",
+        "sessionId": "s1",
+        "payload": { "type": "get_available_models", "id": "q-1" }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 3,
+        "payload": {
+          "type": "response",
+          "command": "get_available_models",
+          "success": true,
+          "id": "q-1",
+          "data": { "models": [{ "provider": "local", "id": "mock-model", "name": "Mock Model" }] }
+        }
+      }
+    },
+    {
+      "dir": "client",
+      "envelope": {
+        "v": 1,
+        "kind": "command",
+        "sessionId": "s1",
+        "payload": { "type": "set_model", "provider": "local", "modelId": "mock-model", "id": "q-2" }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 4,
+        "payload": {
+          "type": "response",
+          "command": "set_model",
+          "success": false,
+          "error": "unknown model",
+          "id": "q-2"
+        }
+      }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 5,
+        "payload": { "type": "error", "error": "prompt failed" }
+      }
+    }
+  ]
+}

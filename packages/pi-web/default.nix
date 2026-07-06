@@ -12,11 +12,15 @@
 # kits, tokens, components, transcripts) is preserved verbatim under
 # docs/design-system/source/ as the design source of truth.
 let
-  # app.ts imports ./reducer, so both must sit in one dir for the bundler.
+  # app.ts imports ./reducer and ../pi-sessiond/protocol (the shared §12 wire
+  # module — ONE source file, referenced across the package boundary by nix
+  # path, so there is no second copy to keep in sync). Recreate that relative
+  # layout for the bundler.
   src = pkgs.runCommandLocal "pi-web-src" { } ''
-    mkdir -p "$out"
-    cp ${./app.ts} "$out/app.ts"
-    cp ${./reducer.ts} "$out/reducer.ts"
+    mkdir -p "$out/pi-web" "$out/pi-sessiond"
+    cp ${./app.ts} "$out/pi-web/app.ts"
+    cp ${./reducer.ts} "$out/pi-web/reducer.ts"
+    cp ${../pi-sessiond/protocol.ts} "$out/pi-sessiond/protocol.ts"
   '';
 in
 pkgs.runCommandLocal "pi-web"
@@ -36,5 +40,5 @@ pkgs.runCommandLocal "pi-web"
 
     # Bundle the TS entrypoint to app.js (no third-party deps → offline).
     export HOME="$TMPDIR"
-    bun build ${src}/app.ts --outfile "$out/app.js" --target browser
+    bun build ${src}/pi-web/app.ts --outfile "$out/app.js" --target browser
   ''

@@ -23,6 +23,11 @@
 // stored per-pair (only for sessions we've attached to in this tab session).
 
 import {
+  type ClientEnvelope,
+  parseServerEnvelope,
+  type SessionInfo,
+} from "../pi-sessiond/protocol";
+import {
   type ChatState,
   emptyState,
   withConfirmAnswer,
@@ -32,13 +37,6 @@ import {
   withUserPrompt,
 } from "./reducer";
 
-type Envelope = Record<string, unknown>;
-interface SessionInfo {
-  id: string;
-  name: string;
-  state: string;
-  updated: number;
-}
 interface PeerEntry {
   id: string;
   host: string;
@@ -67,12 +65,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function num(v: unknown): number {
-  return typeof v === "number" ? v : 0;
-}
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
 
 // Compose a `wss://` (or `ws://` in dev) URL for one executor. Same-origin
 // peers reuse `location.host` (preserves the port the page was served on —
@@ -124,9 +116,10 @@ class ExecutorConn {
   // folded ChatState. Maps survive ws drops; `connected` gates writes.
   lastSeq: Map<string, number> = new Map();
   states: Map<string, ChatState> = new Map();
-  // Tracks the next-acked attached envelope so we know which freshly-created
-  // session id belongs to the user's "+ new chat" tap.
-  pendingCreate = false;
+  // requestIds of our in-flight create_sessions: the daemon echoes them
+  // verbatim on the created (or error) ack, so each ack correlates to ITS
+  // create — no FIFO/flag guessing against racing plain attach acks.
+  pendingCreates: Set<string> = new Set();
 
   constructor(
     readonly id: string,
@@ -165,18 +158,15 @@ class ExecutorConn {
     sock.onerror = () => sock.close();
   }
 
-  send(env: Envelope): void {
+  send(env: ClientEnvelope): void {
     if (this.sock && this.sock.readyState === WebSocket.OPEN)
       this.sock.send(JSON.stringify(env));
   }
 
   private onMessage(text: string): void {
-    let msg: Envelope;
-    try {
-      msg = JSON.parse(text) as Envelope;
-    } catch {
-      return;
-    }
+    const res = parseServerEnvelope(text);
+    if (!res.ok) return;
+    const msg = res.envelope;
     switch (msg.kind) {
       case "welcome":
         this.connected = true;
@@ -190,23 +180,29 @@ class ExecutorConn {
         this.onUpdate(this, "welcome");
         break;
       case "sessions":
-        this.sessions = (
-          Array.isArray(msg.sessions) ? (msg.sessions as SessionInfo[]) : []
-        )
+        this.sessions = msg.sessions
           .slice()
-          .sort((a, b) => num(b.updated) - num(a.updated));
+          .sort((a, b) => b.updated - a.updated);
         this.onUpdate(this, "sessions");
         break;
       case "attached": {
-        const sid = str(msg.sessionId);
-        const seq = num(msg.seq);
-        if (this.pendingCreate) {
-          this.pendingCreate = false;
-          // Post-dates the last list_sessions; insert so the row appears
-          // before the next list_sessions refresh arrives.
+        const sid = msg.sessionId;
+        if (
+          msg.requestId !== undefined &&
+          this.pendingCreates.delete(msg.requestId)
+        ) {
+          // The ack for OUR create (requestId echoed). Post-dates the last
+          // list_sessions; insert so the row appears before the next
+          // list_sessions refresh arrives.
           if (!this.sessions.some((s) => s.id === sid)) {
             this.sessions = [
-              { id: sid, name: "web", state: "live-idle", updated: Date.now() },
+              {
+                id: sid,
+                name: "web",
+                executor: this.id,
+                state: "live-idle",
+                updated: Date.now(),
+              },
               ...this.sessions,
             ];
           }
@@ -216,33 +212,36 @@ class ExecutorConn {
         } else {
           // Session was resurrected (cold respawn → seq reset); rebuild fold.
           const known = this.lastSeq.get(sid);
-          if (known !== undefined && seq < known) {
+          if (known !== undefined && msg.seq < known) {
             this.states.set(sid, emptyState());
-            this.lastSeq.set(sid, seq);
+            this.lastSeq.set(sid, msg.seq);
             this.onUpdate(this, "attached", { sessionId: sid, fresh: false });
           }
         }
         break;
       }
       case "event": {
-        const sid = str(msg.sessionId);
+        const sid = msg.sessionId;
         const cur = this.states.get(sid) ?? emptyState();
         this.states.set(sid, withPiEvent(cur, msg.payload));
-        this.lastSeq.set(sid, num(msg.seq));
+        this.lastSeq.set(sid, msg.seq);
         this.onUpdate(this, "event", { sessionId: sid });
         break;
       }
       case "sidechannel_resolved": {
-        const sid = str(msg.sessionId);
+        const sid = msg.sessionId;
         const cur = this.states.get(sid);
         if (cur) {
-          this.states.set(sid, withSidechannelResolved(cur, str(msg.id)));
+          this.states.set(sid, withSidechannelResolved(cur, msg.id));
           this.onUpdate(this, "sidechannel", { sessionId: sid });
         }
         break;
       }
       case "error":
-        this.onUpdate(this, "error", str(msg.error) || "unknown");
+        // A failed correlated create settles here: release the pending id so
+        // a retry can mint a fresh one.
+        if (msg.requestId !== undefined) this.pendingCreates.delete(msg.requestId);
+        this.onUpdate(this, "error", msg.error || "unknown");
         break;
       default:
         break;
@@ -258,8 +257,9 @@ class ExecutorConn {
   }
 
   create(): void {
-    this.pendingCreate = true;
-    this.send({ v: 1, kind: "create_session", name: "web" });
+    const requestId = crypto.randomUUID();
+    this.pendingCreates.add(requestId);
+    this.send({ v: 1, kind: "create_session", name: "web", requestId });
   }
 
   sendPrompt(sessionId: string, text: string): void {
@@ -559,7 +559,7 @@ class Fleet {
     for (const conn of this.execs.values()) {
       for (const s of conn.sessions) rows.push({ conn, session: s });
     }
-    rows.sort((a, b) => num(b.session.updated) - num(a.session.updated));
+    rows.sort((a, b) => b.session.updated - a.session.updated);
     if (rows.length === 0) {
       list.append(el("li", "chat-empty", "No chats yet. Tap + to start one."));
       return;
@@ -727,8 +727,9 @@ function start(token: string): void {
   // The "empty input" state is purely cosmetic via a `.empty` class — DOM
   // `disabled` would block synthetic clicks from the e2e driver (which sets
   // `input.value` via assignment, bypassing the `input` event).
-  const syncEmpty = (): void =>
+  const syncEmpty = (): void => {
     send.classList.toggle("empty", !input.value.trim());
+  };
   syncEmpty();
 
   const submit = (): void => {

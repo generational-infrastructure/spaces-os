@@ -1,0 +1,40 @@
+{
+  "description": "Session creation, both flows: a correlated create (client-minted requestId echoed verbatim on the created ack, and on the error ack when the create fails) and the legacy uncorrelated create (no requestId anywhere — QML panel until wave 3). The created ack is followed by the sessions broadcast every authenticated client receives.",
+  "v": 1,
+  "frames": [
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "create_session", "name": "web", "provider": "local", "model": "mock-model", "requestId": "req-1" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "attached", "sessionId": "11111111-2222-4333-8444-555555555555", "seq": 0, "created": true, "requestId": "req-1" }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "sessions",
+        "sessions": [
+          { "id": "11111111-2222-4333-8444-555555555555", "name": "web", "executor": "host", "state": "live-idle", "updated": 1751760000000 }
+        ]
+      }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "create_session", "requestId": "req-2" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "error", "error": "create_session failed", "requestId": "req-2" }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "create_session", "name": "Chat 1" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "attached", "sessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "seq": 0, "created": true }
+    }
+  ]
+}

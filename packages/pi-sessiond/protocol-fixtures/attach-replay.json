@@ -1,0 +1,60 @@
+{
+  "description": "Reconnect catch-up: attach with lastSeq → plain attached ack (no created flag) followed by a replay of every buffered event with seq > lastSeq (design §5.3 warm reconnect); then list_sessions/detach/delete_session round-trips and the session-scoped error shape.",
+  "v": 1,
+  "frames": [
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "attach", "sessionId": "s1", "lastSeq": 5 }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "attached", "sessionId": "s1", "seq": 8 }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "event",
+        "sessionId": "s1",
+        "seq": 6,
+        "payload": { "type": "message_update", "assistantMessageEvent": { "type": "text_delta", "contentIndex": 0, "delta": "Caught" } }
+      }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "list_sessions" }
+    },
+    {
+      "dir": "server",
+      "envelope": {
+        "v": 1,
+        "kind": "sessions",
+        "sessions": [
+          { "id": "s1", "name": "Chat 1", "executor": "host", "state": "live-busy", "updated": 1751760000000 },
+          { "id": "s2", "name": "", "executor": "host", "state": "cold", "updated": 1751750000000 },
+          { "id": "s3", "name": "parked one", "executor": "host", "state": "parked", "updated": 1751740000000 }
+        ]
+      }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "detach", "sessionId": "s1" }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "delete_session", "sessionId": "s2" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "deleted", "sessionId": "s2" }
+    },
+    {
+      "dir": "client",
+      "envelope": { "v": 1, "kind": "attach", "sessionId": "sess-gone" }
+    },
+    {
+      "dir": "server",
+      "envelope": { "v": 1, "kind": "error", "error": "no such session", "sessionId": "sess-gone" }
+    }
+  ]
+}

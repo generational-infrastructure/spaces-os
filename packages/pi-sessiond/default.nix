@@ -21,6 +21,10 @@ let
   src = pkgs.runCommandLocal "pi-sessiond-src" { } ''
     mkdir -p "$out"
     cp ${./main.ts} "$out/main.ts"
+    cp ${./protocol.ts} "$out/protocol.ts"
+    # The canonical §12 wire-frame corpus (protocol.test.ts validates it);
+    # shipped next to the module so the built daemon stays self-describing.
+    cp -r ${./protocol-fixtures} "$out/protocol-fixtures"
     cp ${./rpc-driver.ts} "$out/rpc-driver.ts"
     cp ${./session-store.ts} "$out/session-store.ts"
     cp ${./sidechannel-ledger.ts} "$out/sidechannel-ledger.ts"

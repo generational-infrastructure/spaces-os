@@ -388,6 +388,8 @@ changes:
 The inner `payload` is byte-for-byte pi's existing command/event protocol;
 the envelope only adds addressing + the control verbs the pipe model lacked.
 
+> **Normative artifact:** `packages/pi-sessiond/protocol.ts` (typed envelope union + parse/serialize, shared verbatim with pi-web; canonical frame corpus in `packages/pi-sessiond/protocol-fixtures/`). The sketch below is illustrative.
+
 ```jsonc
 // client → server
 { "v":1, "kind":"hello", "token":"<shared-token>", "client":{...} }
