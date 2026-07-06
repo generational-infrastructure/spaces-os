@@ -4,17 +4,19 @@
 // sessionId.
 //
 //   send  { v:1, kind:"hello", token, client }
-//         { v:1, kind:"create_session", name?, model?, workspace? }
+//         { v:1, kind:"create_session", requestId, name?, model?, workspace? }
 //         { v:1, kind:"attach"|"detach", sessionId }
 //         { v:1, kind:"command", sessionId, payload }   // payload = pi command
 //
 //   recv  { v:1, kind:"welcome", connectionId, caps }
-//         { v:1, kind:"attached", sessionId, seq }
+//         { v:1, kind:"attached", sessionId, seq, created?, requestId? }
 //         { v:1, kind:"event", sessionId, seq, payload }  // payload = pi event
-//         { v:1, kind:"error", error }
+//         { v:1, kind:"error", error, sessionId?, requestId? }
 //
-// create_session's `attached` carries no correlation id, so pending
-// creates resolve FIFO — the panel creates sessions one at a time.
+// Each create_session carries a client-minted requestId; the daemon echoes
+// it verbatim on the created ack (or on the error ack when the create
+// fails), so several in-flight creates correlate directly — no FIFO
+// guessing (packages/pi-sessiond/protocol.ts is normative).
 import QtQuick
 import QtWebSockets
 import Quickshell.Io
@@ -38,14 +40,13 @@ QtObject {
   property var _subscribers: ({})
   property var _lastSeq: ({})        // daemonSessionId -> highest seq seen
   property bool _welcomed: false
-  property var _pendingCreates: []   // FIFO of { resolve, reject }
-  // Daemon ids minted by our own create_session whose .then hasn't stamped
-  // the panel entry yet. The daemon's `sessions` broadcast can be processed
-  // BEFORE the create promise's .then runs (promise jobs drain only after
-  // the socket's whole message burst), so for that window the id is
-  // unclaimed in sessionsList — the importer must not adopt it as a
-  // foreign session. PiSession releases the claim after stamping.
-  property var _pendingCreatedIds: ({})
+  // In-flight create_sessions: requestId -> { onAttached, onError }. The
+  // callbacks run SYNCHRONOUSLY inside the ack's message dispatch, so the
+  // caller stamps its bookkeeping BEFORE the daemon's follow-up `sessions`
+  // broadcast (sent right after the ack, a later message) is processed —
+  // the importer never sees a created-but-unclaimed id.
+  property var _inflightCreates: ({})
+  property int _createSerial: 0
   property var _connectWaiters: []   // callbacks fired once welcomed
   property bool _live: false         // drives the socket; toggled to reconnect
 
@@ -60,12 +61,10 @@ QtObject {
   // one of "cold" / "live-idle" / "live-busy" / "parked"; `updated` is the
   // daemon's last-activity ms-since-epoch.
   property var remoteSessions: []
-  // Daemon session ids ever observed in THIS connection's `sessions`
-  // pushes. Lets the backend tell "deleted upstream" (id seen earlier,
-  // gone from the current view) apart from "stale persisted id the
-  // daemon never knew" (never seen) — the latter must recover via the
-  // attach-bounce path instead of silently dropping the tab.
-  property var _remoteEverSeen: ({})
+  // Connection generation: bumped on every welcome. The session
+  // registry keys its per-connection observation sets on it, so
+  // "deleted upstream" judgments never leak across a reconnect.
+  property int connectionEpoch: 0
 
   onActiveChanged: _live = active
   Component.onCompleted: _live = active
@@ -125,10 +124,10 @@ QtObject {
     case "welcome": {
       _welcomed = true;
       executorId = (msg.caps && msg.caps.executor) || "";
-      // New connection epoch: the seen-set restarts so judgments about
-      // "deleted upstream" are only ever made against ids this very
-      // connection observed (see hasSeenRemote).
-      _remoteEverSeen = ({});
+      // New connection epoch: the registry's observation sets restart so
+      // judgments about "deleted upstream" are only ever made against ids
+      // this very connection observed.
+      connectionEpoch += 1;
       const waiters = _connectWaiters;
       _connectWaiters = [];
       for (const cb of waiters) cb();
@@ -153,16 +152,13 @@ QtObject {
       // water mark the session was resurrected (seq reset) — drop the stale
       // mark so replayed/new events aren't suppressed.
       if ((sid in _subscribers) && (msg.seq < (_lastSeq[sid] ?? 0))) _lastSeq[sid] = msg.seq;
-      // create_session ack (FIFO), marked `created` by the daemon. Plain
-      // attach acks must NOT pop the queue: a re-attach ack racing an
-      // in-flight create would otherwise consume the create's resolver and
-      // stamp the wrong daemon id onto the creating session's entry.
-      if (msg.created) {
-        const p = _pendingCreates.shift();
-        if (p) {
-          _pendingCreatedIds[sid] = true;
-          p.resolve(sid);
-        }
+      // create_session ack: `created` acks carry the requestId echo of the
+      // create they answer. Plain attach acks carry neither, so a re-attach
+      // ack racing an in-flight create can never be mistaken for it.
+      if (msg.created && msg.requestId && _inflightCreates[msg.requestId]) {
+        const p = _inflightCreates[msg.requestId];
+        delete _inflightCreates[msg.requestId];
+        p.onAttached(sid);
       }
       break;
     }
@@ -182,10 +178,8 @@ QtObject {
       // arrive as the same shape; the merge is idempotent.
       const list = msg.sessions || [];
       const next = new Array(list.length);
-      const seen = Object.assign({}, _remoteEverSeen);
       for (let i = 0; i < list.length; i += 1) {
         const s = list[i];
-        seen[s.id] = true;
         next[i] = {
           id: s.id,
           name: s.name || "",
@@ -197,12 +191,18 @@ QtObject {
           updated: s.updated || 0,
         };
       }
-      _remoteEverSeen = seen;
       remoteSessions = next;
       break;
     }
     case "error":
       Logger.w("PiExecutor", "server error", JSON.stringify(msg));
+      // A requestId echo names the create_session it failed.
+      if (msg.requestId && _inflightCreates[msg.requestId]) {
+        const p = _inflightCreates[msg.requestId];
+        delete _inflightCreates[msg.requestId];
+        p.onError(msg.error || "create_session failed");
+        break;
+      }
       // Session-scoped failures (the daemon echoes the offending
       // sessionId) are routed to the owning session so it can recover —
       // e.g. drop a stale persisted daemon id and mint a fresh session.
@@ -215,9 +215,9 @@ QtObject {
 
   function _onClosed(reason) {
     _welcomed = false;
-    const creates = _pendingCreates;
-    _pendingCreates = [];
-    for (const p of creates) p.reject("executor disconnected");
+    const creates = _inflightCreates;
+    _inflightCreates = ({});
+    for (const rid in creates) creates[rid].onError("executor disconnected");
     // Keep _subscribers so they re-attach (with lastSeq) on the next welcome.
     for (const sid in _subscribers) _subscribers[sid]?._onExecutorClosed?.();
     // Stale remote-list view goes away when the link drops; a fresh
@@ -232,13 +232,19 @@ QtObject {
     _connectWaiters.push(cb);
   }
 
-  function createSession(opts) {
-    return new Promise((resolve, reject) => {
-      if (!connected) { reject("executor not connected"); return; }
-      _pendingCreates.push({ resolve: resolve, reject: reject });
-      _sock.sendTextMessage(JSON.stringify(Object.assign(
-        { v: 1, kind: "create_session" }, opts || {})));
-    });
+  // Create a session, correlated by a client-minted requestId echoed on the
+  // ack. onAttached(sessionId) / onError(reason) are plain callbacks — NOT
+  // promise continuations — invoked synchronously from the ack dispatch, so
+  // the caller's claim on the fresh id lands before the daemon's follow-up
+  // `sessions` broadcast is processed. Returns the requestId.
+  function createSession(opts, onAttached, onError) {
+    _createSerial += 1;
+    const requestId = "qs-create-" + _createSerial;
+    if (!connected) { onError("executor not connected"); return requestId; }
+    _inflightCreates[requestId] = { onAttached: onAttached, onError: onError };
+    _sock.sendTextMessage(JSON.stringify(Object.assign(
+      { v: 1, kind: "create_session", requestId: requestId }, opts || {})));
+    return requestId;
   }
 
   function attach(sid) {
@@ -273,11 +279,4 @@ QtObject {
 
   function subscribe(sid, obj) { _subscribers[sid] = obj; }
   function unsubscribe(sid) { delete _subscribers[sid]; }
-
-  // Claim bookkeeping for freshly created sessions (see _pendingCreatedIds).
-  function isPendingCreated(sid) { return !!_pendingCreatedIds[sid]; }
-  function releaseCreated(sid) { delete _pendingCreatedIds[sid]; }
-
-  // True when this connection has observed `sid` in a `sessions` push.
-  function hasSeenRemote(sid) { return !!_remoteEverSeen[sid]; }
 }

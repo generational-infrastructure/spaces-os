@@ -1,0 +1,51 @@
+{
+  "description": "While a create is pending on an executor, foreign ids appearing in that executor's view are deferred (never adopted mid-create); once the create resolves, the next merge imports the foreign session and dedups our own claimed id.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "" }
+      ],
+      "cutoff": 1000
+    },
+    { "op": "beginCreate", "requestId": "r1", "panelId": "p1" },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "dX", "name": "pwa", "updated": 2000 }]
+        }
+      ]
+    },
+    { "op": "resolveCreate", "requestId": "r1", "daemonId": "d9" },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [
+            { "id": "dX", "name": "pwa", "updated": 2000 },
+            { "id": "d9", "name": "Chat 1", "updated": 2100 }
+          ]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "d9" },
+      { "id": "dX", "daemonSessionId": "dX", "executor": "host" }
+    ],
+    "lastImportTime": 2000,
+    "trace": [
+      { "op": "load" },
+      { "op": "beginCreate" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "resolveCreate", "panelId": "p1", "changed": true },
+      { "op": "merge", "added": ["dX"], "removedIds": [], "changed": true }
+    ]
+  }
+}

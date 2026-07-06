@@ -6,7 +6,7 @@ race the real daemon (packages/pi-sessiond/main.ts) triggers on create_session:
 
   hello           -> welcome {caps:{executor: <id>}}
   list_sessions   -> sessions [ current list ]
-  create_session  -> attached {sessionId}      (the create ack, FIFO)
+  create_session  -> attached {sessionId, requestId echo} (the create ack)
                      sessions  [ current list ] (unsolicited broadcast,
                                                   sent IMMEDIATELY after the
                                                   ack — same as main.ts's
@@ -106,15 +106,18 @@ async def handler(ws, *_):
             sessions[sid] = {"name": msg.get("name") or "", "updated": now_ms()}
             # The create ack, then the list broadcast — back-to-back,
             # mirroring main.ts's create_session handler exactly.
-            await send(
-                {
-                    "v": 1,
-                    "kind": "attached",
-                    "sessionId": sid,
-                    "seq": 0,
-                    "created": True,
-                }
-            )
+            ack = {
+                "v": 1,
+                "kind": "attached",
+                "sessionId": sid,
+                "seq": 0,
+                "created": True,
+            }
+            # Echo the client-minted correlation id verbatim
+            # (protocol-fixtures/create-session.json).
+            if msg.get("requestId") is not None:
+                ack["requestId"] = msg["requestId"]
+            await send(ack)
             await broadcast_sessions()
 
         elif kind == "attach":

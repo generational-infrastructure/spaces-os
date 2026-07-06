@@ -1,0 +1,26 @@
+{
+  "description": "A persisted daemon id the connection never observed (daemon state wiped, turnless session lost) is NOT a sibling delete — the entry stays so its attach-bounce recovery can mint a fresh daemon session instead of the tab silently vanishing.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "d-stale" }
+      ],
+      "cutoff": 1000
+    },
+    {
+      "op": "merge",
+      "views": [{ "execId": "host", "epoch": 1, "sessions": [] }]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "d-stale" }
+    ],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false }
+    ]
+  }
+}

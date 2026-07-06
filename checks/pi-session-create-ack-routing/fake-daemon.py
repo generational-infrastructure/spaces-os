@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Scripted daemon for the create-ack routing contract.
 
-create_session's ack carries no correlation id, so the panel resolves
-pending creates FIFO. A plain attach ack (re-attach of a persisted
-session) racing an in-flight create must NOT consume the create's
-resolver — pre-fix it did, stamping the attached session's id onto the
-creating entry (two panel tabs sharing one daemon session, the real
-create's ack resolving nothing).
+The panel correlates create acks by the client-minted requestId the
+daemon echoes verbatim on the created ack
+(protocol-fixtures/create-session.json). A plain attach ack (re-attach
+of a persisted session) racing an in-flight create must never be taken
+for the create's ack — pre-fix (FIFO resolution, no correlation id) it
+was, stamping the attached session's id onto the creating entry (two
+panel tabs sharing one daemon session, the real create's ack resolving
+nothing).
 
 This daemon forces the interleave deterministically: the attach ack
 for the persisted session is WITHHELD until a create_session arrives,
 then sent first, followed by the create ack. The panel must still
-route each ack to the right requester via the `created` flag.
+route each ack to the right requester.
 """
 
 import asyncio
@@ -92,15 +94,18 @@ async def handle(ws):
             if pending_attach is not None:
                 await send(pending_attach)
                 pending_attach = None
-            await send(
-                {
-                    "v": 1,
-                    "kind": "attached",
-                    "sessionId": f"sess-created-{created}",
-                    "seq": 0,
-                    "created": True,
-                }
-            )
+            ack = {
+                "v": 1,
+                "kind": "attached",
+                "sessionId": f"sess-created-{created}",
+                "seq": 0,
+                "created": True,
+            }
+            # Echo the client-minted correlation id verbatim
+            # (protocol-fixtures/create-session.json).
+            if msg.get("requestId") is not None:
+                ack["requestId"] = msg["requestId"]
+            await send(ack)
 
         elif kind == "command":
             payload = msg.get("payload") or {}

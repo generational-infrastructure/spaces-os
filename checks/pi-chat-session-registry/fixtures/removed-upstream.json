@@ -1,0 +1,35 @@
+{
+  "description": "An entry whose daemon id was observed in this connection's view and then disappeared from it was deleted upstream (sibling client's delete_session) — the panel entry is removed so the tab strip mirrors the daemon's truth.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "d1" }
+      ],
+      "cutoff": 1000
+    },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d1", "name": "Chat 1", "updated": 900 }]
+        }
+      ]
+    },
+    {
+      "op": "merge",
+      "views": [{ "execId": "host", "epoch": 1, "sessions": [] }]
+    }
+  ],
+  "expect": {
+    "sessions": [],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "merge", "added": [], "removedIds": ["p1"], "changed": true }
+    ]
+  }
+}

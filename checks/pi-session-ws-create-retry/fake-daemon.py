@@ -77,17 +77,19 @@ async def handler(ws, *_):
                 await ws.close()
                 return
             _created += 1
-            await ws.send(
-                json.dumps(
-                    {
-                        "v": 1,
-                        "kind": "attached",
-                        "sessionId": f"sess-{_created}",
-                        "seq": 0,
-                        "created": True,
-                    }
-                )
-            )
+            ack = {
+                "v": 1,
+                "kind": "attached",
+                "sessionId": f"sess-{_created}",
+                "seq": 0,
+                "created": True,
+            }
+            # Echo the client-minted correlation id verbatim
+            # (protocol-fixtures/create-session.json). The retried create
+            # carries a fresh requestId; the ack must answer THAT one.
+            if msg.get("requestId") is not None:
+                ack["requestId"] = msg["requestId"]
+            await ws.send(json.dumps(ack))
 
         elif kind == "attach":
             await ws.send(

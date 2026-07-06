@@ -1,0 +1,26 @@
+{
+  "description": "A session created on the executor by another client (updated past the cutoff) is imported as a panel entry pinned to that executor with daemonSessionId set; the cutoff advances to its updated stamp.",
+  "ops": [
+    { "op": "load", "sessions": [], "cutoff": 1000 },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d1", "name": "alpha", "updated": 2000 }]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "d1", "name": "alpha", "executor": "host", "daemonSessionId": "d1" }
+    ],
+    "lastImportTime": 2000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": ["d1"], "removedIds": [], "changed": true }
+    ]
+  }
+}

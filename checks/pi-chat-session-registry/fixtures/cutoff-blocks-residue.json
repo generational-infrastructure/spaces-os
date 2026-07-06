@@ -1,0 +1,43 @@
+{
+  "description": "Pre-existing daemon residue (updated at or below the cutoff) stays parked; only newly-touched sessions import. A re-merge of the same view is a no-op — the cutoff advanced, so each import only moves forward.",
+  "ops": [
+    { "op": "load", "sessions": [], "cutoff": 1000 },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [
+            { "id": "old", "name": "residue", "updated": 500 },
+            { "id": "d2", "name": "fresh", "updated": 3000 }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [
+            { "id": "old", "name": "residue", "updated": 500 },
+            { "id": "d2", "name": "fresh", "updated": 3000 }
+          ]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "d2", "executor": "host", "daemonSessionId": "d2" }
+    ],
+    "lastImportTime": 3000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": ["d2"], "removedIds": [], "changed": true },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false }
+    ]
+  }
+}

@@ -157,17 +157,7 @@ Item {
   // daemonSessionId only exists on the executor that minted it.
   onDefaultExecutorIdChanged: _stampDefaultExecutor()
   function _stampDefaultExecutor() {
-    if (!defaultExecutorId) return;
-    let changed = false;
-    const next = sessionsList.map(s => {
-      if (s.executor) return s;
-      changed = true;
-      return Object.assign({}, s, { executor: defaultExecutorId });
-    });
-    if (changed) {
-      sessionsList = next;
-      _persist();
-    }
+    if (sessionRegistry.stampDefaultExecutor(defaultExecutorId)) _persist();
   }
 
   property var _executorById: ({})
@@ -215,16 +205,24 @@ Item {
   }
 
   // ── sessions index ──
-  // Plain-JS array so QML bindings re-evaluate on assignment.
-  property var sessionsList: []        // [{id, name, workspacePath, trusted, model, createdAt, lastActiveAt, unread}]
-  property string activeSessionId: ""
+  //
+  // The panel↔daemon correspondence — importing sessions from executor
+  // views, claiming our own creates' fresh ids, dropping entries deleted
+  // upstream, pinning legacy entries to the default executor — lives in
+  // ONE place: the session registry (SessionRegistry.qml over the pure
+  // SessionRegistry.js, unit-checked by checks/pi-chat-session-registry).
+  // It also stores the index entries themselves plus the import cutoff;
+  // this backend seeds both from sessions.json, persists them, and stays
+  // the writer for the display-only fields (name, unread, lastActiveAt,
+  // …) through the sessionsList alias below.
+  property SessionRegistry _registry: SessionRegistry {
+    id: sessionRegistry
+  }
 
-  // ms-since-epoch cutoff that filters _importRemoteSessions. Sessions
-  // whose `updated` is ≤ this value are pre-existing daemon residue and
-  // stay parked on the daemon (still reachable on explicit attach, but
-  // not auto-added to sessionsList). Loaded/initialised by
-  // _loadFromAdapter; advanced by _importRemoteSessions on every import.
-  property double lastImportTime: 0
+  // Plain-JS array so QML bindings re-evaluate on assignment.
+  // [{id, name, workspacePath, trusted, model, createdAt, lastActiveAt, unread, executor, daemonSessionId, …}]
+  property alias sessionsList: sessionRegistry.sessions
+  property string activeSessionId: ""
 
   // Active session state aggregated from the Repeater. Empty fallback
   // when no sessions exist so Panel.qml's bindings never read from
@@ -298,7 +296,7 @@ Item {
       _persist();
     }
     const stored = root._sessions.lastImportTime || 0;
-    lastImportTime = stored > 0 ? stored : Date.now();
+    sessionRegistry.lastImportTime = stored > 0 ? stored : Date.now();
     if (stored <= 0) _persist();
     // An executor's `sessions` reply may have raced past this load with
     // lastImportTime still at 0 (no-op then); replay the import now that
@@ -314,7 +312,7 @@ Item {
     root._sessions.version = 1;
     root._sessions.sessions = sessionsList;
     root._sessions.activeSessionId = activeSessionId;
-    root._sessions.lastImportTime = lastImportTime;
+    root._sessions.lastImportTime = sessionRegistry.lastImportTime;
     sessionsFile.writeAdapter();
     root._scheduleActivityWrite();
   }
@@ -438,118 +436,45 @@ Item {
     return { active: obj.activeModel || "", count: (obj.models || []).length };
   }
 
-  // Called by PiSession after a fresh create_session ack assigns it a
-  // daemon-side id — or with "" when restart() drops the old daemon
-  // session. Stamping the value on the persisted entry locks the
-  // (panel ↔ daemon) session correspondence so future panel restarts
-  // attach to the same daemon session (history continues) and so the
-  // daemon's broadcast of the new id is recognised as "already ours" by
-  // _importRemoteSessions instead of being auto-imported as a duplicate.
-  function _onDaemonSessionAssigned(panelId, daemonId) {
-    if (!panelId) return;
-    const dId = daemonId || "";
-    let dirty = false;
-    sessionsList = sessionsList.map(s => {
-      if (s.id !== panelId || s.daemonSessionId === dId) return s;
-      dirty = true;
-      return Object.assign({}, s, { daemonSessionId: dId });
-    });
-    if (dirty) _persist();
-  }
-
   // Merge every executor's `remoteSessions` view (populated by the
   // daemon's `list_sessions` reply on hello + every unsolicited
-  // `kind:"sessions"` push) into sessionsList. New ids — sessions
-  // created on this executor by *another* client (the PWA, another
-  // panel) — land as panel entries pinned to the right executor with
-  // daemonSessionId set, so the reconciler will `attach` (not create)
-  // on their first spawn and `get_messages` will replay history.
-  //
-  // Filtered by `lastImportTime`: anything whose `updated` is at or
-  // below the cutoff is pre-existing daemon residue (cold sessions
-  // accumulated by older runs, every chat ever created) and would
-  // otherwise carpet-bomb the tab strip on first attach. Live and
-  // newly-touched sessions still come through; the cutoff advances to
-  // the highest imported `updated` so each import only moves forward.
+  // `kind:"sessions"` push) into sessionsList, via the session
+  // registry: new ids past the import cutoff — sessions created on an
+  // executor by *another* client (the PWA, another panel) — land as
+  // panel entries pinned to the right executor with daemonSessionId
+  // set, so the reconciler will `attach` (not create) on their first
+  // spawn; entries whose daemon id this connection observed and which
+  // then vanished from the view were deleted upstream and drop out (the
+  // reconciler stop/destroys the orphaned PiSession in the same pass).
+  // The cutoff, pending-create deferral and "seen this connection"
+  // gating all live in SessionRegistry.js — this wrapper only snapshots
+  // the *connected* executors (disconnect-induced empties are "we don't
+  // know", not "they're gone") and runs the side effects the fold
+  // requests.
   function _importRemoteSessions() {
-    if (lastImportTime <= 0) return; // sessions.json not loaded yet
-    // Snapshot per-executor remoteSessions (only for *connected* execs)
-    // so we treat disconnect-induced empties as "we don't know", not
-    // as "they're gone".
-    const liveByExec = ({});
+    const views = [];
     for (let i = 0; i < executorPool.count; i += 1) {
       const exec = executorPool.objectAt(i);
       if (!exec || !exec.connected) continue;
-      const set = new Set();
-      const list = exec.remoteSessions || [];
-      for (const r of list) if (r && r.id) set.add(r.id);
-      liveByExec[exec.inventoryId] = { exec: exec, ids: set };
+      views.push({
+        execId: exec.inventoryId,
+        epoch: exec.connectionEpoch,
+        sessions: exec.remoteSessions || [],
+      });
     }
-
-    const known = new Set();
-    for (const s of sessionsList) {
-      if (s.daemonSessionId) known.add(s.daemonSessionId);
+    const r = sessionRegistry.merge(views, (daemonId, name, execId) => {
+      const entry = _freshSessionEntry(
+        daemonId,
+        name || ("[" + execId + "] " + daemonId.slice(0, 8)),
+        execId
+      );
+      return entry;
+    });
+    if (!r.changed) return;
+    for (const e of r.added) _ensureSessionDirs(e.id, e.workspacePath);
+    if (r.removedIds.indexOf(activeSessionId) !== -1) {
+      activeSessionId = sessionsList.length > 0 ? sessionsList[0].id : "";
     }
-
-    // Symmetric of auto-import: entries whose daemon id has disappeared
-    // from a *connected* executor's view were deleted upstream (by a
-    // sibling client's delete_session). Drop them locally so the tab
-    // strip mirrors the daemon's truth — the reconciler stop/destroys
-    // the orphaned PiSession in the same pass. Gated on hasSeenRemote:
-    // only ids this connection actually observed earlier count as
-    // "deleted upstream". A persisted id the daemon never knew (state
-    // wiped, turnless session lost) is NOT a sibling delete — that entry
-    // must stay so its attach-bounce recovery can mint a fresh daemon
-    // session instead of the tab silently vanishing.
-    const removeIds = [];
-    for (const s of sessionsList) {
-      if (!s.daemonSessionId || !s.executor) continue;
-      const view = liveByExec[s.executor];
-      if (!view) continue; // executor offline → withhold judgement
-      if (view.ids.has(s.daemonSessionId)) continue;
-      if (!view.exec.hasSeenRemote(s.daemonSessionId)) continue;
-      removeIds.push(s.id);
-    }
-
-    // Additions: new ids past the time cutoff.
-    const adds = [];
-    let newCutoff = lastImportTime;
-    for (const invId in liveByExec) {
-      const view = liveByExec[invId];
-      const list = view.exec.remoteSessions || [];
-      for (let j = 0; j < list.length; j += 1) {
-        const r = list[j];
-        if (!r || !r.id || known.has(r.id)) continue;
-        // Our own create_session in flight: the broadcast carrying this id
-        // can be processed before the create promise's .then stamps the
-        // panel entry (promise jobs drain after the socket's message
-        // burst). The executor holds a claim for that window — skip, the
-        // owning PiSession will bind it.
-        if (view.exec.isPendingCreated(r.id)) continue;
-        const updated = r.updated || 0;
-        if (updated <= lastImportTime) continue;
-        known.add(r.id);
-        const entry = _freshSessionEntry(
-          r.id,
-          r.name || ("[" + invId + "] " + r.id.slice(0, 8)),
-          invId
-        );
-        entry.daemonSessionId = r.id;
-        adds.push(entry);
-        _ensureSessionDirs(entry.id, entry.workspacePath);
-        if (updated > newCutoff) newCutoff = updated;
-      }
-    }
-
-    if (removeIds.length === 0 && adds.length === 0) return;
-    const removeSet = new Set(removeIds);
-    let next = sessionsList.filter(s => !removeSet.has(s.id));
-    if (adds.length > 0) next = next.concat(adds);
-    sessionsList = next;
-    if (removeSet.has(activeSessionId)) {
-      activeSessionId = next.length > 0 ? next[0].id : "";
-    }
-    if (adds.length > 0) lastImportTime = newCutoff;
     _persist();
   }
 
@@ -1033,6 +958,7 @@ Item {
       if (!obj) {
         obj = _piSessionComponent.createObject(root, {
           backend: root,
+          registry: sessionRegistry,
           sessionId: s.id,
           sessionName: s.name,
           workspacePath: s.workspacePath,

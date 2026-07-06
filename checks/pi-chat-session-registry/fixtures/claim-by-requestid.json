@@ -1,0 +1,36 @@
+{
+  "description": "A create ack correlated by requestId stamps the daemon id onto the panel entry that began the create; the daemon's follow-up broadcast then finds the id claimed and imports nothing.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "" }
+      ],
+      "cutoff": 1000
+    },
+    { "op": "beginCreate", "requestId": "r1", "panelId": "p1" },
+    { "op": "resolveCreate", "requestId": "r1", "daemonId": "d9" },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d9", "name": "Chat 1", "updated": 5000 }]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "d9", "executor": "host" }
+    ],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "beginCreate" },
+      { "op": "resolveCreate", "panelId": "p1", "changed": true },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false }
+    ]
+  }
+}

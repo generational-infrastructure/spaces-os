@@ -3,12 +3,13 @@
 
 A persisted entry re-attaches (plain attach ack) while a brand-new
 session's create_session is in flight on the same executor connection.
-The attach ack must not consume the pending create's FIFO resolver:
-pre-fix, the new entry was stamped with the PERSISTED session's daemon
-id (two tabs sharing one daemon session) and the real create ack
-resolved nothing. The fake daemon forces the interleave
-deterministically by withholding the attach ack until the create
-arrives, then sending attach-ack before create-ack.
+The attach ack must never be taken for the create's ack (which the
+daemon marks `created` and stamps with the requestId echo): pre-fix
+(FIFO resolution, no correlation id), the new entry was stamped with
+the PERSISTED session's daemon id (two tabs sharing one daemon
+session) and the real create ack resolved nothing. The fake daemon
+forces the interleave deterministically by withholding the attach ack
+until the create arrives, then sending attach-ack before create-ack.
 """
 
 from __future__ import annotations

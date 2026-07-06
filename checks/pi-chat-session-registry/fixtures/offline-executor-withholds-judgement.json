@@ -1,0 +1,34 @@
+{
+  "description": "A disconnected executor (absent from the merge's views) yields no judgment: its entries are neither removed nor re-imported, even when its ids were observed earlier.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "d1" }
+      ],
+      "cutoff": 1000
+    },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d1", "name": "Chat 1", "updated": 900 }]
+        }
+      ]
+    },
+    { "op": "merge", "views": [] }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "d1" }
+    ],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false }
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "description": "release() clears an entry's daemon binding (restart / stale recovery) without touching siblings; stampDefault pins executor:\"\" legacies to the default executor exactly once.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "", "daemonSessionId": "d1" },
+        { "id": "p2", "name": "Chat 2", "executor": "kiwi", "daemonSessionId": "d2" }
+      ],
+      "cutoff": 1000
+    },
+    { "op": "release", "panelId": "p1" },
+    { "op": "release", "panelId": "p1" },
+    { "op": "stampDefault", "executor": "host" },
+    { "op": "stampDefault", "executor": "host" }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "", "executor": "host" },
+      { "id": "p2", "daemonSessionId": "d2", "executor": "kiwi" }
+    ],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "release", "changed": true },
+      { "op": "release", "changed": false },
+      { "op": "stampDefault", "changed": true },
+      { "op": "stampDefault", "changed": false }
+    ]
+  }
+}

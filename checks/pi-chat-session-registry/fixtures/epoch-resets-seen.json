@@ -1,0 +1,51 @@
+{
+  "description": "Reconnect starts a new observation epoch: 'deleted upstream' judgments are only ever made against ids the CURRENT connection observed. An id seen on epoch 1 and missing on epoch 2's first view is kept; once epoch 2 has shown it, its disappearance removes the entry.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "d1" }
+      ],
+      "cutoff": 1000
+    },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d1", "name": "Chat 1", "updated": 900 }]
+        }
+      ]
+    },
+    {
+      "op": "merge",
+      "views": [{ "execId": "host", "epoch": 2, "sessions": [] }]
+    },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 2,
+          "sessions": [{ "id": "d1", "name": "Chat 1", "updated": 900 }]
+        }
+      ]
+    },
+    {
+      "op": "merge",
+      "views": [{ "execId": "host", "epoch": 2, "sessions": [] }]
+    }
+  ],
+  "expect": {
+    "sessions": [],
+    "lastImportTime": 1000,
+    "trace": [
+      { "op": "load" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "merge", "added": [], "removedIds": ["p1"], "changed": true }
+    ]
+  }
+}

@@ -119,15 +119,18 @@ async def handler(ws, *_):
             _created += 1
             sid = f"sess-{EXEC_ID}-{_created}"
             sessions[sid] = {"name": msg.get("name") or "", "updated": now_ms()}
-            await send(
-                {
-                    "v": 1,
-                    "kind": "attached",
-                    "sessionId": sid,
-                    "seq": 0,
-                    "created": True,
-                }
-            )
+            ack = {
+                "v": 1,
+                "kind": "attached",
+                "sessionId": sid,
+                "seq": 0,
+                "created": True,
+            }
+            # Echo the client-minted correlation id verbatim
+            # (protocol-fixtures/create-session.json).
+            if msg.get("requestId") is not None:
+                ack["requestId"] = msg["requestId"]
+            await send(ack)
             await broadcast_sessions()
 
         elif kind == "attach":

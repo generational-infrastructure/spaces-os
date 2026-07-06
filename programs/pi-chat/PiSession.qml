@@ -48,6 +48,13 @@ QtObject {
 
   // ── deployment env (set by the backend before spawn) ──
   property var    backend: null      // PiChatBackend, used for skill-config socket sends
+  // The panel↔daemon correspondence registry (SessionRegistry). Owns
+  // the daemonSessionId stamp on this entry: creates announce
+  // themselves via beginCreate/resolveCreate/failCreate, and dropped
+  // bindings (restart, stale recovery) release through it. Null when
+  // this session runs without a backend (transport-level checks) — all
+  // registry calls are guarded no-ops then.
+  property var    registry: null
   // The pi-sessiond executor this session lives on (PiExecutor). Null
   // until the backend resolves the entry's executor id — spawn() is a
   // guarded no-op then.
@@ -244,8 +251,7 @@ QtObject {
     initialDaemonSessionId = "";
     // Clear the persisted mapping so a panel restart mid-create doesn't
     // re-attach to the deleted session.
-    if (backend && backend._onDaemonSessionAssigned)
-      backend._onDaemonSessionAssigned(sessionId, "");
+    if (registry && registry.release(sessionId)) needsPersist();
     spawn();
   }
 
@@ -335,12 +341,13 @@ QtObject {
     _wsCreate();
   }
 
-  // Issue one create_session once the executor is welcomed. On failure (the
-  // executor dropped mid-create, rejecting the pending create) retry on the
-  // next welcome rather than leaving the session cold with its prompt
-  // buffered — a single spawn() must eventually attach even across a
-  // reconnect, since repeat spawns coalesce in _wsSpawn instead of re-arming
-  // the create.
+  // Issue one create_session once the executor is welcomed. Each create
+  // carries a client-minted requestId the daemon echoes on the ack, so the
+  // ack routes here directly. On failure (the executor dropped mid-create,
+  // failing the pending create) retry on the next welcome rather than
+  // leaving the session cold with its prompt buffered — a single spawn()
+  // must eventually attach even across a reconnect, since repeat spawns
+  // coalesce in _wsSpawn instead of re-arming the create.
   function _wsCreate() {
     executor.whenConnected(() => {
       if (!_shouldRun) { _wsCreating = false; return; }
@@ -348,33 +355,39 @@ QtObject {
       if (_wsAttached || _daemonSessionId) { _wsCreating = false; return; }
       const opts = { name: sessionName };
       if (modelPref) opts.model = modelPref;
-      executor.createSession(opts).then(id => {
+      const requestId = executor.createSession(opts, id => {
+        // Runs synchronously inside the ack dispatch — everything stamped
+        // here is visible before the daemon's follow-up `sessions`
+        // broadcast (a later message) reaches the importer.
         _wsCreating = false;
         if (!_shouldRun) {
           // Stop raced the create: the daemon session exists but nobody
-          // claims it — release so a later `sessions` push may import it.
+          // claims it — drop the pending claim so a later `sessions`
+          // push may import it.
           executor.detach(id);
-          executor.releaseCreated(id);
+          if (registry) registry.failCreate(requestId);
           return;
         }
         _daemonSessionId = id;
-        // Persist on the panel entry so a panel restart re-attaches to the
+        // Stamp the panel entry so a panel restart re-attaches to the
         // same daemon session (cross-restart history continuity) and so
         // an unsolicited `sessions` push that includes this id is dedup'd
         // against an existing entry instead of being auto-imported again.
-        if (backend && backend._onDaemonSessionAssigned)
-          backend._onDaemonSessionAssigned(sessionId, id);
-        // Entry stamped — the executor-side create claim (which kept the
-        // importer from adopting this id during the promise-job gap) can go.
-        executor.releaseCreated(id);
+        if (registry && registry.resolveCreate(requestId, id)) needsPersist();
         executor.subscribe(id, session);
         _wsAttached = true;
         _wsFlush();
-      }).catch(e => {
+      }, e => {
         Logger.w("PiSession", sessionId, "create_session failed", e);
+        if (registry) registry.failCreate(requestId);
         if (_shouldRun) _wsCreate(); // executor dropped mid-create: retry on reconnect
         else _wsCreating = false;
       });
+      // Announce the in-flight create: the registry defers adopting new
+      // ids from this entry's executor until the ack resolves it, so a
+      // created-but-unclaimed id never re-imports as a foreign session.
+      // (The ack can't beat this line — it arrives via the event loop.)
+      if (registry) registry.beginCreate(requestId, sessionId);
     });
   }
 
@@ -405,8 +418,9 @@ QtObject {
       executor.unsubscribe(_daemonSessionId);
     }
     _wsAttached = false;
-    // Any in-flight create's .then sees _shouldRun false and detaches the
-    // minted id; clear the flag so a later respawn isn't wedged.
+    // Any in-flight create's ack callback sees _shouldRun false and
+    // detaches the minted id; clear the flag so a later respawn isn't
+    // wedged.
     _wsCreating = false;
     streaming = false;
     typing = false;
@@ -484,8 +498,7 @@ QtObject {
     _wsAttached = false;
     // Clear the persisted mapping so a panel restart doesn't chase the
     // dead id again.
-    if (backend && backend._onDaemonSessionAssigned)
-      backend._onDaemonSessionAssigned(sessionId, "");
+    if (registry && registry.release(sessionId)) needsPersist();
     if (!_shouldRun) return;
     // Replay the attach-time bootstrap; these buffer in _wsPending and
     // flush once the fresh session acks (the originals bounced).

@@ -1,0 +1,48 @@
+{
+  "description": "A failed create clears its pending claim: imports deferred while it was in flight land on the next merge.",
+  "ops": [
+    {
+      "op": "load",
+      "sessions": [
+        { "id": "p1", "name": "Chat 1", "executor": "host", "daemonSessionId": "" }
+      ],
+      "cutoff": 1000
+    },
+    { "op": "beginCreate", "requestId": "r1", "panelId": "p1" },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "dX", "name": "pwa", "updated": 2000 }]
+        }
+      ]
+    },
+    { "op": "failCreate", "requestId": "r1" },
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "dX", "name": "pwa", "updated": 2000 }]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [
+      { "id": "p1", "daemonSessionId": "" },
+      { "id": "dX", "daemonSessionId": "dX" }
+    ],
+    "lastImportTime": 2000,
+    "trace": [
+      { "op": "load" },
+      { "op": "beginCreate" },
+      { "op": "merge", "added": [], "removedIds": [], "changed": false },
+      { "op": "failCreate" },
+      { "op": "merge", "added": ["dX"], "removedIds": [], "changed": true }
+    ]
+  }
+}

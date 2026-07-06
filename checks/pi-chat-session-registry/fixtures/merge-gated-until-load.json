@@ -1,0 +1,22 @@
+{
+  "description": "Before sessions.json is loaded (cutoff 0) merges import nothing — a sessions reply racing the index load must not adopt anything against an unarmed cutoff.",
+  "ops": [
+    {
+      "op": "merge",
+      "views": [
+        {
+          "execId": "host",
+          "epoch": 1,
+          "sessions": [{ "id": "d1", "name": "alpha", "updated": 2000 }]
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "sessions": [],
+    "lastImportTime": 0,
+    "trace": [
+      { "op": "merge", "added": [], "removedIds": [], "changed": false }
+    ]
+  }
+}
