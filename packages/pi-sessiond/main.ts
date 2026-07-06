@@ -21,13 +21,12 @@ import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { RpcDriver, type RpcFrame } from "./rpc-driver";
@@ -38,6 +37,13 @@ import {
 } from "./sandbox";
 import { startCredentialProxy } from "./proxy";
 import { stageFile } from "./staging";
+import { isSessionId, SessionStore } from "./session-store";
+import {
+  type DriverCallbacks,
+  type Session as SupervisedSession,
+  type SessionSpec,
+  SessionSupervisor,
+} from "./session-supervisor";
 import { fetchModels } from "./provider";
 import {
   callIntegrationTool,
@@ -272,7 +278,8 @@ const PROXY_PORT = openRouterProxy?.port;
 // auth.json / sessions / *.lock back.
 const AGENT_DIR = `${STATE_DIR}/pi-agent`;
 mkdirSync(AGENT_DIR, { recursive: true });
-mkdirSync(`${STATE_DIR}/sessions`, { recursive: true });
+// On-disk per-session layout (sessions/, workspaces/, meta sidecars).
+const store = new SessionStore(STATE_DIR);
 if (SETTINGS_TEMPLATE) {
   stageFile(SETTINGS_TEMPLATE, `${AGENT_DIR}/settings.json`);
 }
@@ -295,13 +302,6 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-// A session id is always a randomUUID() we minted. Validating it before it
-// builds filesystem paths closes a path-traversal hole on attach.sessionId.
-const SESSION_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-function isSessionId(value: string): boolean {
-  return SESSION_ID_RE.test(value);
-}
 
 // ---- model registry (local llama-swap provider, design §4.2) --------------
 
@@ -389,35 +389,11 @@ interface ConnData {
 }
 type Conn = ServerWebSocket<ConnData>;
 
-interface BufferedEvent {
-  seq: number;
-  data: string;
-}
 const BUFFER_CAP = 4096;
 
-interface Session {
-  id: string;
-  name: string; // display label (create_session.name); "" if unnamed
-  driver: RpcDriver;
-  seq: number;
-  subscribers: Set<Conn>;
-  buffer: BufferedEvent[];
-  busy: boolean; // mid-turn (agent_start..agent_end); never GC a busy session
-  parked: boolean; // blocked on a human (§6); never GC a parked session
-  lastActivity: number; // epoch ms of last event/command; drives idle-GC + LRU
-  // Open side-channel requests (id -> method) awaiting an answer; used to dedupe
-  // responses first-answer-wins and to drive the parked state.
-  pendingSidechannels: Map<string, string>;
-  // id -> relay the panel's answer to the child as an extension_ui_response.
-  resolvers: Map<string, (response: Record<string, unknown>) => void>;
-  // Integration tools the user granted "for this session" via the approval
-  // prompt (gateway, design §9); keyed by the LLM-facing tool name.
-  toolGrants: Set<string>;
-  // Open approval prompts (id -> resolve with the decision) awaiting the
-  // panel's verdict; mirrors pendingSidechannels but supervisor-initiated.
-  pendingApprovals: Map<string, (decision: string) => void>;
-}
-const sessions = new Map<string, Session>();
+// A supervised session with this transport's websocket clients attached (the
+// supervisor's opaque client type C = Conn).
+type Session = SupervisedSession<Conn>;
 // All authenticated websockets, regardless of which session(s) they're
 // attached to. The session-list is a per-executor concern (not per-session),
 // so broadcasts of `kind: "sessions"` (design §12) fan out over this set —
@@ -470,40 +446,20 @@ function broadcastSessionsList(): void {
   const data = JSON.stringify({
     v: 1,
     kind: "sessions",
-    sessions: listSessions(),
+    sessions: supervisor.list(),
   });
   for (const ws of authedConns) ws.send(data);
 }
 
-// ---- session paths & metadata ---------------------------------------------
+// ---- per-session sandbox staging -------------------------------------------
 
-function sessionDirOf(id: string): string {
-  return `${STATE_DIR}/sessions/${id}`;
-}
-function workdirOf(id: string): string {
-  return `${STATE_DIR}/workspaces/${id}`;
-}
-// Each Landlock session's own writable agent dir (HOME / PI_CODING_AGENT_DIR),
-// nested under its session dir so the one rw grant on the session dir covers it
-// and concurrent instances never share a writable HOME.
-function agentDirOf(id: string): string {
-  return `${sessionDirOf(id)}/agent`;
-}
-// Each session's private TMPDIR, nested under its session dir (so the one rw
-// grant on sessions/<id> covers it).
-// The host's shared /tmp is absent from the allowlist and thus denied; tools
-// that ignore $TMPDIR and write /tmp/... would otherwise EACCES, so point them
-// here instead (design §5.1).
-function tmpDirOf(id: string): string {
-  return `${sessionDirOf(id)}/tmp`;
-}
 // Seed a session's private agent dir with the static config. COPIED, not
 // symlinked: pi's settings-manager and startup migration rewrite settings.json,
 // and the store templates are 0444 — a symlink would EACCES. auth.json /
 // models.json / *.lock pi creates here itself; the long-term memory store stays
 // shared (granted separately in writeLandlockPolicy).
 function seedAgentDir(id: string): string {
-  const dir = agentDirOf(id);
+  const dir = store.agentDirOf(id);
   mkdirSync(dir, { recursive: true });
   if (SETTINGS_TEMPLATE) stageFile(SETTINGS_TEMPLATE, `${dir}/settings.json`);
   if (BASH_CONFIRM_TEMPLATE) {
@@ -529,7 +485,7 @@ function modelPort(url: string): number | undefined {
 // file-exchange dir are added below. Written next to the session so the launcher
 // (pre-exec, uid 1000) can read it.
 function writeLandlockPolicy(id: string): string {
-  const rwDirs = [workdirOf(id), sessionDirOf(id)];
+  const rwDirs = [store.workdirOf(id), store.sessionDirOf(id)];
   const rwFiles: string[] = [];
   const roDirs: string[] = [];
   const roFiles: string[] = [];
@@ -569,39 +525,10 @@ function writeLandlockPolicy(id: string): string {
     roFiles,
     connectPorts,
   });
-  mkdirSync(sessionDirOf(id), { recursive: true });
-  const path = `${sessionDirOf(id)}/landlock.json`;
+  mkdirSync(store.sessionDirOf(id), { recursive: true });
+  const path = `${store.sessionDirOf(id)}/landlock.json`;
   writeFileSync(path, JSON.stringify(policy));
   return path;
-}
-// Sibling of the session dir (not inside it) so pi never sees the daemon's
-// bookkeeping file in its session dir.
-function metaPathOf(id: string): string {
-  return `${STATE_DIR}/sessions/${id}.meta.json`;
-}
-
-// Persisted per-session metadata so a disposed/cold session can be reloaded with
-// the right provider/model (and its display name) after GC or a daemon restart.
-interface SessionMeta {
-  provider: string;
-  model: string;
-  name: string;
-}
-function writeSessionMeta(id: string, meta: SessionMeta): void {
-  writeFileSync(metaPathOf(id), JSON.stringify(meta));
-}
-function readSessionMeta(id: string): SessionMeta | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(metaPathOf(id), "utf8"));
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(parsed)) return undefined;
-  const provider = asString(parsed.provider);
-  const model = asString(parsed.model);
-  if (provider === undefined || model === undefined) return undefined;
-  return { provider, model, name: asString(parsed.name) ?? "" };
 }
 
 // ---- side channels (extension_ui, design §6) -------------------------------
@@ -629,10 +556,10 @@ function fireNotifier(session: Session, method: string, title: string): void {
 // The child emitted an extension_ui_request over the rpc pipe. Methods that
 // expect an answer (confirm/select/input/editor) surface to attached clients
 // as the `extension_ui_request` event the panel renders — buffered like any
-// event so a reconnecting client replays it — and park + notify when none are
-// attached; the client's reply is relayed back to the child as an
-// extension_ui_response (resolveSidechannel). notify reaches the user
-// out-of-band when unattended. Other ui methods (status/widget/title) have no
+// event so a reconnecting client replays it. Raising it in the ledger parks
+// the session until the answer arrives (resolveSidechannel relays it back to
+// the child as an extension_ui_response); notify reaches the user out-of-band
+// when no client is attached. Other ui methods (status/widget/title) have no
 // panel affordance and are dropped, matching the old terminal no-ops.
 function surfaceSideChannel(session: Session, frame: RpcFrame): void {
   const id = asString(frame.id);
@@ -657,20 +584,19 @@ function surfaceSideChannel(session: Session, frame: RpcFrame): void {
     method !== "editor"
   )
     return;
-  session.pendingSidechannels.set(id, method);
-  session.resolvers.set(id, (response) =>
+  session.ledger.raise(id, method, (response) =>
     session.driver.send({ ...response, type: "extension_ui_response", id }),
   );
   broadcast(session, frame);
   if (session.subscribers.size === 0) {
-    session.parked = true;
     fireNotifier(session, method, asString(frame.title) ?? "");
   }
 }
 
 // First-answer-wins: relay the first client's response to the child as the
-// extension_ui_response it's awaiting, tell the other attached clients to
-// collapse, and unpark. A later (lost-race) answer just collapses its prompt.
+// extension_ui_response it's awaiting and tell the other attached clients to
+// collapse; claiming the ledger entry unparks when it was the last one open.
+// A later (lost-race) answer just collapses its prompt.
 function resolveSidechannel(
   session: Session,
   from: Conn,
@@ -678,8 +604,8 @@ function resolveSidechannel(
   response: Record<string, unknown>,
 ): void {
   if (id === undefined) return;
-  const resolver = session.resolvers.get(id);
-  if (!resolver || !session.pendingSidechannels.has(id)) {
+  const relay = session.ledger.claim(id);
+  if (!relay) {
     send(from, {
       v: 1,
       kind: "sidechannel_resolved",
@@ -689,9 +615,6 @@ function resolveSidechannel(
     });
     return;
   }
-  session.pendingSidechannels.delete(id);
-  session.resolvers.delete(id);
-  if (session.pendingSidechannels.size === 0) session.parked = false;
   const resolved = JSON.stringify({
     v: 1,
     kind: "sidechannel_resolved",
@@ -702,7 +625,7 @@ function resolveSidechannel(
   for (const other of session.subscribers) {
     if (other !== from) other.send(resolved);
   }
-  resolver(response);
+  relay(response);
 }
 
 // ---- integrations gateway (design §9) --------------------------------------
@@ -740,15 +663,14 @@ async function refreshIntegrations(): Promise<void> {
 
 // Raise the per-call approval prompt to the panel and await the verdict
 // ("once" | "session" | "deny"). Buffered like a side-channel so a reconnecting
-// client replays it; parks + notifies when unattended.
+// client replays it; parks via the ledger and notifies when unattended.
 function raiseApproval(
   session: Session,
   entry: RegistryEntry,
   args: Record<string, unknown>,
 ): Promise<string> {
   const id = randomUUID();
-  const { promise, resolve } = Promise.withResolvers<string>();
-  session.pendingApprovals.set(id, resolve);
+  const promise = session.ledger.raiseApproval(id);
   // A side-channel event payload (like extension_ui_request) routed by `type`;
   // the panel renders {once, session, deny} and replies approval_response.
   broadcast(session, {
@@ -760,7 +682,6 @@ function raiseApproval(
     args,
   });
   if (session.subscribers.size === 0) {
-    session.parked = true;
     fireNotifier(session, "approval", entry.piName);
   }
   return promise;
@@ -773,15 +694,7 @@ function resolveApproval(
   decision: string | undefined,
 ): void {
   if (id === undefined) return;
-  const resolve = session.pendingApprovals.get(id);
-  if (!resolve) return;
-  session.pendingApprovals.delete(id);
-  if (
-    session.pendingApprovals.size === 0 &&
-    session.pendingSidechannels.size === 0
-  )
-    session.parked = false;
-  resolve(decision ?? "deny");
+  session.ledger.settleApproval(id, decision ?? "deny");
 }
 
 // A forwarded integration tool call (from the spaces-integrations extension):
@@ -833,31 +746,24 @@ async function handleIntegrationCall(
 
 // ---- session lifecycle -----------------------------------------------------
 
-function peekBusy(session: Session, ev: RpcFrame): void {
-  if (ev.type === "agent_start") session.busy = true;
-  else if (ev.type === "agent_end") session.busy = false;
-}
-
-// Build a Session around a freshly spawned pi rpc-mode child. The supervisor
-// runs no model code: it spawns `pi --mode rpc` pinned to this session's
-// session-dir/id and workspace, then drives it over the rpc pipe. --session-id
-// creates the session jsonl when absent and resumes it when present, so one
-// path serves both a fresh create and a cold reload. The event stream wires to
-// the §12 broadcast; extension_ui requests surface as the side-channel. bash,
+// Spawn plumbing for one pi rpc-mode child, injected into the supervisor as
+// its driver factory: build the sandboxed argv, stage the session's private
+// agent dir / integration tool spec / scratch dir / Landlock policy, and hand
+// back the driver over the child's rpc pipe. --session-id creates the session
+// jsonl when absent and resumes it when present, so one path serves both a
+// fresh create and a cold reload. The supervisor runs no model code: bash,
 // the file tools, and extensions all run inside the child — wrapped in its
 // per-session Landlock unit (sandbox.ts) — never in the supervisor.
-function registerSession(
-  id: string,
-  name: string,
-  provider: string,
-  model: string,
-): Session {
+function spawnSessionDriver(
+  { id, name, provider, model }: SessionSpec,
+  callbacks: DriverCallbacks,
+): RpcDriver {
   const piArgv = [
     PI_BIN,
     "--mode",
     "rpc",
     "--session-dir",
-    sessionDirOf(id),
+    store.sessionDirOf(id),
     "--session-id",
     id,
     "--provider",
@@ -873,7 +779,7 @@ function registerSession(
   writeSessionToolSpec(integrationRegistry, agentDir);
   // Private per-session scratch dir, created up front so it exists under the
   // session-dir grant (and gets chowned with the tree in system scope).
-  const tmpDir = tmpDirOf(id);
+  const tmpDir = store.tmpDirOf(id);
   mkdirSync(tmpDir, { recursive: true });
   // The child's environment. The unit gets a FRESH env, so all the runtime needs
   // (agent dir, provider endpoint, memory store, skill plumbing) is set
@@ -902,176 +808,42 @@ function registerSession(
       landlockExec: LANDLOCK_EXEC,
       policyPath,
       unitName,
-      workdir: workdirOf(id),
+      workdir: store.workdirOf(id),
       memoryHigh: MEMORY_HIGH,
       env: childEnv,
     },
     piArgv,
   );
-  const session: Session = {
-    id,
-    name,
-    // Assigned immediately below; the driver's callbacks close over `session`,
-    // so it must exist before the driver is constructed.
-    driver: undefined as unknown as RpcDriver,
-    seq: 0,
-    subscribers: new Set(),
-    buffer: [],
-    busy: false,
-    parked: false,
-    lastActivity: Date.now(),
-    pendingSidechannels: new Map(),
-    resolvers: new Map(),
-    toolGrants: new Set(),
-    pendingApprovals: new Map(),
-  };
-  session.driver = new RpcDriver({
+  return new RpcDriver({
     argv,
-    cwd: workdirOf(id),
+    cwd: store.workdirOf(id),
     // systemd-run inherits the daemon env so `--user` reaches the user manager;
     // the unit itself gets a fresh env built from the --setenv list (childEnv).
     // The test stub likewise applies --setenv before exec'ing the child.
     env: undefined,
-    onEvent: (frame) => {
-      peekBusy(session, frame);
-      broadcast(session, frame);
-    },
-    onExtensionUI: (frame) => surfaceSideChannel(session, frame),
-    onExit: () => {
-      session.busy = false;
-      session.parked = false;
-    },
+    onEvent: callbacks.onEvent,
+    onExtensionUI: callbacks.onExtensionUI,
+    onExit: callbacks.onExit,
   });
-  sessions.set(id, session);
-  return session;
 }
 
-// A brand-new session: mint an id, record its provider/model/name so it can be
-// reloaded from disk later, and spawn its child (which creates the jsonl).
-function createSession(provider: string, model: string, name: string): Session {
-  enforceCeiling();
-  const id = randomUUID();
-  mkdirSync(sessionDirOf(id), { recursive: true });
-  mkdirSync(workdirOf(id), { recursive: true });
-  writeSessionMeta(id, { provider, model, name });
-  return registerSession(id, name, provider, model);
-}
-
-// Reload a cold session from its committed jsonl (design §5.1: attach to cold).
-// Spawning is synchronous, so concurrent attaches can't race a half-built
-// session — the first lands it in `sessions` before the next is dispatched.
-function resumeSession(id: string): Session | undefined {
-  const live = sessions.get(id);
-  if (live) return live;
-  const meta = readSessionMeta(id);
-  if (!meta) return undefined;
-  mkdirSync(workdirOf(id), { recursive: true });
-  return registerSession(id, meta.name, meta.provider, meta.model);
-}
-
-// ---- idle-GC + resident-session ceiling (design §5.1) ----------------------
+// The session registry + its lifecycle (create/resume/idle-GC/resident-
+// ceiling/delete, design §5.1/§12). main.ts keeps only the transport around
+// it: the event stream wires to the §12 broadcast and extension_ui requests
+// surface as side channels (§6).
+const supervisor = new SessionSupervisor<Conn>({
+  store,
+  executorId: EXECUTOR_ID,
+  maxLive: MAX_LIVE,
+  idleTimeoutMs: IDLE_TIMEOUT_MS,
+  createDriver: spawnSessionDriver,
+  onEvent: broadcast,
+  onSideChannel: surfaceSideChannel,
+  onSessionsChanged: broadcastSessionsList,
+});
 
 function touch(session: Session): void {
   session.lastActivity = Date.now();
-}
-
-// Safe to dispose: no attached clients, not mid-turn, not parked on a human.
-function isEvictable(session: Session): boolean {
-  return session.subscribers.size === 0 && !session.busy && !session.parked;
-}
-
-// Stop a session's pi child; its committed jsonl persists, so the next attach
-// reloads it (cold). Only ever called on idle sessions. The session's
-// listSessions state flips from "live-idle" back to "cold"; siblings learn via
-// the broadcast below.
-function gcSession(session: Session): void {
-  sessions.delete(session.id);
-  void session.driver.stop();
-  broadcastSessionsList();
-}
-
-function enforceCeiling(): void {
-  if (MAX_LIVE <= 0) return;
-  while (sessions.size >= MAX_LIVE) {
-    let victim: Session | undefined;
-    for (const s of sessions.values()) {
-      if (!isEvictable(s)) continue;
-      if (!victim || s.lastActivity < victim.lastActivity) victim = s;
-    }
-    if (!victim) break;
-    gcSession(victim);
-  }
-}
-
-function gcIdleSessions(): void {
-  if (IDLE_TIMEOUT_MS <= 0) return;
-  const now = Date.now();
-  for (const session of sessions.values()) {
-    if (isEvictable(session) && now - session.lastActivity > IDLE_TIMEOUT_MS) {
-      gcSession(session);
-    }
-  }
-}
-
-// ---- session registry (list_sessions, design §12) --------------------------
-
-type SessionState = "cold" | "live-idle" | "live-busy" | "parked";
-
-interface SessionInfo {
-  id: string;
-  name: string;
-  executor: string;
-  state: SessionState;
-  updated: number;
-}
-
-function liveState(session: Session): SessionState {
-  if (session.parked) return "parked";
-  return session.busy ? "live-busy" : "live-idle";
-}
-
-// Cold sessions: the meta sidecars on disk with no live AgentSession.
-function coldSessionIds(): string[] {
-  try {
-    return readdirSync(`${STATE_DIR}/sessions`)
-      .filter((f) => f.endsWith(".meta.json"))
-      .map((f) => f.slice(0, -".meta.json".length))
-      .filter(isSessionId);
-  } catch {
-    return [];
-  }
-}
-
-function coldUpdatedMs(id: string): number {
-  try {
-    return statSync(sessionDirOf(id)).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-function listSessions(): SessionInfo[] {
-  const out: SessionInfo[] = [];
-  for (const s of sessions.values()) {
-    out.push({
-      id: s.id,
-      name: s.name,
-      executor: EXECUTOR_ID,
-      state: liveState(s),
-      updated: s.lastActivity,
-    });
-  }
-  for (const id of coldSessionIds()) {
-    if (sessions.has(id)) continue;
-    out.push({
-      id,
-      name: readSessionMeta(id)?.name ?? "",
-      executor: EXECUTOR_ID,
-      state: "cold",
-      updated: coldUpdatedMs(id),
-    });
-  }
-  return out;
 }
 
 // ---- command dispatch into the session -------------------------------------
@@ -1212,7 +984,7 @@ async function dispatchCommand(
       // applies on the next prompt without restarting the child. Owned by the
       // supervisor: it is not an rpc command.
       const enabled = payload.enabled !== false;
-      const marker = `${sessionDirOf(session.id)}/memory-off`;
+      const marker = `${store.sessionDirOf(session.id)}/memory-off`;
       try {
         if (enabled) rmSync(marker, { force: true });
         else writeFileSync(marker, "");
@@ -1325,7 +1097,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       // Pick up a runtime enable/disable so a freshly enabled integration's
       // tools are staged for this new session (design §9).
       await refreshIntegrations();
-      const session = createSession(provider, model, name);
+      const session = supervisor.create(provider, model, name);
       session.subscribers.add(ws);
       send(ws, {
         v: 1,
@@ -1344,7 +1116,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     case "list_sessions": {
-      send(ws, { v: 1, kind: "sessions", sessions: listSessions() });
+      send(ws, { v: 1, kind: "sessions", sessions: supervisor.list() });
       return;
     }
     case "delete_session": {
@@ -1358,34 +1130,7 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         sendNoSuchSession(ws, sessionId);
         return;
       }
-      const live = sessions.get(sessionId);
-      if (live) {
-        sessions.delete(sessionId);
-        if (live.busy) live.driver.send({ type: "abort" });
-        try {
-          await live.driver.stop();
-        } catch {
-          // best-effort; we're tearing the session down regardless
-        }
-      }
-      // Each rm guards individually so a partial state still cleans up
-      // whatever else is on disk. `force` swallows ENOENT — fine because
-      // we're already in "make this go away" mode.
-      try {
-        rmSync(sessionDirOf(sessionId), { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-      try {
-        rmSync(metaPathOf(sessionId), { force: true });
-      } catch {
-        // ignore
-      }
-      try {
-        rmSync(workdirOf(sessionId), { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
+      await supervisor.delete(sessionId);
       send(ws, { v: 1, kind: "deleted", sessionId });
       broadcastSessionsList();
       return;
@@ -1396,11 +1141,11 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         sendNoSuchSession(ws, sessionId);
         return;
       }
-      const live = sessions.get(sessionId);
+      const live = supervisor.get(sessionId);
       // A cold restore stages the tool spec afresh; reflect the current
       // enabled set before it does.
       if (!live) await refreshIntegrations();
-      const session = live ?? resumeSession(sessionId);
+      const session = live ?? supervisor.resume(sessionId);
       if (!session) {
         sendNoSuchSession(ws, sessionId);
         return;
@@ -1422,14 +1167,14 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       return;
     }
     case "detach": {
-      const session = sessions.get(asString(parsed.sessionId) ?? "");
+      const session = supervisor.get(asString(parsed.sessionId) ?? "");
       session?.subscribers.delete(ws);
       if (session) touch(session);
       return;
     }
     case "command": {
       const sessionId = asString(parsed.sessionId) ?? "";
-      const session = sessions.get(sessionId);
+      const session = supervisor.get(sessionId);
       if (!session) {
         sendNoSuchSession(ws, sessionId);
         return;
@@ -1539,14 +1284,15 @@ Bun.serve<ConnData>({
       );
     },
     close(ws) {
-      for (const session of sessions.values()) session.subscribers.delete(ws);
+      for (const session of supervisor.values())
+        session.subscribers.delete(ws);
       authedConns.delete(ws);
     },
   },
 });
 
 if (IDLE_TIMEOUT_MS > 0) {
-  setInterval(gcIdleSessions, GC_INTERVAL_MS);
+  setInterval(() => supervisor.gcIdle(), GC_INTERVAL_MS);
 }
 
 console.error(
