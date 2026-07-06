@@ -8,11 +8,11 @@
 #   - the x86_64-only stub for non-x86 build hosts
 #   - the AGENT_VM_* env-var names — the string contract with
 #     modules/nixos/vm-debug.nix's headless QEMU options (that module
-#     imports this file for its option defaults)
+#     imports this file for the names)
 #
 # Consumers: packages/agent-vm (one headless node), packages/remote-agent-vm
-# (two headless nodes + GUI twins), packages/test-vm (single GUI launcher),
-# modules/nixos/vm-debug.nix (env names only).
+# (two headless nodes + GUI twins), packages/test-vm (single GUI launcher,
+# mkVmLauncher), modules/nixos/vm-debug.nix (env names only).
 let
   # Env-var names the driver exports for the qemu-vm runner and
   # vm-debug.nix's headless QEMU options read back. Single owner of the
@@ -22,6 +22,37 @@ let
     serial = "AGENT_VM_SERIAL"; # file QEMU appends the serial console to
     vnc = "AGENT_VM_VNC"; # VNC listen address (host:display)
   };
+
+  # Explanatory stub for non-x86 build hosts. Callers keep their VM
+  # derivations unforced on this branch, so evaluating it never touches
+  # the x86-pinned test-machine config — `nix flake check` succeeds on
+  # aarch64 without cross-building the x86 VM.
+  mkStub =
+    pkgs: name: stubName:
+    pkgs.runCommand "${stubName}-x86_64-only" { } ''
+      mkdir -p "$out/bin"
+      cat > "$out/bin/${name}" <<'EOF'
+      #!/bin/sh
+      echo "${stubName} is x86_64-linux only; no aarch64 test-machine host yet." >&2
+      exit 1
+      EOF
+      chmod +x "$out/bin/${name}"
+    '';
+
+  stateDirDiscovery = stateDirName: ''
+    # Locate the repo root so state is the same regardless of cwd.
+    state_dir=$PWD/${stateDirName}
+    d=$PWD
+    while [ "$d" != / ]; do
+      if [ -d "$d/.jj" ] || [ -d "$d/.git" ]; then
+        state_dir="$d/${stateDirName}"
+        break
+      fi
+      d=$(dirname "$d")
+    done
+  '';
+
+  reap = builtins.readFile ./reap-swtpm.sh;
 in
 {
   inherit env;
@@ -33,9 +64,10 @@ in
   #     name;                # CLI + binary name
   #     nodes = {            # one attr per VM
   #       <node> = {
-  #         vm;              # system.build.vm derivation (headless for CLI mode)
-  #         sshPort;         # host port forwarded to guest :22 (CLI mode)
-  #         guiVm ? null;    # GUI twin; a `gui` verb appears when every node has one
+  #         vm;              # system.build.vm derivation (headless)
+  #         sshPort;         # host port forwarded to guest :22
+  #         guiVm ? null;    # GUI twin; a `gui` verb appears when every
+  #                          # node has a non-null one
   #         vnc ? null;      # value for $AGENT_VM_VNC (multi-node headless run)
   #         disk ? "<node>.qcow2";
   #         description ? <node>;   # help-text footer (multi-node)
@@ -43,12 +75,8 @@ in
   #     };
   #     stateDirName ? ".<name>";   # under the repo root
   #     waitTimeout ? 120;          # default `wait` seconds
-  #     launcher ? false;           # true: no verbs — reap + preRun + exec-style
-  #                                 # passthrough of argv to the single node's VM
-  #     preRun ? "";                # launcher mode: shell run before the VM
   #     runBanner ? ""; guiBanner ? "";  # extra echo lines after backgrounding
   #     stubName ? name;            # non-x86 stub message/drv name
-  #     extraRuntimeInputs ? [ ];
   #   }
   #
   # With one node the verbs take no selector (agent-vm); with several,
@@ -62,26 +90,12 @@ in
       nodeOrder ? null,
       stateDirName ? ".${name}",
       waitTimeout ? 120,
-      launcher ? false,
-      preRun ? "",
       runBanner ? "",
       guiBanner ? "",
       stubName ? name,
-      extraRuntimeInputs ? [ ],
     }:
     if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
-      # `nodes` stays unforced here, so evaluating this branch never
-      # touches the x86-pinned test-machine config. Lets `nix flake
-      # check` succeed on aarch64 without cross-building the x86 VM.
-      pkgs.runCommand "${stubName}-x86_64-only" { } ''
-        mkdir -p "$out/bin"
-        cat > "$out/bin/${name}" <<'EOF'
-        #!/bin/sh
-        echo "${stubName} is x86_64-linux only; no aarch64 test-machine host yet." >&2
-        exit 1
-        EOF
-        chmod +x "$out/bin/${name}"
-      ''
+      mkStub pkgs name stubName
     else
       let
         inherit (pkgs) lib;
@@ -95,55 +109,13 @@ in
         san = n: lib.replaceStrings [ "-" ] [ "_" ] n;
         diskOf = n: (node n).disk or "${n}.qcow2";
         port = n: toString (node n).sshPort;
-        hasGui = multi && lib.all (n: (node n) ? guiVm) names;
+        hasGui = lib.all (n: (node n).guiVm or null != null) names;
         each = f: lib.concatMapStrings f names;
         eachSep = sep: f: lib.concatMapStringsSep sep f names;
         nodeAlt = lib.concatStringsSep "|" names;
 
-        stateDirDiscovery = ''
-          # Locate the repo root so state is the same regardless of cwd.
-          state_dir=$PWD/${stateDirName}
-          d=$PWD
-          while [ "$d" != / ]; do
-            if [ -d "$d/.jj" ] || [ -d "$d/.git" ]; then
-              state_dir="$d/${stateDirName}"
-              break
-            fi
-            d=$(dirname "$d")
-          done
-        '';
-
-        reap = builtins.readFile ./reap-swtpm.sh;
-
         # ------------------------------------------------------------------
-        # launcher mode (test-vm): no verbs, argv passes through to the VM.
-        # ------------------------------------------------------------------
-        launcherScript = lib.concatStrings [
-          stateDirDiscovery
-          ''
-            mkdir -p -- "$state_dir"
-            export NIX_DISK_IMAGE="$state_dir/${diskOf only}"
-
-            ${reap}
-            # The runner resolves NIX_SWTPM_DIR relative to $PWD (default
-            # test-machine-swtpm) and its swtpm daemon can outlive a
-            # hard-killed QEMU, wedging every later launch on the TPM state
-            # lock. Reap any orphan first; abort if that swtpm still serves
-            # a live VM.
-            reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
-
-          ''
-          preRun
-          ''
-            # No exec: keep the shell alive so any EXIT trap installed by the
-            # pre-run hook above runs after QEMU exits.
-            run_vm=(${(node only).vm}/bin/run-*-vm)
-            "''${run_vm[0]}" "$@"
-          ''
-        ];
-
-        # ------------------------------------------------------------------
-        # CLI mode: the verb dispatcher.
+        # the verb dispatcher
         # ------------------------------------------------------------------
         nodeTables = ''
           # Per-node lookups; unknown node → message + rc 2 (the $(…)
@@ -395,27 +367,33 @@ in
               ''
             ]
           else
-            ''
-              Usage: ${name} <command> [args...]
+            lib.concatStrings [
+              ''
+                Usage: ${name} <command> [args...]
 
-                run                start the headless test-machine VM
-                wait [seconds]     block until SSH answers (default ${toString waitTimeout}s)
-                ssh [args...]      ssh into the guest (test@localhost:${port only})
-                key <chord>        send a synthetic key chord via QMP
-                                   (alt-a, ctrl-alt-t, shift-space, …)
-                type <text>        type a literal string via QMP
-                screenshot <path>  save a PNG framebuffer dump via QMP
-                move <x> <y>       warp the absolute pointer to pixel (x, y)
-                click <x> <y> [b]  click button b (left/right/middle) at (x, y)
-                log [tail args]    print/follow the guest serial console
+                  run                start the headless test-machine VM
+              ''
+              # plain string: a one-line '' block would strip the 2-space indent
+              (lib.optionalString hasGui "  gui                start the VM in a native QEMU window (click around)\n")
+              ''
+                  wait [seconds]     block until SSH answers (default ${toString waitTimeout}s)
+                  ssh [args...]      ssh into the guest (test@localhost:${port only})
+                  key <chord>        send a synthetic key chord via QMP
+                                     (alt-a, ctrl-alt-t, shift-space, …)
+                  type <text>        type a literal string via QMP
+                  screenshot <path>  save a PNG framebuffer dump via QMP
+                  move <x> <y>       warp the absolute pointer to pixel (x, y)
+                  click <x> <y> [b]  click button b (left/right/middle) at (x, y)
+                  log [tail args]    print/follow the guest serial console
 
-              State lives at $state_dir.
-            '';
+                State lives at $state_dir.
+              ''
+            ];
 
         helpVerb = "help|--help|-h|*)\n  cat <<EOF\n" + helpText + "EOF\n  ;;\n";
 
         cliScript = lib.concatStrings [
-          stateDirDiscovery
+          (stateDirDiscovery stateDirName)
           (lib.optionalString (!multi) ''
             qmp="$state_dir/qmp.sock"
             serial="$state_dir/serial.log"
@@ -461,25 +439,71 @@ in
       in
       pkgs.writeShellApplication {
         inherit name;
-        runtimeInputs =
-          (
-            if launcher then
-              [
-                pkgs.coreutils
-                # pgrep, for the stale-swtpm reaper.
-                pkgs.procps
-              ]
-            else
-              [
-                pkgs.openssh
-                pkgs.sshpass
-                pkgs.python3
-                pkgs.coreutils
-                # pgrep, for the stale-swtpm reaper.
-                pkgs.procps
-              ]
-          )
-          ++ extraRuntimeInputs;
-        text = if launcher then launcherScript else cliScript;
+        runtimeInputs = [
+          pkgs.openssh
+          pkgs.sshpass
+          pkgs.python3
+          pkgs.coreutils
+          # pgrep, for the stale-swtpm reaper.
+          pkgs.procps
+        ];
+        text = cliScript;
+      };
+
+  # Build an exec-style VM launcher (test-vm): no verbs, argv passes
+  # straight through to the single VM's qemu-vm runner.
+  #
+  #   mkVmLauncher {
+  #     pkgs;
+  #     name;                # CLI + binary name
+  #     vm;                  # system.build.vm derivation
+  #     disk;                # qcow2 filename under the state dir
+  #     stateDirName ? ".<name>";   # under the repo root
+  #     preRun ? "";         # shell run before the VM
+  #     stubName ? name;     # non-x86 stub message/drv name
+  #   }
+  mkVmLauncher =
+    {
+      pkgs,
+      name,
+      vm,
+      disk,
+      stateDirName ? ".${name}",
+      preRun ? "",
+      stubName ? name,
+    }:
+    if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
+      mkStub pkgs name stubName
+    else
+      pkgs.writeShellApplication {
+        inherit name;
+        runtimeInputs = [
+          pkgs.coreutils
+          # pgrep, for the stale-swtpm reaper.
+          pkgs.procps
+        ];
+        text = pkgs.lib.concatStrings [
+          (stateDirDiscovery stateDirName)
+          ''
+            mkdir -p -- "$state_dir"
+            export NIX_DISK_IMAGE="$state_dir/${disk}"
+
+            ${reap}
+            # The runner resolves NIX_SWTPM_DIR relative to $PWD (default
+            # test-machine-swtpm) and its swtpm daemon can outlive a
+            # hard-killed QEMU, wedging every later launch on the TPM state
+            # lock. Reap any orphan first; abort if that swtpm still serves
+            # a live VM.
+            reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
+
+          ''
+          preRun
+          ''
+            # No exec: keep the shell alive so any EXIT trap installed by the
+            # pre-run hook above runs after QEMU exits.
+            run_vm=(${vm}/bin/run-*-vm)
+            "''${run_vm[0]}" "$@"
+          ''
+        ];
       };
 }

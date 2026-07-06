@@ -2,8 +2,8 @@
 # Run: nix build .#test-vm && ./result/bin/run-test-machine-vm
 #  or: nix run .#test-vm
 #
-# GUI-mode instantiation of the shared VM driver (../agent-vm/lib.nix,
-# launcher mode): no verbs, argv passes straight to QEMU's runner. The
+# GUI-mode instantiation of the shared VM launcher (../agent-vm/lib.nix's
+# mkVmLauncher): no verbs, argv passes straight to QEMU's runner. The
 # driver owns the repo-root discovery and stale-swtpm reaping; the disk
 # image lands at <repo>/.agent-vm/test-vm.qcow2 (gitignored) — same
 # workdir as the headless agent-vm, distinct filename, so the two stay
@@ -22,18 +22,17 @@
 let
   vmDriver = import ../agent-vm/lib.nix;
 in
-vmDriver.mkVmDriver {
+vmDriver.mkVmLauncher {
   inherit pkgs;
   # Keeping the binary name `run-test-machine-vm` preserves both
   # `nix run .#test-vm` and `./result/bin/run-test-machine-vm`.
   name = "run-test-machine-vm";
   stubName = "test-vm";
   stateDirName = ".agent-vm";
-  launcher = true;
-  nodes.machine = {
-    vm = inputs.self.nixosConfigurations.test-machine.config.system.build.vm;
-    disk = "test-vm.qcow2";
-  };
+  # Lazy under the non-x86 stub: mkVmLauncher never forces `vm` there,
+  # so evaluating on aarch64 skips the x86-pinned test-machine config.
+  vm = inputs.self.nixosConfigurations.test-machine.config.system.build.vm;
+  disk = "test-vm.qcow2";
   preRun = ''
     # One EXIT trap: the OpenRouter keyfile. (The display is QEMU's own
     # GTK window - see vm-debug.nix - so there is no viewer process

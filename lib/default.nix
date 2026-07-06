@@ -32,7 +32,6 @@ in
     value = inputs.nixpkgs.lib.nixosSystem {
       specialArgs = {
         inherit inputs flake;
-        hostName = installerHosts.${arch}.installer;
       };
       modules = [
         { nixpkgs.hostPlatform = arch; }
@@ -49,7 +48,6 @@ in
     value = inputs.nixpkgs.lib.nixosSystem {
       specialArgs = {
         inherit inputs flake;
-        hostName = installerHosts.${arch}.target;
       };
       modules = [
         { nixpkgs.hostPlatform = arch; }

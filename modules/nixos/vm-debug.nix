@@ -21,10 +21,10 @@
 }:
 let
   cfg = config.services.spaces.vm-debug;
-  # The AGENT_VM_* names are owned by the shared VM driver
-  # (packages/agent-vm/lib.nix); this module consumes them through the
-  # env options below, whose defaults come from that single owner.
-  vmDriver = import ../../packages/agent-vm/lib.nix;
+  # The AGENT_VM_* env-var names are owned by the shared VM driver
+  # (packages/agent-vm/lib.nix); the wrapper side exports exactly these
+  # names, so this module consumes them straight from that single owner.
+  inherit (import ../../packages/agent-vm/lib.nix) env;
   guiOpts = [
     # `nix run .#test-vm` shows the guest in QEMU's own GTK window.
     # virtio-vga-gl + gl=on give the guest accelerated GL.
@@ -54,12 +54,12 @@ let
     # primary head. nixos-test-driver uses the same shape and
     # successfully OCRs the niri framebuffer.
     "-display none"
-    "-vnc \${${cfg.env.vnc}:-127.0.0.1:99}"
-    "-qmp unix:\${${cfg.env.qmp}},server=on,wait=off"
+    "-vnc \${${env.vnc}:-127.0.0.1:99}"
+    "-qmp unix:\${${env.qmp}},server=on,wait=off"
     # Persist boot/journal output to a file: pueue captures the
     # wrapper's stdout but QEMU's -serial stdio bytes never reach
     # that log, so route serial straight to the env.serial file.
-    "-serial file:\${${cfg.env.serial}}"
+    "-serial file:\${${env.serial}}"
   ];
 in
 {
@@ -68,18 +68,6 @@ in
     at the env.qmp socket, VNC at env.vnc (default 127.0.0.1:5999),
     serial to the env.serial file. Used by `nix build .#agent-vm` for
     agent-driven dev loops'';
-
-  options.services.spaces.vm-debug.env = lib.mkOption {
-    type = lib.types.attrsOf lib.types.str;
-    default = vmDriver.env;
-    description = ''
-      Names of the environment variables the headless QEMU options read
-      at launch time (qmp = control socket path, serial = console log
-      file, vnc = VNC listen address). Defaults come from the shared VM
-      driver (packages/agent-vm/lib.nix), which owns the string contract
-      with the agent-vm / remote-agent-vm wrappers.
-    '';
-  };
 
   config.virtualisation.vmVariant = {
     virtualisation.memorySize = 8192;

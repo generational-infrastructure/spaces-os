@@ -83,17 +83,6 @@ in
   };
 
   config = {
-    # Guard distro's own data: exactly one of spawn/action/command per bind.
-    assertions = lib.mapAttrsToList (chord: bind: {
-      assertion =
-        lib.count (x: x != null) [
-          (bind.spawn or null)
-          (bind.action or null)
-          (bind.command or null)
-        ] == 1;
-      message = "keybinds.nix defaults.\"${chord}\": set exactly one of spawn/action/command.";
-    }) kb.defaults;
-
     wayland.windowManager.sway = {
       enable = true;
       config = {

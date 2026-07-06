@@ -16,7 +16,7 @@
 #   spawn        program to exec (a spaces-* wrapper for agent shortcuts)
 #   action       neutral WM action name (sway.nix maps it to sway syntax)
 #   command      raw sway command escape hatch
-#   description  human label (docs, hotkey overlays)
+#   description  human label (the hand-written docs table)
 #   sway         optional bool (default true): rendered by sway.nix
 #   niri         optional { title, order }: sed-injected into niri's kdl
 #                as `<chord> hotkey-overlay-title="<title>" { spawn …; }`.
@@ -175,7 +175,24 @@ let
     in
     lib.listToAttrs (switch ++ move);
 
-  binds = spawnDefaults // navDefaults // workspaceDefaults;
+  # Shape guard: exactly one of spawn/action/command per bind. Lives in
+  # the model (not in a renderer) so binds a renderer never sees — e.g.
+  # niri-only `sway = false` entries — are validated too; any renderer
+  # forcing a bind value trips the throw.
+  checkShape =
+    chord: bind:
+    if
+      lib.count (x: x != null) [
+        (bind.spawn or null)
+        (bind.action or null)
+        (bind.command or null)
+      ] == 1
+    then
+      bind
+    else
+      throw "modules/keybinds.nix: bind \"${chord}\" must set exactly one of spawn/action/command";
+
+  binds = lib.mapAttrs checkShape (spawnDefaults // navDefaults // workspaceDefaults);
 in
 {
   modifierDefault = "Mod4";

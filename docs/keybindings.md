@@ -14,9 +14,9 @@ rendered by two backends:
 - [`modules/home/sway.nix`](../modules/home/sway.nix) renders the full
   model as home-manager sway keybindings.
 
-The tables below are generated from that model, and
-`checks/niri-spaces-binds` fails if any model bind is missing here —
-adding a bind means one model entry plus one row below.
+The tables below are written by hand but kept in sync with that model:
+`checks/niri-spaces-binds` fails if any model bind's chord is missing
+here — adding a bind means one model entry plus one row below.
 
 ## Spaces-specific binds (niri)
 
