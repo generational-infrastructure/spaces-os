@@ -19,65 +19,14 @@ Exercises the REAL production path:
 No pi process, no pi-sessiond, no LLM, no compositor. ~5s.
 """
 
+
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
 
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Copy shell.qml + PiSession.qml + Msg.js + Reducer.js + NdjsonSocket.qml + Commons/ into work_dir/shell."""
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "PiSession.qml"),
-        os.path.join(shell_root, "PiSession.qml"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Msg.js"),
-        os.path.join(shell_root, "Msg.js"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "NdjsonSocket.qml"),
-        os.path.join(shell_root, "NdjsonSocket.qml"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Reducer.js"),
-        os.path.join(shell_root, "Reducer.js"),
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
+from qs_harness import Quickshell, fail, qs_env, reap, stage_shell, wait_until
 
 def stage_test_skill(state_dir: str) -> None:
     """Create a minimal test-skill in skills-defs with a known schema."""
@@ -98,42 +47,19 @@ def stage_test_skill(state_dir: str) -> None:
         )
 
 
-# ── quickshell IPC ────────────────────────────────────────────────
-
-
-def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:skill", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout
-
 
 # ── main ──────────────────────────────────────────────────────────
 
 
 def main():
-    (daemon_bin, skill_config_bin, qs_bin, test_dir, plugin_dir, work_dir) = sys.argv[
-        1:7
-    ]
+    qs_bin, test_dir, plugin_dir, work_dir, daemon_bin, skill_config_bin = sys.argv[1:7]
 
     # Directories.
     state_dir = os.path.join(work_dir, "state")
     skill_config_store = os.path.join(state_dir, "skill-config")
     workspace = os.path.join(work_dir, "workspace")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    sock_path = os.path.join(xdg_runtime, "spaces-skill-config.sock")
-    for d in [
-        state_dir,
-        skill_config_store,
-        workspace,
-        xdg_runtime,
-    ]:
+    for d in [state_dir, skill_config_store, workspace]:
         os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     # Stage a test skill in skills-defs — same layout the NixOS
     # module creates via tmpfiles symlinks.
@@ -142,16 +68,11 @@ def main():
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "TEST_WORKSPACE": workspace,
-        "TEST_SKILL_SOCK": sock_path,
-    }
+    env = qs_env(work_dir)
+    xdg_runtime = env["XDG_RUNTIME_DIR"]
+    sock_path = os.path.join(xdg_runtime, "spaces-skill-config.sock")
+    env["TEST_WORKSPACE"] = workspace
+    env["TEST_SKILL_SOCK"] = sock_path
 
     # CLI env: daemon socket + state dir (so it finds skills-defs).
     cli_env = dict(env)
@@ -173,14 +94,8 @@ def main():
         fail("skill-config-daemon never created socket")
 
     # 2. Start quickshell.
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:skill")
+    qs.start()
 
     # Track the CLI process once launched.
     cli_proc = None
@@ -188,21 +103,8 @@ def main():
     def cleanup():
         if cli_proc and cli_proc.poll() is None:
             cli_proc.kill()
-        qs_proc.terminate()
-        daemon_proc.terminate()
-        qs_proc.wait(timeout=5)
-        daemon_proc.wait(timeout=5)
-
-        def dump(label, path):
-            if os.path.isfile(path):
-                try:
-                    sys.stderr.write(f"\n== {label} ==\n")
-                    sys.stderr.write(open(path).read())
-                except Exception:
-                    pass
-
-        dump("qs.stdout.log", os.path.join(work_dir, "qs.stdout.log"))
-        dump("qs.stderr.log", os.path.join(work_dir, "qs.stderr.log"))
+        reap(qs.proc, daemon_proc)
+        qs.dump_logs()
 
         # Dump qslog if present.
         qs_rt = os.path.join(xdg_runtime, "quickshell")
@@ -217,25 +119,7 @@ def main():
                         sys.stderr.write(f"\n== {fpath} ==\n<unreadable>\n")
 
     try:
-        # Wait for IPC handler.
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if r.returncode != 0:
-                sys.stderr.write(
-                    f"[ipc_ready] exit={r.returncode} stderr={r.stderr!r}\n"
-                )
-                return False
-            return "test:skill" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            cleanup()
-            fail("quickshell never bound the test:skill IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         # Give the subscriber a moment to connect to the daemon.
         time.sleep(0.5)
@@ -269,7 +153,7 @@ def main():
 
         # 4. Poll for the prompt bubble.
         def has_prompt_bubble():
-            raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+            raw = qs.ipc("messages")
             try:
                 msgs = json.loads(raw)
             except Exception:
@@ -293,14 +177,14 @@ def main():
                     f"stderr: {cli_proc.stderr.read()!r}"
                 )
             cleanup()
-            raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+            raw = qs.ipc("messages")
             fail(
                 f"expected a prompt bubble with field='url' and "
                 f"promptState='pending', got messages={raw}"
             )
 
         # Find the request_id from the bubble.
-        raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+        raw = qs.ipc("messages")
         msgs = json.loads(raw)
         prompt = next(
             m
@@ -310,8 +194,7 @@ def main():
         request_id = prompt["id"]
 
         # 5. Submit a value through the QML IPC handler.
-        qs_ipc_call(
-            qs_bin, shell_qml, env, "submit", request_id, "https://test.example.com/api"
+        qs.ipc("submit", request_id, "https://test.example.com/api"
         )
 
         # 6. CLI should exit 0 with "saved ..." on stdout.
@@ -334,7 +217,7 @@ def main():
 
         # 7. Bubble should have transitioned to "submitted".
         def bubble_submitted():
-            raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+            raw = qs.ipc("messages")
             try:
                 msgs = json.loads(raw)
             except Exception:
@@ -346,7 +229,7 @@ def main():
 
         if not wait_until(bubble_submitted, timeout_s=5):
             cleanup()
-            raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
+            raw = qs.ipc("messages")
             fail(f"prompt bubble never transitioned to 'submitted', messages={raw}")
 
         # 8. Verify the value was persisted to config.toml.

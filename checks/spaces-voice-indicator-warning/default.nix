@@ -9,28 +9,8 @@
 # matching tooltip, and stays visible even under hideWhenIdle — without
 # needing a full compositor / agent-vm screenshot. ~3-10s.
 { pkgs, ... }:
-pkgs.runCommand "spaces-voice-indicator-warning-test"
-  {
-    nativeBuildInputs = [
-      pkgs.python3
-      pkgs.quickshell
-      pkgs.coreutils
-      pkgs.bash
-      pkgs.qt6.qtbase
-      pkgs.qt6.qtdeclarative
-    ];
-    pluginDir = ../../programs/noctalia-voice-indicator;
-  }
-  ''
-    set -euo pipefail
-    work=$TMPDIR/work
-    mkdir -p "$work"
-    export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml
-    python3 ${./driver.py} \
-      ${pkgs.lib.getExe pkgs.quickshell} \
-      ${./.} \
-      "$pluginDir" \
-      "$work"
-    touch $out
-  ''
+(import ../../lib/quickshell-check.nix pkgs).mkQuickshellCheck {
+  name = "spaces-voice-indicator-warning";
+  dir = ./.;
+  pluginDir = ../../programs/noctalia-voice-indicator;
+}

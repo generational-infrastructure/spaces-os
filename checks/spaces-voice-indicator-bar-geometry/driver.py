@@ -18,57 +18,13 @@ Headless quickshell, offscreen platform. No Wayland, no compositor. ~3-5s.
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
+
+from qs_harness import Quickshell, qs_env, stage_shell
 
 SCREEN = "DP-1"
 W = 1920
 H = 1080
-
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    # BarPulseGeometry.qml is the unit under test; stage it next to
-    # shell.qml so `BarPulseGeometry {}` resolves locally. BarPulse.qml
-    # (the PanelWindow/layer-shell wrapper) is deliberately NOT staged —
-    # it needs a Wayland compositor; the geometry math lives here.
-    shutil.copy2(
-        os.path.join(plugin_dir, "BarPulseGeometry.qml"),
-        os.path.join(shell_root, "BarPulseGeometry.qml"),
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
 
 
 def bar(**overrides) -> dict:
@@ -89,54 +45,24 @@ def bar(**overrides) -> dict:
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
-    shell_root = stage_shell(test_dir, plugin_dir, work_dir)
+    # BarPulseGeometry.qml is the unit under test; stage ONLY it next to
+    # shell.qml so `BarPulseGeometry {}` resolves locally. BarPulse.qml
+    # (the PanelWindow/layer-shell wrapper) is deliberately NOT staged —
+    # it needs a Wayland compositor; the geometry math lives here. The
+    # check-local Commons/ (stub qs.Commons Settings/Style singletons)
+    # rides in via the default test-dir overlay.
+    shell_root = stage_shell(
+        test_dir, plugin_dir, work_dir, plugin_files=["BarPulseGeometry.qml"]
+    )
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    os.makedirs(xdg_runtime, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
+    env = qs_env(work_dir)
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-    }
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:bargeom")
+    qs.start()
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
-
-    def dump_logs():
-        for label, name in [
-            ("qs.stdout", "qs.stdout.log"),
-            ("qs.stderr", "qs.stderr.log"),
-        ]:
-            path = os.path.join(work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {label} ==\n")
-                sys.stderr.write(open(path).read())
-
-    def die(msg):
-        dump_logs()
-        fail(msg)
-
-    def ipc(*args: str) -> str:
-        cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:bargeom", *args]
-        out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-        if out.returncode != 0:
-            raise RuntimeError(
-                f"qs ipc call {args} failed (exit={out.returncode}):\n"
-                f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-            )
-        return out.stdout.strip()
+    die = qs.die
+    ipc = qs.ipc
 
     def read_geom(cfg: dict, screen=SCREEN, w=W, h=H) -> dict:
         ipc("configure", json.dumps(cfg))
@@ -144,19 +70,7 @@ def main():
         return json.loads(ipc("geom"))
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:bargeom" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            die("quickshell never bound the test:bargeom IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         def close(a, b, label):
             if abs(float(a) - float(b)) > 0.5:
@@ -269,11 +183,7 @@ def main():
 
         sys.stderr.write("PASS: bar-pulse glow geometry tracks every bar config\n")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
 
 
 if __name__ == "__main__":

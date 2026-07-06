@@ -24,50 +24,26 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import socket
 import subprocess
 import sys
 import time
 import uuid
 
+from qs_harness import (
+    Quickshell,
+    fail,
+    free_port,
+    qs_env,
+    reap,
+    spawn,
+    stage_shell,
+    wait_for_port,
+    wait_until,
+)
+
 TOKEN = "stale-recovery-secret"
 MODELS = ["mock-model", "mock-alt"]
 GHOST_DAEMON_ID = str(uuid.uuid4())
-
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(interval_s)
-    return None
-
-
-def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def wait_for_port(port: int, *, timeout_s: float) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return True
-        except OSError:
-            time.sleep(0.3)
-    return False
 
 
 def start_mock_llm(mock_script: str, work_dir: str):
@@ -123,32 +99,7 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",
         }
     )
-    log = open(os.path.join(work_dir, "daemon.log"), "wb")
-    return subprocess.Popen([daemon_bin], env=env, stdout=log, stderr=subprocess.STDOUT)
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
+    return spawn([daemon_bin], work_dir, "daemon.log", env=env)
 
 
 def stage_stale_index(home: str) -> str:
@@ -184,29 +135,19 @@ def stage_stale_index(home: str) -> str:
 
 
 class Shell:
-    def __init__(self, qs_bin: str, shell_qml: str, env: dict, log_path: str):
-        self.qs_bin = qs_bin
-        self.shell_qml = shell_qml
-        self.env = env
-        self.log = open(log_path, "w")
-        self.proc = subprocess.Popen(
-            [qs_bin, "-p", shell_qml], env=env, stdout=self.log, stderr=self.log
+    def __init__(self, qs_bin: str, shell_qml: str, env: dict, work_dir: str):
+        self.qs = Quickshell(
+            qs_bin, shell_qml, env, work_dir, ipc_target="test:stale-recovery"
         )
+        self.qs.start()
 
     def ipc(self, *args: str, check: bool = True) -> str:
-        cmd = [
-            self.qs_bin,
-            "ipc",
-            "-p",
-            self.shell_qml,
-            "call",
-            "test:stale-recovery",
-            *args,
-        ]
-        out = subprocess.run(cmd, env=self.env, capture_output=True, text=True)
-        if check and out.returncode != 0:
-            fail(f"ipc {args} failed: {out.stdout!r} {out.stderr!r}")
-        return out.stdout.strip()
+        try:
+            return self.qs.ipc(*args)
+        except RuntimeError as exc:
+            if check:
+                fail(f"ipc {args} failed: {exc}")
+            return ""
 
     def wait_ready(self):
         if not wait_until(
@@ -215,29 +156,21 @@ class Shell:
             fail("shell IPC never came up")
 
     def stop(self):
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
+        reap(self.qs.proc, timeout_s=10)
 
 
 def main() -> None:
     if len(sys.argv) != 8:
         fail(
-            "usage: driver.py <daemon_bin> <qs_bin> <mock_llm> "
-            "<systemd_run_stub> <test_dir> <plugin_dir> <work_dir>"
+            "usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir> "
+            "<daemon_bin> <mock_llm> <systemd_run_stub>"
         )
-    daemon_bin, qs_bin, mock_script, stub, test_dir, plugin_dir, work_dir = sys.argv[
+    qs_bin, test_dir, plugin_dir, work_dir, daemon_bin, mock_script, stub = sys.argv[
         1:8
     ]
     os.makedirs(work_dir, exist_ok=True)
 
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
+    home = work_dir  # qs_env pins HOME to work_dir; the session index lives beneath it
 
     index_path = stage_stale_index(home)
 
@@ -250,12 +183,9 @@ def main() -> None:
     if not wait_for_port(port, timeout_s=60):
         fail(f"pi-sessiond never listened on {port} (exit={daemon_proc.poll()})")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             # Neutralize any real machine config (/etc/spaces/pi-chat.json
             # exists on dev machines and would shadow the executor seam).
@@ -263,11 +193,11 @@ def main() -> None:
             "SPACES_PI_CHAT_EXECUTORS": json.dumps(
                 [{"id": "host", "url": f"ws://127.0.0.1:{port}", "token": TOKEN}]
             ),
-        }
+        },
     )
 
     def dump_and_fail(msg: str) -> None:
-        for name in ("daemon.log", "qs.log", "mock-llm.log"):
+        for name in ("daemon.log", "qs.stdout.log", "qs.stderr.log", "mock-llm.log"):
             path = os.path.join(work_dir, name)
             if os.path.exists(path):
                 with open(path, errors="replace") as fh:
@@ -276,7 +206,7 @@ def main() -> None:
         fail(msg)
 
     try:
-        shell = Shell(qs_bin, shell_qml, env, os.path.join(work_dir, "qs.log"))
+        shell = Shell(qs_bin, shell_qml, env, work_dir)
         try:
             shell.wait_ready()
 

@@ -11,30 +11,10 @@
 # No pi worker, no LLM: completion is pure UI logic over a seeded cache, so
 # the launch path only needs the backend to mint a session entry. ~5-10s.
 { pkgs, ... }:
-pkgs.runCommand "pi-session-quick-launch-completion-test"
-  {
-    nativeBuildInputs = [
-      pkgs.python3
-      pkgs.quickshell
-      pkgs.coreutils
-      pkgs.bash
-      pkgs.qt6.qtbase
-      pkgs.qt6.qtdeclarative
-    ];
-    pluginDir = ../../programs/pi-chat;
-  }
-  ''
-    set -euo pipefail
-    work=$TMPDIR/work
-    mkdir -p "$work"
-    export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    # PiChatBackend instantiates PiExecutor, which imports QtWebSockets — it
-    # lives outside quickshell's bundled QML path, so add it explicitly.
-    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml:${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
-    python3 ${./driver.py} \
-      ${pkgs.lib.getExe pkgs.quickshell} \
-      ${./.} \
-      "$pluginDir" \
-      "$work"
-    touch $out
-  ''
+(import ../../lib/quickshell-check.nix pkgs).mkQuickshellCheck {
+  name = "pi-session-quick-launch-completion";
+  dir = ./.;
+  # PiChatBackend instantiates PiExecutor, which imports QtWebSockets — it
+  # lives outside quickshell's bundled QML path, so add it explicitly.
+  qtModules = [ pkgs.qt6.qtwebsockets ];
+}

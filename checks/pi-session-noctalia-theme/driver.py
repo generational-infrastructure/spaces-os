@@ -21,10 +21,9 @@ LLM. ~3s.
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
+
+from qs_harness import Quickshell, qs_env, stage_shell, wait_until
 
 # Distinct from the built-in fallback (#070722 surface / #11112d variant
 # / #fff59b primary), so a match can only mean the file was read.
@@ -70,44 +69,6 @@ SCHEME_DARK = {
 FALLBACK_SURFACE = "#070722"
 
 
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    # Stage the real Commons + Widgets + icons so the test exercises the
-    # actual Color/Style/Settings singletons and NIcon the panel ships.
-    for sub in ("Commons", "Widgets", "icons"):
-        shutil.copytree(
-            os.path.join(plugin_dir, sub),
-            os.path.join(shell_root, sub),
-            dirs_exist_ok=True,
-        )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
 def write_colors(noctalia_dir: str, scheme: dict) -> None:
     """Atomically write colors.json, mirroring noctalia's rename-on-save."""
     path = os.path.join(noctalia_dir, "colors.json")
@@ -117,25 +78,8 @@ def write_colors(noctalia_dir: str, scheme: dict) -> None:
     os.replace(tmp, path)
 
 
-def ipc_call(
-    qs_bin: str, shell_qml: str, env: dict, *args: str, target: str = "test:color"
-) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", target, *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout.strip()
-
-
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
-
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    os.makedirs(xdg_runtime, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     # The panel reads noctalia's palette from here (same env var noctalia
     # itself honours), so the test owns a private noctalia config dir.
@@ -146,56 +90,19 @@ def main():
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "NOCTALIA_CONFIG_DIR": noctalia_dir,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-    }
+    env = qs_env(work_dir, extra={"NOCTALIA_CONFIG_DIR": noctalia_dir})
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:color")
+    qs.start()
 
-    def dump_logs():
-        for label, name in [
-            ("qs.stdout", "qs.stdout.log"),
-            ("qs.stderr", "qs.stderr.log"),
-        ]:
-            path = os.path.join(work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {label} ==\n")
-                sys.stderr.write(open(path).read())
-
-    def die(msg):
-        dump_logs()
-        fail(msg)
+    ipc = qs.ipc
+    die = qs.die
 
     def eq(key: str, hex_: str) -> bool:
-        return ipc_call(qs_bin, shell_qml, env, "eq", key, hex_) == "true"
+        return ipc("eq", key, hex_) == "true"
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:color" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            die("quickshell never bound the test:color IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         # (1) Startup palette must come from colors.json, not the fallback.
         def loaded_light():
@@ -204,7 +111,7 @@ def main():
         if not wait_until(loaded_light, timeout_s=5):
             die(
                 "Color.mSurface did not load from noctalia colors.json "
-                f"(got {ipc_call(qs_bin, shell_qml, env, 'surface')!r}, "
+                f"(got {ipc('surface')!r}, "
                 f"want {SCHEME_LIGHT['mSurface']!r})"
             )
         if eq("surface", FALLBACK_SURFACE):
@@ -229,7 +136,7 @@ def main():
         if not wait_until(switched_dark, timeout_s=8):
             die(
                 "Color did not react to the colors.json rewrite "
-                f"(surface={ipc_call(qs_bin, shell_qml, env, 'surface')!r}, "
+                f"(surface={ipc('surface')!r}, "
                 f"want {SCHEME_DARK['mSurface']!r}) — no live theme reload"
             )
 
@@ -239,25 +146,23 @@ def main():
         # every colour, so the panel's icons would silently stop tracking
         # the theme (invisible on a dark hover bg).
         if not wait_until(
-            lambda: (
-                ipc_call(qs_bin, shell_qml, env, "ready", target="test:icon") == "true"
-            ),
+            lambda: ipc("ready", target="test:icon") == "true",
             timeout_s=5,
         ):
             die("NIcon never produced a recoloured source")
 
         def icon_baked(hex_: str) -> bool:
-            ipc_call(qs_bin, shell_qml, env, "setColor", hex_, target="test:icon")
+            ipc("setColor", hex_, target="test:icon")
 
             def baked():
-                m = ipc_call(qs_bin, shell_qml, env, "markup", target="test:icon")
+                m = ipc("markup", target="test:icon")
                 return hex_ in m and "currentColor" not in m
 
             return wait_until(baked, timeout_s=5)
 
         for hx in ("#ff00ff", "#00ff00"):
             if not icon_baked(hx):
-                m = ipc_call(qs_bin, shell_qml, env, "markup", target="test:icon")
+                m = ipc("markup", target="test:icon")
                 die(
                     f"NIcon did not bake {hx} into its SVG (markup={m[:120]!r}) "
                     "— icon recolour is not wired to `color`"
@@ -268,11 +173,7 @@ def main():
             "NIcon bakes theme colour into its SVG\n"
         )
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
 
 
 if __name__ == "__main__":

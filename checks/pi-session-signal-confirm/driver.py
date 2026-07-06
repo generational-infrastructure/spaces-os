@@ -14,79 +14,22 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
 
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
+from qs_harness import Quickshell, fail, qs_env, reap, stage_shell
+from qs_harness import wait_until as _wait_until
 
 
 def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.1):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            if predicate():
-                return True
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return False
+    return _wait_until(predicate, timeout_s=timeout_s, interval_s=interval_s)
 
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"),
-        os.path.join(shell_root, "shell.qml"),
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "SignalConfirm.qml"),
-        os.path.join(shell_root, "SignalConfirm.qml"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "NdjsonSocket.qml"),
-        os.path.join(shell_root, "NdjsonSocket.qml"),
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
-def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:signal-confirm", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout
 
 
 def main() -> None:
     if len(sys.argv) != 5:
         fail("usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>")
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
-    os.makedirs(work_dir, exist_ok=True)
-
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    os.makedirs(xdg_runtime, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     sock_path = os.path.join(work_dir, "panel.sock")
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
@@ -110,43 +53,25 @@ def main() -> None:
     if bridge.stdout.readline().strip() != "READY":
         fail("fake bridge did not signal READY")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             "TEST_SIGNAL_PANEL_SOCK": sock_path,
-        }
+        },
     )
 
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:signal-confirm")
+    qs.start()
+
+    def qs_ipc_call(_qs_bin: str, _shell_qml: str, _env: dict, *args: str) -> str:
+        return qs.ipc(*args)
 
     def cleanup_logs():
-        try:
-            qs_log.flush()
-            with open(os.path.join(work_dir, "qs.log")) as fh:
-                sys.stderr.write("\n== qs.log ==\n")
-                sys.stderr.write(fh.read())
-        except Exception:
-            pass
+        qs.dump_logs()
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:signal-confirm" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
+        if not wait_until(qs.ipc_ready, timeout_s=20):
             cleanup_logs()
             fail("IPC never registered")
 
@@ -284,20 +209,13 @@ def main() -> None:
 
         print("OK")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
         try:
             bridge.stdin.write("quit\n")
             bridge.stdin.flush()
         except OSError:
             pass
-        try:
-            bridge.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            bridge.kill()
+        reap(bridge, timeout_s=2)
 
 
 if __name__ == "__main__":

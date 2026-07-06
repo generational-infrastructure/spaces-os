@@ -16,77 +16,9 @@ straight into PiSession._handleEvent. ~3s.
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
 
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "PiSession.qml"),
-        os.path.join(shell_root, "PiSession.qml"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Msg.js"),
-        os.path.join(shell_root, "Msg.js"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Reducer.js"),
-        os.path.join(shell_root, "Reducer.js"),
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
-def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:thinking", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout
-
-
-def inject(qs_bin, shell_qml, env, event):
-    qs_ipc_call(qs_bin, shell_qml, env, "injectEvent", json.dumps(event))
-
-
-def get_messages(qs_bin, shell_qml, env):
-    raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
-    return json.loads(raw)
+from qs_harness import Quickshell, fail, qs_env, stage_shell
 
 
 def find_msg(msgs, **criteria):
@@ -95,77 +27,40 @@ def find_msg(msgs, **criteria):
             return m
     return None
 
-
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
     workspace = os.path.join(work_dir, "workspace")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in [workspace, xdg_runtime]:
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
+    os.makedirs(workspace, exist_ok=True)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "TEST_WORKSPACE": workspace,
-    }
+    env = qs_env(work_dir, extra={"TEST_WORKSPACE": workspace})
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:thinking")
+    qs.start()
+
+    def inject(event):
+        qs.ipc("injectEvent", json.dumps(event))
+
+    def get_messages():
+        return json.loads(qs.ipc("messages"))
 
     def cleanup():
-        qs_proc.terminate()
-        qs_proc.wait(timeout=5)
-        for label, name in [
-            ("qs.stdout", "qs.stdout.log"),
-            ("qs.stderr", "qs.stderr.log"),
-        ]:
-            path = os.path.join(work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {label} ==\n")
-                sys.stderr.write(open(path).read())
+        qs.stop()
+        qs.dump_logs()
 
     try:
-        # Wait for IPC.
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:thinking" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            cleanup()
-            fail("quickshell never bound the test:thinking IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         # ── Test 1: thinking_start → thinking_delta → thinking_end ──
 
         # Simulate agent_start (sets typing=true).
-        inject(qs_bin, shell_qml, env, {"type": "agent_start"})
+        inject({"type": "agent_start"})
 
         # thinking_start.
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_start",
@@ -174,7 +69,7 @@ def main():
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         thinking = find_msg(msgs, type="thinking")
         if not thinking:
             cleanup()
@@ -187,11 +82,7 @@ def main():
         thinking_id = thinking["id"]
 
         # thinking_delta — two chunks.
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_delta",
@@ -200,11 +91,7 @@ def main():
                 },
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_delta",
@@ -214,7 +101,7 @@ def main():
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         thinking = find_msg(msgs, id=thinking_id)
         if not thinking:
             cleanup()
@@ -224,11 +111,7 @@ def main():
             fail(f"thinking text mismatch: {thinking['text']!r}")
 
         # thinking_end.
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_end",
@@ -238,7 +121,7 @@ def main():
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         thinking = find_msg(msgs, id=thinking_id)
         if not thinking:
             cleanup()
@@ -251,20 +134,12 @@ def main():
 
         # ── Test 2: text follows thinking in same turn ──
 
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start"},
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -272,11 +147,7 @@ def main():
                 },
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -284,17 +155,13 @@ def main():
                 },
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "agent_end",
                 "messages": [],
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         # Must have both a thinking and a text bubble.
         thinking = find_msg(msgs, id=thinking_id)
         text_bubble = find_msg(msgs, type="", state="sent")
@@ -310,12 +177,8 @@ def main():
 
         # ── Test 3: empty thinking block gets removed ──
 
-        inject(qs_bin, shell_qml, env, {"type": "agent_start"})
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({"type": "agent_start"})
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_start",
@@ -324,7 +187,7 @@ def main():
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         empty_thinking = [
             m
             for m in msgs
@@ -336,11 +199,7 @@ def main():
         empty_id = empty_thinking[0]["id"]
 
         # End with no deltas and no content.
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_end",
@@ -350,12 +209,12 @@ def main():
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         if find_msg(msgs, id=empty_id):
             cleanup()
             fail("empty thinking bubble should have been removed")
 
-        inject(qs_bin, shell_qml, env, {"type": "agent_end", "messages": []})
+        inject({"type": "agent_end", "messages": []})
 
         print("OK")
     finally:

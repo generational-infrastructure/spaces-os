@@ -22,94 +22,12 @@ No pi-sessiond, no executor, no LLM, no compositor — events are injected
 straight into PiSession._handleEvent. ~3s.
 """
 
+
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
 
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    shutil.copytree(
-        os.path.join(test_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "PiSession.qml"),
-        os.path.join(shell_root, "PiSession.qml"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Msg.js"),
-        os.path.join(shell_root, "Msg.js"),
-    )
-    shutil.copy2(
-        os.path.join(plugin_dir, "Reducer.js"),
-        os.path.join(shell_root, "Reducer.js"),
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
-def qs_ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:tps", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout
-
-
-def inject(qs_bin, shell_qml, env, event):
-    qs_ipc_call(qs_bin, shell_qml, env, "injectEvent", json.dumps(event))
-
-
-def inject_with_elapsed(qs_bin, shell_qml, env, elapsed_ms, event):
-    qs_ipc_call(
-        qs_bin,
-        shell_qml,
-        env,
-        "injectEventWithElapsed",
-        str(elapsed_ms),
-        json.dumps(event),
-    )
-
-
-def get_started_at(qs_bin, shell_qml, env):
-    return int(qs_ipc_call(qs_bin, shell_qml, env, "startedAt").strip())
-
-
-def get_messages(qs_bin, shell_qml, env):
-    raw = qs_ipc_call(qs_bin, shell_qml, env, "messages")
-    return json.loads(raw)
+from qs_harness import Quickshell, fail, qs_env, stage_shell
 
 
 def find_msg(msgs, **criteria):
@@ -149,79 +67,45 @@ def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
     workspace = os.path.join(work_dir, "workspace")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in [workspace, xdg_runtime]:
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
+    os.makedirs(workspace, exist_ok=True)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-        "TEST_WORKSPACE": workspace,
-    }
+    env = qs_env(work_dir, extra={"TEST_WORKSPACE": workspace})
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:tps")
+    qs.start()
+
+    def inject(event):
+        qs.ipc("injectEvent", json.dumps(event))
+
+    def inject_with_elapsed(elapsed_ms, event):
+        qs.ipc("injectEventWithElapsed", str(elapsed_ms), json.dumps(event))
+
+    def get_started_at():
+        return int(qs.ipc("startedAt"))
+
+    def get_messages():
+        return json.loads(qs.ipc("messages"))
 
     def cleanup():
-        qs_proc.terminate()
-        qs_proc.wait(timeout=5)
-        for label, name in [
-            ("qs.stdout", "qs.stdout.log"),
-            ("qs.stderr", "qs.stderr.log"),
-        ]:
-            path = os.path.join(work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {label} ==\n")
-                sys.stderr.write(open(path).read())
+        qs.stop()
+        qs.dump_logs()
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:tps" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            cleanup()
-            fail("quickshell never bound the test:tps IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         # ── Test 1: tps = usage.output / elapsed_seconds ──
         # 100 tokens over a pinned 2 s elapsed window → 50.0 t/s.
 
-        inject(qs_bin, shell_qml, env, {"type": "agent_start"})
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({"type": "agent_start"})
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -230,11 +114,7 @@ def main():
                 },
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -244,18 +124,14 @@ def main():
             },
         )
 
-        inject_with_elapsed(
-            qs_bin,
-            shell_qml,
-            env,
-            2_000,
+        inject_with_elapsed(2_000,
             {
                 "type": "message_end",
                 "message": assistant_message(100),
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         text_bubble = find_msg(msgs, type="", text="hello world")
         if not text_bubble:
             cleanup()
@@ -272,27 +148,19 @@ def main():
 
         # ── Test 2: agent_end resets _assistantStartedAt ──
 
-        inject(qs_bin, shell_qml, env, {"type": "agent_end", "messages": []})
-        if get_started_at(qs_bin, shell_qml, env) != 0:
+        inject({"type": "agent_end", "messages": []})
+        if get_started_at() != 0:
             cleanup()
             fail("agent_end did not reset _assistantStartedAt to 0")
 
         # ── Test 3: message_end with output=0 is a no-op ──
 
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -301,11 +169,7 @@ def main():
                 },
             },
         )
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -314,18 +178,14 @@ def main():
                 },
             },
         )
-        inject_with_elapsed(
-            qs_bin,
-            shell_qml,
-            env,
-            1_000,
+        inject_with_elapsed(1_000,
             {
                 "type": "message_end",
                 "message": assistant_message(0),
             },
         )
 
-        msgs = get_messages(qs_bin, shell_qml, env)
+        msgs = get_messages()
         second = find_msg(msgs, type="", text="second")
         if not second:
             cleanup()
@@ -336,18 +196,14 @@ def main():
 
         # ── Test 4: message_end before any text bubble is a safe no-op ──
 
-        inject(qs_bin, shell_qml, env, {"type": "agent_end", "messages": []})
-        before_count = len(get_messages(qs_bin, shell_qml, env))
-        inject(
-            qs_bin,
-            shell_qml,
-            env,
-            {
+        inject({"type": "agent_end", "messages": []})
+        before_count = len(get_messages())
+        inject({
                 "type": "message_end",
                 "message": assistant_message(50),
             },
         )
-        after_count = len(get_messages(qs_bin, shell_qml, env))
+        after_count = len(get_messages())
         if before_count != after_count:
             cleanup()
             fail(

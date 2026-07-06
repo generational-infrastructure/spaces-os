@@ -26,10 +26,9 @@ Headless quickshell, offscreen platform. No pi, no LLM. ~3-5s.
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
+
+from qs_harness import Quickshell, qs_env, stage_shell, wait_until
 
 DAY = 86400000
 # A fixed, arbitrary epoch-ms base. All timestamps are injected relative
@@ -37,60 +36,8 @@ DAY = 86400000
 T0 = 1_700_000_000_000
 
 
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    # Stage the real Commons so the test exercises the actual
-    # ModelFrecency singleton the panel ships.
-    shutil.copytree(
-        os.path.join(plugin_dir, "Commons"),
-        os.path.join(shell_root, "Commons"),
-        dirs_exist_ok=True,
-    )
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
-def ipc_call(qs_bin: str, shell_qml: str, env: dict, *args: str) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:frecency", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
-    if out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout.strip()
-
-
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
-
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    os.makedirs(xdg_runtime, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     # ModelFrecency writes <HOME>/.local/state/spaces/pi/model-frecency.json;
     # FileView.writeAdapter does not create parents, so pre-create the dir.
@@ -108,60 +55,22 @@ def main():
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = {
-        "HOME": work_dir,
-        "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg_runtime,
-        "QT_QPA_PLATFORM": "offscreen",
-        "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
-        "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
-    }
+    env = qs_env(work_dir)
 
-    qs_stdout = open(os.path.join(work_dir, "qs.stdout.log"), "w")
-    qs_stderr = open(os.path.join(work_dir, "qs.stderr.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml],
-        env=env,
-        stdout=qs_stdout,
-        stderr=qs_stderr,
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:frecency")
+    qs.start()
 
-    def dump_logs():
-        for label, name in [
-            ("qs.stdout", "qs.stdout.log"),
-            ("qs.stderr", "qs.stderr.log"),
-        ]:
-            path = os.path.join(work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {label} ==\n")
-                sys.stderr.write(open(path).read())
-
-    def die(msg):
-        dump_logs()
-        fail(msg)
+    ipc = qs.ipc
+    die = qs.die
 
     def record(key, now):
-        ipc_call(qs_bin, shell_qml, env, "record", key, str(int(now)))
+        ipc("record", key, str(int(now)))
 
     def order(keys, now):
-        return json.loads(
-            ipc_call(qs_bin, shell_qml, env, "order", ",".join(keys), str(int(now)))
-        )
+        return json.loads(ipc("order", ",".join(keys), str(int(now))))
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:frecency" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=20):
-            die("quickshell never bound the test:frecency IPC target")
+        qs.wait_ipc_ready(timeout_s=20)
 
         # The ModelFrecency singleton is lazily constructed on first access,
         # and its Component.onCompleted fires an *async* FileView.reload().
@@ -170,7 +79,7 @@ def main():
         # settled before any record() — otherwise that late read clobbers the
         # first records and ordering silently reverts to input order.
         if not wait_until(
-            lambda: int(ipc_call(qs_bin, shell_qml, env, "loadGen")) >= 1,
+            lambda: int(ipc("loadGen")) >= 1,
             timeout_s=10,
         ):
             die("ModelFrecency startup FileView load never completed")
@@ -178,7 +87,7 @@ def main():
         # mostRecent on an empty store is "". PiChatBackend.newSession
         # treats that as nothing to inherit and leaves the entry on
         # pi's default. Must run before the first record().
-        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        mr = ipc("mostRecent")
         if mr != "":
             die(f"mostRecent on empty store: expected '', got {mr!r}")
 
@@ -227,17 +136,14 @@ def main():
         # recorded 3x (score 3) but at T0. local/b1 was recorded once
         # at T0+DAY, so b1 wins. A new chat must start on what the
         # user last selected, not on their overall favourite.
-        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        mr = ipc("mostRecent")
         if mr != "local/b1":
             die(f"mostRecent: expected 'local/b1' (max lastUsed), got {mr!r}")
 
         # (no mutation) sortModels must return a new array; its input
         # stays in input order.
         probe = json.loads(
-            ipc_call(
-                qs_bin,
-                shell_qml,
-                env,
+            ipc(
                 "mutationProbe",
                 ",".join(["local/x5", "local/a3", "local/y5"]),
                 str(int(T0)),
@@ -247,10 +153,10 @@ def main():
             die(f"sortModels mutated its input: {probe!r}")
 
         # (4) Persistence survives a FileView reload (state hit the disk).
-        gen0 = int(ipc_call(qs_bin, shell_qml, env, "loadGen"))
-        ipc_call(qs_bin, shell_qml, env, "reload")
+        gen0 = int(ipc("loadGen"))
+        ipc("reload")
         if not wait_until(
-            lambda: int(ipc_call(qs_bin, shell_qml, env, "loadGen")) > gen0,
+            lambda: int(ipc("loadGen")) > gen0,
             timeout_s=10,
         ):
             die("FileView reload never completed (loadGeneration did not bump)")
@@ -260,17 +166,13 @@ def main():
 
         # mostRecent survives the reload too. It reads the same
         # persisted lastUsed stamps the sort does.
-        mr = ipc_call(qs_bin, shell_qml, env, "mostRecent")
+        mr = ipc("mostRecent")
         if mr != "local/b1":
             die(f"mostRecent after reload: expected 'local/b1', got {mr!r}")
 
         sys.stderr.write("PASS: frecency ordering + persistence hold\n")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
 
 
 if __name__ == "__main__":

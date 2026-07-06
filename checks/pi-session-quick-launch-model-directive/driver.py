@@ -46,10 +46,21 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
+
+from qs_harness import (
+    Quickshell,
+    fail,
+    free_port,
+    qs_env,
+    reap,
+    spawn,
+    stage_shell,
+    wait_for_port,
+    wait_until,
+)
 
 TOKEN = "model-directive-secret"
 
@@ -66,43 +77,6 @@ PROMPT = "summarize logs"
 # a pending background session.
 BAD_PROMPT = "diagnose the outage"
 BAD_MODEL = "local/does-not-exist"
-
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            v = predicate()
-            if v:
-                return v
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return None
-
-
-def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def wait_for_port(port: int, *, timeout_s: float) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return True
-        except OSError:
-            time.sleep(0.1)
-    return False
 
 
 def start_mock_llm(mock_script: str, work_dir: str):
@@ -170,33 +144,7 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
             "SPACES_SESSIOND_IDLE_TIMEOUT_MS": "0",
         }
     )
-    log = open(os.path.join(work_dir, "daemon.log"), "wb")
-    return subprocess.Popen([daemon_bin], env=env, stdout=log, stderr=subprocess.STDOUT)
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Mirror the whole pi-chat tree, then drop in our test shell.qml."""
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
+    return spawn([daemon_bin], work_dir, "daemon.log", env=env)
 
 
 def stage_bin(harness_dir: str, work_dir: str) -> str:
@@ -208,19 +156,6 @@ def stage_bin(harness_dir: str, work_dir: str) -> str:
     shutil.copy2(os.path.join(harness_dir, "notify-send"), dst)
     os.chmod(dst, 0o755)
     return bin_dir
-
-
-def qs_ipc(
-    qs_bin: str, shell_qml: str, env: dict, *args: str, check: bool = True
-) -> str:
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:quick-launch", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=20)
-    if check and out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout.strip()
 
 
 def read_ndjson(path: str) -> list:
@@ -260,26 +195,20 @@ def agent_finished_notifications(witness: str) -> list:
 def main() -> None:
     if len(sys.argv) != 9:
         fail(
-            "usage: driver.py <daemon_bin> <qs_bin> <mock_llm> "
-            "<systemd_run_stub> <test_dir> <harness_dir> <plugin_dir> <work_dir>"
+            "usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir> "
+            "<daemon_bin> <mock_llm> <systemd_run_stub> <harness_dir>"
         )
     (
-        daemon_bin,
         qs_bin,
-        mock_script,
-        stub,
         test_dir,
-        harness_dir,
         plugin_dir,
         work_dir,
+        daemon_bin,
+        mock_script,
+        stub,
+        harness_dir,
     ) = sys.argv[1:9]
     os.makedirs(work_dir, exist_ok=True)
-
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
@@ -294,13 +223,10 @@ def main() -> None:
     if not wait_for_port(port, timeout_s=60):
         fail(f"pi-sessiond never listened on port {port} (exit={daemon_proc.poll()})")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "PATH": bin_dir + os.pathsep + env.get("PATH", ""),
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
+            "PATH": bin_dir + os.pathsep + os.environ.get("PATH", ""),
             "QSG_RHI_BACKEND": "null",
             "NOTIFY_WITNESS": notify_witness,
             # Executor topology seam: the lone "host" executor — the real
@@ -308,20 +234,22 @@ def main() -> None:
             "SPACES_PI_CHAT_EXECUTORS": json.dumps(
                 [{"id": "host", "url": f"ws://127.0.0.1:{port}", "token": TOKEN}]
             ),
-        }
+        },
     )
 
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:quick-launch")
+    qs.start()
+
+    def ipc(*args, check: bool = True) -> str:
+        try:
+            return qs.ipc(*args, timeout=20)
+        except RuntimeError:
+            if check:
+                raise
+            return ""
 
     def dump_logs():
-        for name in ("qs.log", "mock-llm.log", "daemon.log"):
-            p = os.path.join(work_dir, name)
-            if os.path.isfile(p):
-                sys.stderr.write(f"\n== {name} ==\n")
-                sys.stderr.write(open(p, errors="replace").read()[-6000:])
+        qs.dump_logs(extra=("mock-llm.log", "daemon.log"))
         for label, p in (
             ("notify witness", notify_witness),
             ("request log", request_log),
@@ -335,29 +263,18 @@ def main() -> None:
         fail(msg)
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:quick-launch" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=30):
+        if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the test:quick-launch IPC target")
 
         if not wait_until(
             lambda: (
-                qs_ipc(qs_bin, shell_qml, env, "executorConnected", "host") == "true"
+                ipc("executorConnected", "host") == "true"
             ),
             timeout_s=30,
         ):
             die("panel never connected/authenticated to the host executor")
 
-        if qs_ipc(qs_bin, shell_qml, env, "panelVisible") != "false":
+        if ipc("panelVisible") != "false":
             die("panel reported visible; the test requires it hidden")
 
         # Failure path first: a model the daemon doesn't know must NOT
@@ -365,40 +282,36 @@ def main() -> None:
         # pending session. The daemon answers the panel's id-tagged
         # set_model with an error response, rejecting the awaited
         # _request, so the .then(send) never runs.
-        bad_id = qs_ipc(
-            qs_bin, shell_qml, env, "launchBackground", BAD_PROMPT, BAD_MODEL
-        )
+        bad_id = ipc("launchBackground", BAD_PROMPT, BAD_MODEL)
         if not bad_id:
             die("failed-model launchBackground returned no session id")
         # The rejection is async; once the pending mark clears we know the
         # .catch ran — which is the only branch that clears it without a
         # completed turn, so the prompt was provably never sent.
         if not wait_until(
-            lambda: qs_ipc(qs_bin, shell_qml, env, "isPending", bad_id) == "false",
+            lambda: ipc("isPending", bad_id) == "false",
             timeout_s=20,
         ):
             die("failed-model session stayed pending (reaper-exempt leak)")
         if request_mentions(request_log, BAD_PROMPT):
             die("failed-model launch sent the prompt anyway (ran on default model)")
 
-        sessions_before = json.loads(qs_ipc(qs_bin, shell_qml, env, "listSessions"))
+        sessions_before = json.loads(ipc("listSessions"))
         ids_before = {s["id"] for s in sessions_before}
 
         model_arg = "local/" + LAUNCH_MODEL
         # check=False: tolerate launchBackground ignoring the model opts in
         # the RED state — we still reach the observable model assertion.
-        new_id = qs_ipc(
-            qs_bin, shell_qml, env, "launchBackground", PROMPT, model_arg, check=False
-        )
+        new_id = ipc("launchBackground", PROMPT, model_arg, check=False)
 
         def new_session_id():
-            sessions = json.loads(qs_ipc(qs_bin, shell_qml, env, "listSessions"))
+            sessions = json.loads(ipc("listSessions"))
             extra = [s for s in sessions if s["id"] not in ids_before]
             return extra[0] if extra else None
 
-        sess = wait_until(new_session_id, timeout_s=10)
-        if not sess:
+        if not wait_until(new_session_id, timeout_s=10):
             die("launchBackground did not create a new session in the index")
+        sess = new_session_id()
         sid = sess["id"]
         if new_id and new_id != sid:
             sys.stderr.write(
@@ -411,7 +324,7 @@ def main() -> None:
         if not wait_until(
             lambda: (
                 "Background task complete"
-                in qs_ipc(qs_bin, shell_qml, env, "lastAssistantText", sid)
+                in ipc("lastAssistantText", sid)
             ),
             timeout_s=60,
         ):
@@ -425,9 +338,9 @@ def main() -> None:
         # a request carrying it fails this. No sleep: the streamed reply
         # waited on above guarantees the request is already logged, so
         # reading it now is deterministic.
-        reqs = wait_until(lambda: chat_requests(request_log) or None, timeout_s=10)
-        if not reqs:
+        if not wait_until(lambda: chat_requests(request_log) or None, timeout_s=10):
             die("mock LLM logged no chat-completions request")
+        reqs = chat_requests(request_log)
         used = [r.get("model") for r in reqs]
         if any(m != LAUNCH_MODEL for m in used):
             die(
@@ -454,35 +367,22 @@ def main() -> None:
             die(f"notification body {body!r} != prompt summary {PROMPT!r}")
 
         # (c) the session is selectable from the index.
-        qs_ipc(qs_bin, shell_qml, env, "selectSession", sid)
-        if qs_ipc(qs_bin, shell_qml, env, "activeSessionId") != sid:
+        ipc("selectSession", sid)
+        if ipc("activeSessionId") != sid:
             die("background session is not selectable from the index")
 
         # (d) the backend model cache dedups on provider/id — the
         # /v1/models cache and a live session's models collide on the same
         # id and must not double-list. A bare id takes the default provider.
-        merged = json.loads(qs_ipc(qs_bin, shell_qml, env, "mergeModelsProbe"))
+        merged = json.loads(ipc("mergeModelsProbe"))
         keys = sorted(f"{m['provider']}/{m['id']}" for m in merged)
         if keys != [f"local/{LAUNCH_MODEL}", "local/gpt-oss"]:
             die(f"model cache dedup wrong: {keys!r}")
 
         print("PASS")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
-        daemon_proc.terminate()
-        try:
-            daemon_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            daemon_proc.kill()
-        mock_proc.terminate()
-        try:
-            mock_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            mock_proc.kill()
+        qs.stop()
+        reap(daemon_proc, mock_proc)
 
 
 if __name__ == "__main__":

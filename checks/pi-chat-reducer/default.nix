@@ -13,30 +13,7 @@
 # worker and no mock LLM — just headless quickshell importing the real
 # Reducer.js and a driver that drives it over IPC. ~3-5s.
 { pkgs, ... }:
-pkgs.runCommand "pi-chat-reducer-test"
-  {
-    nativeBuildInputs = [
-      pkgs.python3
-      pkgs.quickshell
-      pkgs.coreutils
-      pkgs.bash
-      pkgs.qt6.qtbase
-      pkgs.qt6.qtdeclarative
-    ];
-    reducerJs = ../../programs/pi-chat/Reducer.js;
-    msgJs = ../../programs/pi-chat/Msg.js;
-  }
-  ''
-    set -euo pipefail
-    work=$TMPDIR/work
-    mkdir -p "$work"
-    export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml
-    python3 ${./driver.py} \
-      ${pkgs.lib.getExe pkgs.quickshell} \
-      "$reducerJs" \
-      "$msgJs" \
-      ${./.} \
-      "$work"
-    touch $out
-  ''
+(import ../../lib/quickshell-check.nix pkgs).mkQuickshellCheck {
+  name = "pi-chat-reducer";
+  dir = ./.;
+}

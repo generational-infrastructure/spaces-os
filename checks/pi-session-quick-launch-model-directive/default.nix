@@ -28,45 +28,25 @@ let
   llamaSwapDiscover =
     inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions.extensions."llama-swap-discover";
 in
-pkgs.runCommand "pi-session-quick-launch-model-directive-test"
-  {
-    meta.platforms = [ "x86_64-linux" ];
-    nativeBuildInputs = [
-      pkgs.python3
-      pkgs.quickshell
-      pkgs.coreutils
-      pkgs.bash
-      pkgs.qt6.qtbase
-      pkgs.qt6.qtdeclarative
-      pkgs.qt6.qtwebsockets
-    ];
-    pluginDir = ../../programs/pi-chat;
-  }
-  ''
-    set -euo pipefail
-    work=$TMPDIR/work
-    mkdir -p "$work"
-    export QT_PLUGIN_PATH=${pkgs.qt6.qtbase}/lib/qt-6/plugins
-    # PiExecutor imports QtWebSockets, which lives outside quickshell's bundled
-    # QML path — add it on both the Qt and the nixpkgs import-path vars.
-    export QML2_IMPORT_PATH=${pkgs.quickshell}/lib/qt-6/qml:${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
-    export NIXPKGS_QT6_QML_IMPORT_PATH=${pkgs.qt6.qtwebsockets}/lib/qt-6/qml
+(import ../../lib/quickshell-check.nix pkgs).mkQuickshellCheck {
+  name = "pi-session-quick-launch-model-directive";
+  dir = ./.;
+  qtModules = [ pkgs.qt6.qtwebsockets ];
+  env = {
     # The daemon requires the Landlock launcher; the passthrough stub stands in
     # (driver.py inherits this via os.environ.copy() into the daemon's env).
-    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    SPACES_SESSIOND_LANDLOCK_EXEC = "${stubs.landlockExec}/bin/pi-landlock-exec";
     # The child is spawned by bare name unless told otherwise; point it at the
     # exact pi the daemon re-exports (the launcher execs an absolute path, not a
     # PATH lookup) — same as production, which sets SPACES_SESSIOND_PI_BIN.
-    export SPACES_SESSIOND_PI_BIN=${pkgs.lib.getExe' daemon.pi "pi"}
-    export SPACES_QL_DISCOVER_EXT=${llamaSwapDiscover}
-    python3 ${./driver.py} \
-      ${pkgs.lib.getExe daemon} \
-      ${pkgs.lib.getExe pkgs.quickshell} \
-      ${harness}/mock-llm.py \
-      ${stubs.systemdRun}/bin/systemd-run \
-      ${./.} \
-      ${harness} \
-      "$pluginDir" \
-      "$work"
-    touch $out
-  ''
+    SPACES_SESSIOND_PI_BIN = pkgs.lib.getExe' daemon.pi "pi";
+    SPACES_QL_DISCOVER_EXT = "${llamaSwapDiscover}";
+  };
+  extraArgs = [
+    (pkgs.lib.getExe daemon)
+    "${harness}/mock-llm.py"
+    "${stubs.systemdRun}/bin/systemd-run"
+    "${harness}"
+  ];
+  platforms = [ "x86_64-linux" ];
+}

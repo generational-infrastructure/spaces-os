@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
 """Launch-bar grammar contract test.
 
-Stages the real programs/pi-chat/BarParse.js next to a tiny shell.qml,
+Stages the real programs/pi-chat/BarParse.js next to a tiny shell.qml
+(the whole-tree staging puts it in the shell root, so the bare
+`import "BarParse.js"` resolves the same way it does in production),
 runs quickshell offscreen, and drives the pure `parse(text, cursor)`
 helper over IPC (`test:bar-parse parse`). Each row of the grammar /
 behaviour matrix from the launch-bar completion plan is asserted against
 the JSON the parser returns. No pi worker, no LLM — the parser is pure.
-
-Usage: driver.py <qs_bin> <bar_parse_js> <test_dir> <work_dir>
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
 
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
+from qs_harness import Quickshell, qs_env, stage_shell, wait_until
 
 
 def utf16_len(s: str) -> int:
@@ -32,92 +26,34 @@ def utf16_len(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
 
 
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            if predicate():
-                return True
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, bar_parse_js: str, work_dir: str) -> str:
-    """Drop BarParse.js next to the test shell.qml so the bare
-    `import "BarParse.js"` resolves the same way it does in production."""
-    shell_root = os.path.join(work_dir, "shell")
-    os.makedirs(shell_root, exist_ok=True)
-    shutil.copy2(bar_parse_js, os.path.join(shell_root, "BarParse.js"))
-    shutil.copy2(
-        os.path.join(test_dir, "shell.qml"), os.path.join(shell_root, "shell.qml")
-    )
-    return shell_root
-
-
 def main() -> None:
-    if len(sys.argv) != 5:
-        fail("usage: driver.py <qs_bin> <bar_parse_js> <test_dir> <work_dir>")
-    qs_bin, bar_parse_js, test_dir, work_dir = sys.argv[1:5]
-    os.makedirs(work_dir, exist_ok=True)
+    qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
     home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
+    os.makedirs(home, exist_ok=True)
 
-    shell_root = stage_shell(test_dir, bar_parse_js, work_dir)
+    shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = os.environ.copy()
-    env.update(
-        {
+    env = qs_env(
+        work_dir,
+        extra={
             "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
             "QSG_RHI_BACKEND": "null",
             # UTF-8 argv decoding so the unicode-prompt row round-trips.
             "LC_ALL": "C.UTF-8",
             "LANG": "C.UTF-8",
             "PYTHONUTF8": "1",
-        }
+        },
     )
+
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:bar-parse")
+    qs.start()
+
+    die = qs.die
 
     def parse(text: str, cursor: int):
-        cmd = [
-            qs_bin,
-            "ipc",
-            "-p",
-            shell_qml,
-            "call",
-            "test:bar-parse",
-            "parse",
-            text,
-            str(cursor),
-        ]
-        out = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, encoding="utf-8", timeout=20
-        )
-        if out.returncode != 0:
-            raise RuntimeError(
-                f"parse({text!r},{cursor}) ipc failed (exit={out.returncode}):\n"
-                f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-            )
-        return json.loads(out.stdout.strip())
-
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
-
-    def die(msg):
-        p = os.path.join(work_dir, "qs.log")
-        if os.path.isfile(p):
-            sys.stderr.write("\n== qs.log ==\n")
-            sys.stderr.write(open(p, errors="replace").read()[-6000:])
-        fail(msg)
+        return json.loads(qs.ipc("parse", text, str(cursor), timeout=20))
 
     failures: list[str] = []
 
@@ -126,18 +62,7 @@ def main() -> None:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:bar-parse" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=30):
+        if not wait_until(lambda: qs.ipc_ready(), timeout_s=30):
             die("quickshell never bound the test:bar-parse IPC target")
 
         # `/` + Tab opens the directive-key menu.
@@ -274,11 +199,7 @@ def main() -> None:
 
         print("PASS")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
 
 
 if __name__ == "__main__":

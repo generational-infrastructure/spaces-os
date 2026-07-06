@@ -39,13 +39,21 @@ Usage: driver.py <qs_bin> <daemon_bin> <pi_bin> <discover_ext> <test_dir>
 import base64
 import json
 import os
-import shutil
-import socket
 import struct
-import subprocess
 import sys
-import time
 import zlib
+
+from qs_harness import (
+    Quickshell,
+    fail,
+    free_port,
+    qs_env,
+    reap,
+    spawn,
+    stage_shell,
+    wait_for_port,
+    wait_until,
+)
 
 TOKEN = "attach-image-secret"
 
@@ -63,95 +71,28 @@ def _tiny_png_bytes() -> bytes:
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            v = predicate()
-            if v:
-                return v
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return None
-
-
-def wait_for_port(port: int, *, timeout_s: float) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return True
-        except OSError:
-            time.sleep(0.1)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Stage the whole plugin tree (PiChatBackend pulls in PiExecutor /
-    PiSession / qs.Commons / qs.Widgets) with our shell.qml on top, fresh
-    mtimes so qmlcache can't pin stale bytecode keyed off /nix/store."""
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return os.path.join(shell_root, "shell.qml")
-
-
 def main() -> None:
     if len(sys.argv) != 9:
         fail(
-            "usage: driver.py <qs_bin> <daemon_bin> <pi_bin> <discover_ext> "
-            "<test_dir> <plugin_dir> <work_dir> <systemd_run>"
+            "usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir> "
+            "<daemon_bin> <pi_bin> <discover_ext> <systemd_run>"
         )
     (
         qs_bin,
-        daemon_bin,
-        pi_bin,
-        discover_ext,
         test_dir,
         plugin_dir,
         work_dir,
+        daemon_bin,
+        pi_bin,
+        discover_ext,
         systemd_run,
     ) = sys.argv[1:9]
     os.makedirs(work_dir, exist_ok=True)
 
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
     state_dir = os.path.join(work_dir, "sessiond-state")
     cred_dir = os.path.join(work_dir, "creds")
-    for d in (home, xdg_runtime, state_dir, cred_dir):
+    for d in (state_dir, cred_dir):
         os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     # Token file shared by both ends: the daemon loads it via
     # $CREDENTIALS_DIRECTORY/token, the executor entry points its tokenPath
@@ -169,7 +110,7 @@ def main() -> None:
         fh.write(png)
     expected_b64 = base64.b64encode(png).decode()
 
-    shell_qml = stage_shell(test_dir, plugin_dir, work_dir)
+    shell_qml = os.path.join(stage_shell(test_dir, plugin_dir, work_dir), "shell.qml")
 
     # pi child settings (staged into the daemon's agent dir via
     # SPACES_SESSIOND_PI_SETTINGS): the supervisor no longer embeds pi or does
@@ -193,16 +134,15 @@ def main() -> None:
     # ── mock LLM (records every completion request body) ──────────────────
     llm_port = free_port()
     capture_path = os.path.join(work_dir, "llm-requests.jsonl")
-    llm_log = open(os.path.join(work_dir, "mock-llm.log"), "w")
-    llm_proc = subprocess.Popen(
+    llm_proc = spawn(
         [
             sys.executable,
             os.path.join(test_dir, "mock-llm.py"),
             str(llm_port),
             capture_path,
         ],
-        stdout=llm_log,
-        stderr=subprocess.STDOUT,
+        work_dir,
+        "mock-llm.log",
     )
 
     # ── real pi-sessiond ───────────────────────────────────────────────────
@@ -233,18 +173,12 @@ def main() -> None:
             "PI_TELEMETRY": "0",
         }
     )
-    daemon_log = open(os.path.join(work_dir, "daemon.log"), "w")
-    daemon = subprocess.Popen(
-        [daemon_bin], env=daemon_env, stdout=daemon_log, stderr=subprocess.STDOUT
-    )
+    daemon = spawn([daemon_bin], work_dir, "daemon.log", env=daemon_env)
 
     # ── headless quickshell hosting the real backend ───────────────────────
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             # The executor topology, as the panel's test seam takes it. The
             # tokenPath (not an inline token) proves the file-read plumbing.
@@ -257,17 +191,13 @@ def main() -> None:
                     }
                 ]
             ),
-        }
+        },
     )
 
-    qs_proc = None
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:pi-session")
 
     def dump_logs():
-        for name in ("qs.log", "daemon.log", "mock-llm.log"):
-            p = os.path.join(work_dir, name)
-            if os.path.isfile(p):
-                sys.stderr.write(f"\n== {name} ==\n")
-                sys.stderr.write(open(p, errors="replace").read()[-8000:])
+        qs.dump_logs(extra=("daemon.log", "mock-llm.log"))
         if os.path.isfile(capture_path):
             sys.stderr.write("\n== llm-requests.jsonl (truncated) ==\n")
             sys.stderr.write(open(capture_path, errors="replace").read()[:4000])
@@ -277,26 +207,7 @@ def main() -> None:
         fail(msg)
 
     def ipc(*args):
-        r = subprocess.run(
-            [qs_bin, "ipc", "-p", shell_qml, "call", "test:pi-session", *args],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(f"ipc {args} failed (exit={r.returncode}): {r.stderr!r}")
-        return r.stdout.strip()
-
-    def ipc_ready():
-        r = subprocess.run(
-            [qs_bin, "ipc", "-p", shell_qml, "show"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return r.returncode == 0 and "test:pi-session" in r.stdout
+        return qs.ipc(*args, timeout=20)
 
     try:
         # Mock LLM first: the daemon discovers models from /v1/models at boot.
@@ -306,12 +217,9 @@ def main() -> None:
         if not wait_for_port(ws_port, timeout_s=60):
             die(f"pi-sessiond never listened on {ws_port} (exit={daemon.poll()})")
 
-        qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-        qs_proc = subprocess.Popen(
-            [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-        )
+        qs.start()
 
-        if not wait_until(ipc_ready, timeout_s=30):
+        if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the test:pi-session IPC target")
 
         # hello/welcome with the token-file content — tokenPath end-to-end.
@@ -340,12 +248,12 @@ def main() -> None:
                 and m.get("image") == image_path
             ] or None
 
-        bubbles = wait_until(user_image_bubbles, timeout_s=10)
-        if not bubbles:
+        if not wait_until(user_image_bubbles, timeout_s=10):
             die(
                 f"expected a local user bubble with image={image_path!r} after "
                 f"sendFile, got messages={ipc('messages', sid)!r}"
             )
+        bubbles = user_image_bubbles()
         # A state-machine bug that leaves our message "queued" forever would
         # still satisfy the bubble check but break the panel's send affordance.
         bubble = bubbles[0]
@@ -384,18 +292,8 @@ def main() -> None:
 
         print("PASS: local bubble + base64 PNG in the recorded LLM request")
     finally:
-        if qs_proc:
-            qs_proc.terminate()
-            try:
-                qs_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                qs_proc.kill()
-        for p in (daemon, llm_proc):
-            p.terminate()
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        qs.stop()
+        reap(daemon, llm_proc)
 
 
 if __name__ == "__main__":

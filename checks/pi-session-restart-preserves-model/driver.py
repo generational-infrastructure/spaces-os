@@ -35,81 +35,22 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
+
+from qs_harness import (
+    Quickshell,
+    fail,
+    qs_env,
+    reap,
+    spawn,
+    stage_shell,
+    wait_until,
+)
 
 TOKEN = "restart-secret"
 MODEL_PROVIDER = "mock"
 MODEL_ID = "test-model"
 MODEL_PREF = f"{MODEL_PROVIDER}/{MODEL_ID}"
-
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            v = predicate()
-            if v:
-                return v
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return None
-
-
-def start_mock_daemon(mock_script: str, frames_log: str, work_dir: str):
-    log = open(os.path.join(work_dir, "mock-daemon.log"), "w")
-    proc = subprocess.Popen(
-        [sys.executable, mock_script, frames_log, "remote", TOKEN],
-        stdout=subprocess.PIPE,
-        stderr=log,
-    )
-    line = proc.stdout.readline()
-    if not line:
-        fail("mock daemon did not print its URL")
-    return proc, line.decode().strip()
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
-def qs_ipc(qs_bin, shell_qml, env, *args, check=True):
-    cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:restart", *args]
-    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=20)
-    if check and out.returncode != 0:
-        raise RuntimeError(
-            f"qs ipc call {args} failed (exit={out.returncode}):\n"
-            f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-        )
-    return out.stdout.strip()
 
 
 def read_frames(frames_log: str) -> list[dict]:
@@ -139,16 +80,10 @@ def main() -> None:
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
     os.makedirs(work_dir, exist_ok=True)
 
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
-
     # Seed sessions.json so FileView.onLoaded fires and _loadFromAdapter
     # runs (arming the importer cutoff) — the returning-desktop baseline
     # the sibling checks use.
-    state_dir = os.path.join(home, ".local", "state", "spaces", "pi")
+    state_dir = os.path.join(work_dir, ".local", "state", "spaces", "pi")
     os.makedirs(state_dir, exist_ok=True)
     with open(os.path.join(state_dir, "sessions.json"), "w") as fh:
         json.dump(
@@ -163,96 +98,93 @@ def main() -> None:
 
     frames_log = os.path.join(work_dir, "frames.log")
     open(frames_log, "w").close()
-    mock_proc, ws_url = start_mock_daemon(
-        os.path.join(test_dir, "mock-daemon.py"), frames_log, work_dir
+
+    # The mock binds an ephemeral port and prints `ws://127.0.0.1:<port>` as
+    # its first output line (now captured in mock-daemon.log).
+    mock_proc = spawn(
+        [
+            sys.executable,
+            os.path.join(test_dir, "mock-daemon.py"),
+            frames_log,
+            "remote",
+            TOKEN,
+        ],
+        work_dir,
+        "mock-daemon.log",
     )
+
+    def daemon_url():
+        try:
+            with open(os.path.join(work_dir, "mock-daemon.log")) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("ws://"):
+                        return line
+        except OSError:
+            pass
+        return None
+
+    if not wait_until(lambda: daemon_url() is not None, timeout_s=15):
+        fail("mock daemon did not print its URL")
+    ws_url = daemon_url()
 
     executors_json = json.dumps([{"id": "remote", "url": ws_url, "token": TOKEN}])
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             "SPACES_PI_CHAT_EXECUTORS": executors_json,
-        }
+        },
     )
 
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:restart")
+    qs.start()
 
-    def dump_logs():
-        for name in ("qs.log", "mock-daemon.log", "frames.log"):
-            p = os.path.join(work_dir, name)
-            if os.path.isfile(p):
-                sys.stderr.write(f"\n== {name} ==\n")
-                sys.stderr.write(open(p, errors="replace").read()[-6000:])
+    def ipc(*args):
+        return qs.ipc(*args, timeout=20)
+
+    def raw_sessions():
+        return json.loads(ipc("rawSessions"))
+
+    def entry(sid):
+        return next((s for s in raw_sessions() if s["id"] == sid), None)
+
+    def die(msg):
+        qs.dump_logs(extra=("mock-daemon.log", "frames.log"))
         try:
             sys.stderr.write("\n== final index ==\n")
             sys.stderr.write(json.dumps(raw_sessions(), indent=2) + "\n")
         except Exception as e:
             sys.stderr.write(f"(could not read index: {e})\n")
-
-    def die(msg):
-        dump_logs()
         fail(msg)
 
-    def raw_sessions():
-        return json.loads(qs_ipc(qs_bin, shell_qml, env, "rawSessions"))
-
-    def entry(sid):
-        return next((s for s in raw_sessions() if s["id"] == sid), None)
-
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and "test:restart" in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=30):
+        if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the test:restart IPC target")
 
         if not wait_until(
-            lambda: (
-                qs_ipc(qs_bin, shell_qml, env, "executorConnected", "remote") == "true"
-            ),
+            lambda: ipc("executorConnected", "remote") == "true",
             timeout_s=30,
         ):
             die("panel never connected to the remote executor")
 
         # ── spawn: create_session #1 binds the entry to D1 ──────────────
-        sid = qs_ipc(
-            qs_bin,
-            shell_qml,
-            env,
-            "newSessionWithModel",
-            "RestartModel",
-            "remote",
-            MODEL_PREF,
-        )
+        sid = ipc("newSessionWithModel", "RestartModel", "remote", MODEL_PREF)
         if not sid:
             die("newSessionWithModel returned no id")
-        qs_ipc(qs_bin, shell_qml, env, "spawnSession", sid)
+        ipc("spawnSession", sid)
 
-        e = wait_until(
-            lambda: (lambda x: x if x and x["daemonSessionId"] else None)(entry(sid)),
-            timeout_s=30,
-        )
-        if not e:
+        def attached_entry():
+            x = entry(sid)
+            return x if x and x["daemonSessionId"] else None
+
+        if not wait_until(lambda: attached_entry() is not None, timeout_s=30):
             die("session never attached — entry has no daemonSessionId")
+        e = attached_entry()
         d1 = e["daemonSessionId"]
 
         creates = [
@@ -267,13 +199,10 @@ def main() -> None:
             )
 
         # ── set_model command round-trip (request id echoed by the mock) ─
-        qs_ipc(qs_bin, shell_qml, env, "setModelWait", sid, MODEL_PROVIDER, MODEL_ID)
-        result = wait_until(
-            lambda: qs_ipc(qs_bin, shell_qml, env, "setModelResult"),
-            timeout_s=10,
-        )
-        if not result:
+        ipc("setModelWait", sid, MODEL_PROVIDER, MODEL_ID)
+        if not wait_until(lambda: bool(ipc("setModelResult")), timeout_s=10):
             die("setModelAndWait never resolved — mock did not echo the request id")
+        result = ipc("setModelResult")
         if result.startswith("ERROR"):
             die(f"setModelAndWait rejected: {result}")
         data = json.loads(result)
@@ -281,7 +210,7 @@ def main() -> None:
             die(f"set_model response carried wrong payload: {data!r}")
 
         # ── the contract under test ──────────────────────────────────────
-        qs_ipc(qs_bin, shell_qml, env, "restartSession", sid)
+        ipc("restartSession", sid)
 
         def restart_frames_complete():
             frames = recv_frames(frames_log)
@@ -338,21 +267,18 @@ def main() -> None:
             )
 
         # ── the entry rebinds to the SECOND daemon id ────────────────────
-        e2 = wait_until(
-            lambda: (
-                lambda x: (
-                    x
-                    if x and x["daemonSessionId"] and x["daemonSessionId"] != d1
-                    else None
-                )
-            )(entry(sid)),
-            timeout_s=15,
-        )
-        if not e2:
+        def rebound_entry():
+            x = entry(sid)
+            if x and x["daemonSessionId"] and x["daemonSessionId"] != d1:
+                return x
+            return None
+
+        if not wait_until(lambda: rebound_entry() is not None, timeout_s=15):
             die(
                 "index entry never rebound to a fresh daemon session id "
                 f"(still {entry(sid)!r}, old id {d1!r})"
             )
+        e2 = rebound_entry()
         d2 = e2["daemonSessionId"]
 
         # Cross-check D2 against the id the mock actually acked for create #2:
@@ -380,16 +306,8 @@ def main() -> None:
 
         print("PASS")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
-        mock_proc.terminate()
-        try:
-            mock_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            mock_proc.kill()
+        qs.stop()
+        reap(mock_proc)
 
 
 if __name__ == "__main__":

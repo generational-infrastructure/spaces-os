@@ -16,60 +16,22 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
 import time
 
+from qs_harness import (
+    Quickshell,
+    fail,
+    free_port,
+    qs_env,
+    reap,
+    spawn,
+    stage_shell,
+    wait_for_port,
+    wait_until,
+)
+
 TOKEN = "ack-routing-secret"
-
-
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(interval_s)
-    return None
-
-
-def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
 
 
 def stage_index(home: str) -> None:
@@ -107,68 +69,46 @@ def main() -> None:
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
     os.makedirs(work_dir, exist_ok=True)
 
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
-    stage_index(home)
+    stage_index(work_dir)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
     port = free_port()
-    daemon_log = open(os.path.join(work_dir, "daemon.log"), "w")
-    daemon = subprocess.Popen(
+    daemon = spawn(
         [
             sys.executable,
             os.path.join(test_dir, "fake-daemon.py"),
             str(port),
             TOKEN,
         ],
-        stdout=subprocess.PIPE,
-        stderr=daemon_log,
+        work_dir,
+        "daemon.log",
     )
-    if not daemon.stdout.readline():
+    if not wait_for_port(port, timeout_s=15):
         fail("fake daemon never came up")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             "SPACES_PI_CHAT_CONFIG": os.path.join(work_dir, "no-config.json"),
             "SPACES_PI_CHAT_EXECUTORS": json.dumps(
                 [{"id": "host", "url": f"ws://127.0.0.1:{port}", "token": TOKEN}]
             ),
-        }
+        },
     )
 
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target="test:ack-routing")
+    qs.start()
 
-    def ipc(*args: str, check: bool = True) -> str:
-        cmd = [qs_bin, "ipc", "-p", shell_qml, "call", "test:ack-routing", *args]
-        out = subprocess.run(cmd, env=env, capture_output=True, text=True)
-        if check and out.returncode != 0:
-            fail(f"ipc {args} failed: {out.stdout!r} {out.stderr!r}")
-        return out.stdout.strip()
+    ipc = qs.ipc
 
     def dump_and_fail(msg: str) -> None:
-        for name in ("daemon.log", "qs.log"):
-            path = os.path.join(work_dir, name)
-            if os.path.exists(path):
-                with open(path, errors="replace") as fh:
-                    sys.stderr.write(f"== {name} ==\n" + fh.read())
-        fail(msg)
+        qs.die(msg, extra_logs=("daemon.log",))
 
     try:
-        if not wait_until(lambda: ipc("ping", check=False) == "true", timeout_s=60):
-            dump_and_fail("shell IPC never came up")
+        qs.wait_ipc_ready(timeout_s=60, extra_logs=("daemon.log",))
 
         # Spawn the persisted session (attach goes out; ack is withheld
         # daemon-side), then immediately create a second session — its
@@ -208,8 +148,8 @@ def main() -> None:
             dump_and_fail(f"persisted entry lost its daemon id: {raw}")
         print("OK: create ack routed to the creating session, attach ack ignored")
     finally:
-        qs.terminate()
-        daemon.terminate()
+        qs.stop()
+        reap(daemon)
 
 
 if __name__ == "__main__":

@@ -21,10 +21,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
+
+from qs_harness import Quickshell, fail, qs_env, stage_shell, wait_until
 
 MODELS = [
     {"provider": "local", "id": "gemma4:e4b"},
@@ -37,103 +36,32 @@ MODELS = [
 TARGET = "test:quick-launch-completion"
 
 
-def fail(msg: str) -> None:
-    sys.stderr.write(f"FAIL: {msg}\n")
-    sys.exit(1)
-
-
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            if predicate():
-                return True
-        except Exception:
-            pass
-        time.sleep(interval_s)
-    return False
-
-
-def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Mirror the whole pi-chat tree, then drop in our test shell.qml.
-
-    QuickBarCompletion + PiChatBackend pull in qs.Commons / qs.Widgets and
-    the PiSession family, so the entire plugin is staged the way the
-    panel-width and quick-launch checks do."""
-    shell_root = os.path.join(work_dir, "shell")
-    shutil.copytree(plugin_dir, shell_root, dirs_exist_ok=True)
-    for root, _dirs, files in os.walk(shell_root):
-        os.chmod(root, 0o755)
-        for f in files:
-            try:
-                os.chmod(os.path.join(root, f), 0o644)
-            except OSError:
-                pass
-    shell_dst = os.path.join(shell_root, "shell.qml")
-    if os.path.exists(shell_dst):
-        os.remove(shell_dst)
-    shutil.copy2(os.path.join(test_dir, "shell.qml"), shell_dst)
-    now = time.time()
-    for root, _dirs, files in os.walk(shell_root):
-        for f in files:
-            try:
-                os.utime(os.path.join(root, f), (now, now))
-            except OSError:
-                pass
-    return shell_root
-
-
 def main() -> None:
     if len(sys.argv) != 5:
         fail("usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>")
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
-    os.makedirs(work_dir, exist_ok=True)
-
-    home = os.path.join(work_dir, "home")
-    xdg_runtime = os.path.join(work_dir, "xdg_runtime")
-    for d in (home, xdg_runtime):
-        os.makedirs(d, exist_ok=True)
-    os.chmod(xdg_runtime, 0o700)
 
     shell_root = stage_shell(test_dir, plugin_dir, work_dir)
     shell_qml = os.path.join(shell_root, "shell.qml")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": xdg_runtime,
-            "QT_QPA_PLATFORM": "offscreen",
+    env = qs_env(
+        work_dir,
+        extra={
             "QSG_RHI_BACKEND": "null",
             "LC_ALL": "C.UTF-8",
             "LANG": "C.UTF-8",
             "PYTHONUTF8": "1",
-        }
+        },
     )
 
-    qs_log = open(os.path.join(work_dir, "qs.log"), "w")
-    qs_proc = subprocess.Popen(
-        [qs_bin, "-p", shell_qml], env=env, stdout=qs_log, stderr=qs_log
-    )
+    qs = Quickshell(qs_bin, shell_qml, env, work_dir, ipc_target=TARGET)
+    qs.start()
 
     def die(msg):
-        p = os.path.join(work_dir, "qs.log")
-        if os.path.isfile(p):
-            sys.stderr.write("\n== qs.log ==\n")
-            sys.stderr.write(open(p, errors="replace").read()[-6000:])
-        fail(msg)
+        qs.die(msg)
 
-    def call(*args: str, check: bool = True) -> str:
-        cmd = [qs_bin, "ipc", "-p", shell_qml, "call", TARGET, *args]
-        out = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, encoding="utf-8", timeout=20
-        )
-        if check and out.returncode != 0:
-            raise RuntimeError(
-                f"ipc {args} failed (exit={out.returncode}):\n"
-                f"stdout: {out.stdout!r}\nstderr: {out.stderr!r}"
-            )
-        return out.stdout.strip()
+    def call(*args: str) -> str:
+        return qs.ipc(*args, timeout=20)
 
     def cand(text: str, cursor: int | None = None) -> list[str]:
         call("setInput", text, str(len(text) if cursor is None else cursor))
@@ -149,18 +77,7 @@ def main() -> None:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
     try:
-
-        def ipc_ready():
-            r = subprocess.run(
-                [qs_bin, "ipc", "-p", shell_qml, "show"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return r.returncode == 0 and TARGET in r.stdout
-
-        if not wait_until(ipc_ready, timeout_s=30):
+        if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the completion IPC target")
 
         # ── async: candidates not ready yet (plan §3.1 / §6) ──
@@ -399,11 +316,7 @@ def main() -> None:
 
         print("PASS")
     finally:
-        qs_proc.terminate()
-        try:
-            qs_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qs_proc.kill()
+        qs.stop()
 
 
 if __name__ == "__main__":
