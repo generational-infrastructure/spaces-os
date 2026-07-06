@@ -12,9 +12,9 @@
 # Returns 0 when the dir is clean or an orphan was reaped (safe to launch);
 # returns 1 when a live qemu-system still references that swtpm's control
 # socket — killing it would yank the TPM out from under a running VM, so the
-# caller must abort instead. Sourced by the test-vm and agent-vm launchers
-# (this file is the single source of truth). Needs pgrep (procps) and
-# readlink/sleep (coreutils) on PATH.
+# caller must abort instead. Inlined by the shared VM driver (./lib.nix)
+# into every wrapper it emits (this file is the single source of truth).
+# Needs pgrep (procps) and readlink/sleep (coreutils) on PATH.
 reap_swtpm() {
   local dir pids qemu
   # The runner canonicalises NIX_SWTPM_DIR (readlink -f), so the daemon's

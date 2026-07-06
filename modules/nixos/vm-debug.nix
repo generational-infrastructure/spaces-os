@@ -21,6 +21,10 @@
 }:
 let
   cfg = config.services.spaces.vm-debug;
+  # The AGENT_VM_* names are owned by the shared VM driver
+  # (packages/agent-vm/lib.nix); this module consumes them through the
+  # env options below, whose defaults come from that single owner.
+  vmDriver = import ../../packages/agent-vm/lib.nix;
   guiOpts = [
     # `nix run .#test-vm` shows the guest in QEMU's own GTK window.
     # virtio-vga-gl + gl=on give the guest accelerated GL.
@@ -41,29 +45,41 @@ let
     "-chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on"
     "-device virtserialport,chardev=vdagent,name=com.redhat.spice.0"
   ];
-  # Headless: no audio, no vdagent, no GL. Paths come from the
-  # agent-vm wrapper via env vars so the same VM image can run in
-  # any cwd / sandbox.
+  # Headless: no audio, no vdagent, no GL. Paths come from the VM
+  # wrapper (packages/agent-vm/lib.nix drivers) via env vars so the
+  # same VM image can run in any cwd / sandbox.
   headlessOpts = [
     # No -vga: rely on QEMU's default std VGA. Bochs DRM/simpledrm
     # gives niri a card to modeset on, and screendump captures the
     # primary head. nixos-test-driver uses the same shape and
     # successfully OCRs the niri framebuffer.
     "-display none"
-    "-vnc \${AGENT_VM_VNC:-127.0.0.1:99}"
-    "-qmp unix:\${AGENT_VM_QMP},server=on,wait=off"
+    "-vnc \${${cfg.env.vnc}:-127.0.0.1:99}"
+    "-qmp unix:\${${cfg.env.qmp}},server=on,wait=off"
     # Persist boot/journal output to a file: pueue captures the
     # wrapper's stdout but QEMU's -serial stdio bytes never reach
-    # that log, so route serial straight to $AGENT_VM_SERIAL.
-    "-serial file:\${AGENT_VM_SERIAL}"
+    # that log, so route serial straight to the env.serial file.
+    "-serial file:\${${cfg.env.serial}}"
   ];
 in
 {
   options.services.spaces.vm-debug.headless = lib.mkEnableOption ''
     headless run of the test VM: no GTK window, QMP control socket
-    at $AGENT_VM_QMP, VNC at $AGENT_VM_VNC (default 127.0.0.1:5999),
-    serial on stdio. Used by `nix build .#agent-vm` for agent-driven
-    dev loops'';
+    at the env.qmp socket, VNC at env.vnc (default 127.0.0.1:5999),
+    serial to the env.serial file. Used by `nix build .#agent-vm` for
+    agent-driven dev loops'';
+
+  options.services.spaces.vm-debug.env = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    default = vmDriver.env;
+    description = ''
+      Names of the environment variables the headless QEMU options read
+      at launch time (qmp = control socket path, serial = console log
+      file, vnc = VNC listen address). Defaults come from the shared VM
+      driver (packages/agent-vm/lib.nix), which owns the string contract
+      with the agent-vm / remote-agent-vm wrappers.
+    '';
+  };
 
   config.virtualisation.vmVariant = {
     virtualisation.memorySize = 8192;

@@ -1,0 +1,485 @@
+# Shared test-machine VM driver (not a flake output; imported directly).
+#
+# One module owns every idiom the VM wrappers used to copy-paste:
+#   - repo-root state-dir discovery (state under <repo>/<stateDirName>)
+#   - the sshpass/ssh option set and the ssh-wait polling loop
+#   - QMP verb dispatch (key/type/screenshot/move/click) via ./qmp.py
+#   - stale-swtpm reaping (./reap-swtpm.sh) before EVERY QEMU launch
+#   - the x86_64-only stub for non-x86 build hosts
+#   - the AGENT_VM_* env-var names — the string contract with
+#     modules/nixos/vm-debug.nix's headless QEMU options (that module
+#     imports this file for its option defaults)
+#
+# Consumers: packages/agent-vm (one headless node), packages/remote-agent-vm
+# (two headless nodes + GUI twins), packages/test-vm (single GUI launcher),
+# modules/nixos/vm-debug.nix (env names only).
+let
+  # Env-var names the driver exports for the qemu-vm runner and
+  # vm-debug.nix's headless QEMU options read back. Single owner of the
+  # string contract; qmp.py's fallback default also assumes `qmp`.
+  env = {
+    qmp = "AGENT_VM_QMP"; # unix socket QEMU serves QMP on
+    serial = "AGENT_VM_SERIAL"; # file QEMU appends the serial console to
+    vnc = "AGENT_VM_VNC"; # VNC listen address (host:display)
+  };
+in
+{
+  inherit env;
+
+  # Build a VM wrapper CLI.
+  #
+  #   mkVmDriver {
+  #     pkgs;
+  #     name;                # CLI + binary name
+  #     nodes = {            # one attr per VM
+  #       <node> = {
+  #         vm;              # system.build.vm derivation (headless for CLI mode)
+  #         sshPort;         # host port forwarded to guest :22 (CLI mode)
+  #         guiVm ? null;    # GUI twin; a `gui` verb appears when every node has one
+  #         vnc ? null;      # value for $AGENT_VM_VNC (multi-node headless run)
+  #         disk ? "<node>.qcow2";
+  #         description ? <node>;   # help-text footer (multi-node)
+  #       };
+  #     };
+  #     stateDirName ? ".<name>";   # under the repo root
+  #     waitTimeout ? 120;          # default `wait` seconds
+  #     launcher ? false;           # true: no verbs — reap + preRun + exec-style
+  #                                 # passthrough of argv to the single node's VM
+  #     preRun ? "";                # launcher mode: shell run before the VM
+  #     runBanner ? ""; guiBanner ? "";  # extra echo lines after backgrounding
+  #     stubName ? name;            # non-x86 stub message/drv name
+  #     extraRuntimeInputs ? [ ];
+  #   }
+  #
+  # With one node the verbs take no selector (agent-vm); with several,
+  # every verb takes a leading <node> argument (remote-agent-vm).
+  mkVmDriver =
+    {
+      pkgs,
+      name,
+      nodes,
+      # Selector/help ordering (attrNames sorts alphabetically otherwise).
+      nodeOrder ? null,
+      stateDirName ? ".${name}",
+      waitTimeout ? 120,
+      launcher ? false,
+      preRun ? "",
+      runBanner ? "",
+      guiBanner ? "",
+      stubName ? name,
+      extraRuntimeInputs ? [ ],
+    }:
+    if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
+      # `nodes` stays unforced here, so evaluating this branch never
+      # touches the x86-pinned test-machine config. Lets `nix flake
+      # check` succeed on aarch64 without cross-building the x86 VM.
+      pkgs.runCommand "${stubName}-x86_64-only" { } ''
+        mkdir -p "$out/bin"
+        cat > "$out/bin/${name}" <<'EOF'
+        #!/bin/sh
+        echo "${stubName} is x86_64-linux only; no aarch64 test-machine host yet." >&2
+        exit 1
+        EOF
+        chmod +x "$out/bin/${name}"
+      ''
+    else
+      let
+        inherit (pkgs) lib;
+        names = if nodeOrder != null then nodeOrder else lib.attrNames nodes;
+        multi = builtins.length names > 1;
+        # "both VMs" when there are exactly two, "all VMs" beyond that.
+        allWord = if builtins.length names == 2 then "both" else "all";
+        only = builtins.head names;
+        node = n: nodes.${n};
+        # node names may contain '-'; shell variable fragments may not.
+        san = n: lib.replaceStrings [ "-" ] [ "_" ] n;
+        diskOf = n: (node n).disk or "${n}.qcow2";
+        port = n: toString (node n).sshPort;
+        hasGui = multi && lib.all (n: (node n) ? guiVm) names;
+        each = f: lib.concatMapStrings f names;
+        eachSep = sep: f: lib.concatMapStringsSep sep f names;
+        nodeAlt = lib.concatStringsSep "|" names;
+
+        stateDirDiscovery = ''
+          # Locate the repo root so state is the same regardless of cwd.
+          state_dir=$PWD/${stateDirName}
+          d=$PWD
+          while [ "$d" != / ]; do
+            if [ -d "$d/.jj" ] || [ -d "$d/.git" ]; then
+              state_dir="$d/${stateDirName}"
+              break
+            fi
+            d=$(dirname "$d")
+          done
+        '';
+
+        reap = builtins.readFile ./reap-swtpm.sh;
+
+        # ------------------------------------------------------------------
+        # launcher mode (test-vm): no verbs, argv passes through to the VM.
+        # ------------------------------------------------------------------
+        launcherScript = lib.concatStrings [
+          stateDirDiscovery
+          ''
+            mkdir -p -- "$state_dir"
+            export NIX_DISK_IMAGE="$state_dir/${diskOf only}"
+
+            ${reap}
+            # The runner resolves NIX_SWTPM_DIR relative to $PWD (default
+            # test-machine-swtpm) and its swtpm daemon can outlive a
+            # hard-killed QEMU, wedging every later launch on the TPM state
+            # lock. Reap any orphan first; abort if that swtpm still serves
+            # a live VM.
+            reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
+
+          ''
+          preRun
+          ''
+            # No exec: keep the shell alive so any EXIT trap installed by the
+            # pre-run hook above runs after QEMU exits.
+            run_vm=(${(node only).vm}/bin/run-*-vm)
+            "''${run_vm[0]}" "$@"
+          ''
+        ];
+
+        # ------------------------------------------------------------------
+        # CLI mode: the verb dispatcher.
+        # ------------------------------------------------------------------
+        nodeTables = ''
+          # Per-node lookups; unknown node → message + rc 2 (the $(…)
+          # callers run under set -e, so the verb aborts with that status).
+          node_port() {
+            case "$1" in
+          ${eachSep "\n" (n: "    ${n}) echo ${port n} ;;")}
+              *) echo "${name}: unknown node '$1' (use ${nodeAlt})" >&2; return 2 ;;
+            esac
+          }
+          node_sock() {
+            case "$1" in
+          ${eachSep "\n" (n: "    ${n}) echo \"$state_dir/${n}-qmp.sock\" ;;")}
+              *) echo "${name}: unknown node '$1' (use ${nodeAlt})" >&2; return 2 ;;
+            esac
+          }
+          node_serial() {
+            case "$1" in
+          ${eachSep "\n" (n: "    ${n}) echo \"$state_dir/${n}.serial\" ;;")}
+              *) echo "${name}: unknown node '$1' (use ${nodeAlt})" >&2; return 2 ;;
+            esac
+          }
+        '';
+
+        # Background one headless node with its env wired up.
+        launchOne =
+          n:
+          let
+            v = node n;
+            envs = [
+              "${env.qmp}=\"$state_dir/${n}-qmp.sock\""
+              "${env.serial}=\"$state_dir/${n}.serial\""
+            ]
+            ++ lib.optional (v ? vnc && v.vnc != null) "${env.vnc}=${v.vnc}"
+            ++ [
+              "NIX_DISK_IMAGE=\"$state_dir/${diskOf n}\""
+              "NIX_SWTPM_DIR=${n}-swtpm"
+              "QEMU_KERNEL_PARAMS=\"\${QEMU_KERNEL_PARAMS:-} loglevel=7\""
+            ];
+          in
+          ''
+            run_${san n}=(${v.vm}/bin/run-*-vm)
+            ${lib.concatStringsSep " \\\n" envs} \
+              "''${run_${san n}[0]}" &
+            pid_${san n}=$!
+
+          '';
+
+        pidList = eachSep " " (n: "$pid_${san n}");
+        pidEcho = eachSep ", " (n: "${n} pid $pid_${san n}");
+
+        runVerb =
+          if multi then
+            ''
+              run)
+                mkdir -p -- "$state_dir"
+                rm -f -- ${eachSep " " (n: "\"$state_dir/${n}-qmp.sock\"")}
+              ${eachSep "\n" (n: "  : >\"$state_dir/${n}.serial\"")}
+                echo "${name}: state at $state_dir"
+                cd "$state_dir"
+
+                # The qemu-vm runner's swtpm daemon can outlive a hard-killed
+                # QEMU (the trap below, pueue kill, dropped terminal), wedging
+                # every later launch on the TPM state lock — reap orphans before
+                # launching; abort if one still serves a live VM. Distinct
+                # per-node state dirs keep the swtpms off each other's lockfile.
+              ${eachSep "\n" (n: "  reap_swtpm ${n}-swtpm")}
+
+                # loglevel=7 so kernel boot info reaches the serial logs; the
+                # test-machine baseline has loglevel=4 (warnings only).
+              ${each launchOne}
+                # shellcheck disable=SC2064
+                trap "kill ${pidList} 2>/dev/null || true" EXIT INT TERM
+                echo "${name}: ${pidEcho}"
+              ${runBanner}
+                wait
+                ;;
+            ''
+          else
+            ''
+              run)
+                mkdir -p -- "$state_dir"
+                rm -f -- "$qmp"
+                : >"$serial"
+                echo "${name}: state at $state_dir (serial: $serial)"
+                cd "$state_dir"
+                # The qemu-vm runner resolves NIX_SWTPM_DIR relative to $PWD
+                # (default test-machine-swtpm — here, under $state_dir thanks to
+                # the cd above) and its swtpm daemon can outlive a hard-killed
+                # QEMU (pueue kill, dropped terminal), wedging every later launch
+                # on the TPM state lock. Reap any orphan first; abort if that
+                # swtpm still serves a live VM.
+                reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
+                export ${env.qmp}="$qmp"
+                export ${env.serial}="$serial"
+                export NIX_DISK_IMAGE="$state_dir/${diskOf only}"
+                # loglevel=7 so kernel boot info reaches the serial log; the
+                # test-machine baseline has loglevel=4 (warnings only).
+                export QEMU_KERNEL_PARAMS="''${QEMU_KERNEL_PARAMS:-} loglevel=7"
+                run_vm=(${(node only).vm}/bin/run-*-vm)
+                exec "''${run_vm[0]}"
+                ;;
+            '';
+
+        guiLaunchOne = n: ''
+          gui_run_${san n}=(${(node n).guiVm}/bin/run-*-vm)
+          NIX_DISK_IMAGE="$state_dir/gui-${diskOf n}" NIX_SWTPM_DIR=gui-${n}-swtpm "''${gui_run_${san n}[0]}" &
+          pid_gui_${san n}=$!
+
+        '';
+
+        guiPidList = eachSep " " (n: "$pid_gui_${san n}");
+        guiPidEcho = eachSep ", " (n: "${n} pid $pid_gui_${san n}");
+
+        guiVerb = ''
+          gui)
+            mkdir -p -- "$state_dir"
+            cd "$state_dir"
+            # Same swtpm hygiene as `run`; the GUI twins keep their own
+            # per-node TPM state next to their own qcow2s.
+          ${eachSep "\n" (n: "  reap_swtpm gui-${n}-swtpm")}
+
+          ${each guiLaunchOne}
+            # shellcheck disable=SC2064
+            trap "kill ${guiPidList} 2>/dev/null || true" EXIT INT TERM
+            echo "${name}: native QEMU windows (${guiPidEcho})"
+          ${guiBanner}
+            wait
+            ;;
+        '';
+
+        waitVerb =
+          if multi then
+            ''
+              wait)
+                timeout="''${1:-${toString waitTimeout}}"
+                deadline=$(( $(date +%s) + timeout ))
+              ${eachSep "\n" (n: "  ok_${san n}=0")}
+                while [ "$(date +%s)" -lt "$deadline" ]; do
+              ${each (n: ''
+                  if [ "$ok_${san n}" -eq 0 ] && ssh_alive ${port n}; then
+                    ok_${san n}=1
+                    echo "${name}: ${n} ssh up"
+                  fi
+              '')}
+                  if ${eachSep " && " (n: "[ \"$ok_${san n}\" -eq 1 ]")}; then
+                    exit 0
+                  fi
+                  sleep 1
+                done
+                echo "${name}: VMs did not ${allWord} answer ssh within ''${timeout}s (${
+                  eachSep " " (n: "${n}=$ok_${san n}")
+                })" >&2
+                exit 1
+                ;;
+            ''
+          else
+            ''
+              wait)
+                timeout="''${1:-${toString waitTimeout}}"
+                deadline=$(( $(date +%s) + timeout ))
+                while [ "$(date +%s)" -lt "$deadline" ]; do
+                  if ssh_alive ${port only}; then
+                    exit 0
+                  fi
+                  sleep 1
+                done
+                echo "${name}: ssh did not come up within ''${timeout}s" >&2
+                exit 1
+                ;;
+            '';
+
+        sshVerb =
+          if multi then
+            ''
+              ssh)
+                sel="''${1:-}"
+                if [ "$#" -gt 0 ]; then shift; fi
+                sshport=$(node_port "$sel")
+                export SSHPASS=test
+                exec sshpass -e ssh "''${ssh_common[@]}" -p "$sshport" test@localhost "$@"
+                ;;
+            ''
+          else
+            ''
+              ssh)
+                export SSHPASS=test
+                exec sshpass -e ssh "''${ssh_common[@]}" -p ${port only} test@localhost "$@"
+                ;;
+            '';
+
+        qmpVerb =
+          if multi then
+            ''
+              key|type|screenshot|move|click)
+                sel="''${1:-}"
+                if [ "$#" -gt 0 ]; then shift; fi
+                sock=$(node_sock "$sel")
+                ${env.qmp}="$sock" exec python3 ${./qmp.py} "$cmd" "$@"
+                ;;
+            ''
+          else
+            ''
+              key|type|screenshot|move|click)
+                export ${env.qmp}="$qmp"
+                exec python3 ${./qmp.py} "$cmd" "$@"
+                ;;
+            '';
+
+        logVerb =
+          if multi then
+            ''
+              log)
+                sel="''${1:-}"
+                if [ "$#" -gt 0 ]; then shift; fi
+                serial=$(node_serial "$sel")
+                exec tail "$@" "$serial"
+                ;;
+            ''
+          else
+            ''
+              log)
+                exec tail "$@" "$serial"
+                ;;
+            '';
+
+        helpText =
+          if multi then
+            lib.concatStrings [
+              ''
+                Usage: ${name} <command> [args...]
+
+                  run                       start ${allWord} VMs headless (QMP + VNC; for scripting)
+              ''
+              # plain string: a one-line '' block would strip the 2-space indent
+              (lib.optionalString hasGui "  gui                       start ${allWord} VMs in native QEMU windows (click around)\n")
+              ''
+                  wait [seconds]            block until ${allWord} answer SSH (default ${toString waitTimeout}s)
+                  ssh <node> [args...]      ssh into a guest (${eachSep ", " (n: "${n}=:${port n}")})
+                  key <node> <chord>        send a synthetic key chord via QMP
+                  type <node> <text>        type a literal string into the focused field
+                  screenshot <node> <path>  save a PNG framebuffer dump via QMP
+                  move <node> <x> <y>       warp the absolute pointer to pixel (x, y)
+                  click <node> <x> <y> [b]  click button b (left/right/middle) at (x, y)
+                  log <node> [tail args]    print/follow a guest serial console
+
+                  <node> is ${eachSep " or " (n: "'${n}' (${(node n).description or n})")}.
+                State lives at $state_dir.
+              ''
+            ]
+          else
+            ''
+              Usage: ${name} <command> [args...]
+
+                run                start the headless test-machine VM
+                wait [seconds]     block until SSH answers (default ${toString waitTimeout}s)
+                ssh [args...]      ssh into the guest (test@localhost:${port only})
+                key <chord>        send a synthetic key chord via QMP
+                                   (alt-a, ctrl-alt-t, shift-space, …)
+                type <text>        type a literal string via QMP
+                screenshot <path>  save a PNG framebuffer dump via QMP
+                move <x> <y>       warp the absolute pointer to pixel (x, y)
+                click <x> <y> [b]  click button b (left/right/middle) at (x, y)
+                log [tail args]    print/follow the guest serial console
+
+              State lives at $state_dir.
+            '';
+
+        helpVerb = "help|--help|-h|*)\n  cat <<EOF\n" + helpText + "EOF\n  ;;\n";
+
+        cliScript = lib.concatStrings [
+          stateDirDiscovery
+          (lib.optionalString (!multi) ''
+            qmp="$state_dir/qmp.sock"
+            serial="$state_dir/serial.log"
+          '')
+          "\n"
+          reap
+          ''
+
+            ssh_common=(
+              -o StrictHostKeyChecking=no
+              -o UserKnownHostsFile=/dev/null
+              -o LogLevel=ERROR
+            )
+
+            # One sshd liveness probe (used by `wait`); the ssh polling
+            # idiom lives only here.
+            ssh_alive() {
+              SSHPASS="test" sshpass -e ssh "''${ssh_common[@]}" -p "$1" \
+                -o ConnectTimeout=2 \
+                -o PreferredAuthentications=password \
+                -o PubkeyAuthentication=no \
+                test@localhost true 2>/dev/null
+            }
+
+          ''
+          (lib.optionalString multi nodeTables)
+          ''
+
+            cmd="''${1:-help}"
+            if [ "$#" -gt 0 ]; then shift; fi
+
+            case "$cmd" in
+          ''
+          runVerb
+          (lib.optionalString hasGui guiVerb)
+          waitVerb
+          sshVerb
+          qmpVerb
+          logVerb
+          helpVerb
+          "esac\n"
+        ];
+      in
+      pkgs.writeShellApplication {
+        inherit name;
+        runtimeInputs =
+          (
+            if launcher then
+              [
+                pkgs.coreutils
+                # pgrep, for the stale-swtpm reaper.
+                pkgs.procps
+              ]
+            else
+              [
+                pkgs.openssh
+                pkgs.sshpass
+                pkgs.python3
+                pkgs.coreutils
+                # pgrep, for the stale-swtpm reaper.
+                pkgs.procps
+              ]
+          )
+          ++ extraRuntimeInputs;
+        text = if launcher then launcherScript else cliScript;
+      };
+}
