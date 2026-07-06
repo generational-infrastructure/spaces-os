@@ -207,12 +207,10 @@ in
   # Niri view: the spawn binds injected into upstream default-config.kdl,
   # as an ordered list of { chord, spawn, title, order }.
   niriSpawnBinds = lib.sort (a: b: a.order < b.order) (
-    lib.mapAttrsToList (
-      chord: bind: {
-        inherit chord;
-        inherit (bind) spawn;
-        inherit (bind.niri) title order;
-      }
-    ) (lib.filterAttrs (_chord: bind: bind ? niri) binds)
+    lib.mapAttrsToList (chord: bind: {
+      inherit chord;
+      inherit (bind) spawn;
+      inherit (bind.niri) title order;
+    }) (lib.filterAttrs (_chord: bind: bind ? niri) binds)
   );
 }

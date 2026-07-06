@@ -63,7 +63,7 @@ pkgs.runCommand "pi-chat-extensions"
       # Memory extension: substitutes the absolute sediment binary path into a
       # single-file pi extension (directory with index.ts).
       memory = pkgs.callPackage ./memory {
-        sediment = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
+        inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system}) sediment;
       };
     };
   }

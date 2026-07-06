@@ -97,7 +97,9 @@ def main() -> None:
 
     def check_partial_list(label: str, got: list, want: list):
         if len(got) != len(want):
-            failures.append(f"{label}: got {len(got)} entries, want {len(want)}: {got!r}")
+            failures.append(
+                f"{label}: got {len(got)} entries, want {len(want)}: {got!r}"
+            )
             return
         for i, (g, w) in enumerate(zip(got, want)):
             check_partial(f"{label}[{i}]", g, w)
@@ -161,7 +163,11 @@ def main() -> None:
             def norm(obj):
                 if isinstance(obj, dict):
                     return {
-                        k: ("user-*" if k == "id" and str(v).startswith("user-") else norm(v))
+                        k: (
+                            "user-*"
+                            if k == "id" and str(v).startswith("user-")
+                            else norm(v)
+                        )
                         for k, v in obj.items()
                     }
                 if isinstance(obj, list):
@@ -173,28 +179,50 @@ def main() -> None:
 
         # ── importHistory: daemon get_messages replay prepends history ──
 
-        live = call("replay", {"events": [
-            {"type": "message_start",
-             "message": {"role": "user",
-                         "content": [{"type": "text", "text": "live prompt"}]}},
-        ]})["state"]
-        hist = call("importHistory", {
-            "state": live,
-            "piMessages": [
-                {"role": "user",
-                 "content": [{"type": "text", "text": "old question"}],
-                 "timestamp": 111},
-                {"role": "assistant",
-                 "content": [{"type": "text", "text": "old answer"}]},
-                # tool-call-only content and malformed entries are skipped
-                {"role": "assistant", "content": [{"type": "toolCall"}]},
-                {"role": "user", "content": "not-a-list"},
-            ],
-        })
+        live = call(
+            "replay",
+            {
+                "events": [
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "live prompt"}],
+                        },
+                    },
+                ]
+            },
+        )["state"]
+        hist = call(
+            "importHistory",
+            {
+                "state": live,
+                "piMessages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "old question"}],
+                        "timestamp": 111,
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "old answer"}],
+                    },
+                    # tool-call-only content and malformed entries are skipped
+                    {"role": "assistant", "content": [{"type": "toolCall"}]},
+                    {"role": "user", "content": "not-a-list"},
+                ],
+            },
+        )
         texts = [(m["from"], m["text"]) for m in hist["messages"]]
-        check("importHistory order", texts, [
-            ("me", "old question"), ("peer", "old answer"), ("me", "live prompt"),
-        ])
+        check(
+            "importHistory order",
+            texts,
+            [
+                ("me", "old question"),
+                ("peer", "old answer"),
+                ("me", "live prompt"),
+            ],
+        )
         check("importHistory ts", hist["messages"][0]["ts"], 111)
         # Empty import is an identity on messages.
         noop = call("importHistory", {"state": live, "piMessages": []})

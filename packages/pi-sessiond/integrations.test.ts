@@ -448,9 +448,7 @@ test("mcpExchange runs the step chain and yields the final reply", async () => {
     sock,
     [
       {
-        send: [
-          { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
-        ],
+        send: [{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }],
         replyId: 1,
       },
       {

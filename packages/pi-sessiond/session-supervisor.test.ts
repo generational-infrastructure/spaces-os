@@ -123,7 +123,10 @@ test("agent_start/agent_end flip busy before the event reaches the transport", (
 test("extension_ui frames route to the side-channel hook with their session", () => {
   const sup = makeSupervisor();
   const session = sup.create("local", "m1", "");
-  spawns[0]!.callbacks.onExtensionUI({ type: "extension_ui_request", id: "u1" });
+  spawns[0]!.callbacks.onExtensionUI({
+    type: "extension_ui_request",
+    id: "u1",
+  });
   expect(sideChannels).toEqual([
     { session, frame: { type: "extension_ui_request", id: "u1" } },
   ]);

@@ -23,7 +23,6 @@ from qs_harness import Quickshell, fail, qs_env, stage_shell, wait_until
 TARGET = "test:quick-launch-host"
 
 
-
 def main() -> None:
     if len(sys.argv) != 5:
         fail("usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>")
@@ -58,7 +57,6 @@ def main() -> None:
         return None
 
     try:
-
         if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the host IPC target")
 

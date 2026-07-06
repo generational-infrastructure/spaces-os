@@ -22,7 +22,6 @@ No pi-sessiond, no executor, no LLM, no compositor — events are injected
 straight into PiSession._handleEvent. ~3s.
 """
 
-
 import json
 import os
 import sys
@@ -100,12 +99,14 @@ def main():
         # 100 tokens over a pinned 2 s elapsed window → 50.0 t/s.
 
         inject({"type": "agent_start"})
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -114,7 +115,8 @@ def main():
                 },
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -124,7 +126,8 @@ def main():
             },
         )
 
-        inject_with_elapsed(2_000,
+        inject_with_elapsed(
+            2_000,
             {
                 "type": "message_end",
                 "message": assistant_message(100),
@@ -155,12 +158,14 @@ def main():
 
         # ── Test 3: message_end with output=0 is a no-op ──
 
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start", "contentIndex": 0},
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -169,7 +174,8 @@ def main():
                 },
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -178,7 +184,8 @@ def main():
                 },
             },
         )
-        inject_with_elapsed(1_000,
+        inject_with_elapsed(
+            1_000,
             {
                 "type": "message_end",
                 "message": assistant_message(0),
@@ -198,7 +205,8 @@ def main():
 
         inject({"type": "agent_end", "messages": []})
         before_count = len(get_messages())
-        inject({
+        inject(
+            {
                 "type": "message_end",
                 "message": assistant_message(50),
             },

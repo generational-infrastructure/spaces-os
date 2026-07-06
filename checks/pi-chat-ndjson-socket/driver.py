@@ -97,8 +97,10 @@ def main() -> None:
 
         conn1.sendall(b'{"op":"a","n":1}\n{"op":"b","n":2}\nnot-json {{{\n')
         if not wait_until(
-            lambda: json.loads(ipc("received"))
-            == [{"op": "a", "n": 1}, {"op": "b", "n": 2}],
+            lambda: (
+                json.loads(ipc("received"))
+                == [{"op": "a", "n": 1}, {"op": "b", "n": 2}]
+            ),
             timeout_s=5,
         ):
             cleanup_logs()
@@ -125,9 +127,7 @@ def main() -> None:
         if not wait_until(lambda: json.loads(ipc("drops")) >= 1, timeout_s=5):
             cleanup_logs()
             fail("connection drop never surfaced")
-        if not wait_until(
-            lambda: json.loads(ipc("connected")) is False, timeout_s=3
-        ):
+        if not wait_until(lambda: json.loads(ipc("connected")) is False, timeout_s=3):
             cleanup_logs()
             fail("connected should read false after the listener vanished")
         # Let a few reconnect attempts fail so the interval doubles past
@@ -172,8 +172,10 @@ def main() -> None:
         rconn.sendall(b'{"op":"ok","n":1}\n')
         rconn.close()
         if not wait_until(
-            lambda: json.loads(ipc("replies"))
-            == [{"msg": {"op": "ok", "n": 1}, "raw": '{"op":"ok","n":1}'}],
+            lambda: (
+                json.loads(ipc("replies"))
+                == [{"msg": {"op": "ok", "n": 1}, "raw": '{"op":"ok","n":1}'}]
+            ),
             timeout_s=5,
         ):
             cleanup_logs()
@@ -197,8 +199,10 @@ def main() -> None:
         rconn, _ = req_lst.accept()
         read_line(rconn)  # swallow the request, never reply, keep open
         if not wait_until(
-            lambda: len(json.loads(ipc("replies"))) == 3
-            and json.loads(ipc("replies"))[-1] == {"msg": None, "raw": ""},
+            lambda: (
+                len(json.loads(ipc("replies"))) == 3
+                and json.loads(ipc("replies"))[-1] == {"msg": None, "raw": ""}
+            ),
             timeout_s=5,  # requestTimeoutMs is 1500 in shell.qml
         ):
             cleanup_logs()
@@ -210,8 +214,10 @@ def main() -> None:
         rconn, _ = req_lst.accept()
         rconn.close()
         if not wait_until(
-            lambda: len(json.loads(ipc("replies"))) == 4
-            and json.loads(ipc("replies"))[-1] == {"msg": None, "raw": ""},
+            lambda: (
+                len(json.loads(ipc("replies"))) == 4
+                and json.loads(ipc("replies"))[-1] == {"msg": None, "raw": ""}
+            ),
             timeout_s=5,
         ):
             cleanup_logs()

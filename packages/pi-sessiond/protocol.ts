@@ -205,16 +205,16 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-export function serializeEnvelope(env: ClientEnvelope | ServerEnvelope): string {
+export function serializeEnvelope(
+  env: ClientEnvelope | ServerEnvelope,
+): string {
   return JSON.stringify(env);
 }
 
 // Tolerant decode of a client's wire text (see the header note): unknown JSON
 // shapes fail, but wrong-typed optional fields inside a known kind degrade
 // instead of failing, mirroring how the daemon has always treated them.
-export function parseClientEnvelope(
-  text: string,
-): ParseResult<ClientEnvelope> {
+export function parseClientEnvelope(text: string): ParseResult<ClientEnvelope> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -297,9 +297,7 @@ function parseSessionInfo(value: unknown): SessionInfo | undefined {
 // Strict decode of a daemon's wire text (see the header note). Required
 // fields missing or mistyped ⇒ failure with a field-naming error; this is
 // also the corpus validator the fixture conformance test runs.
-export function parseServerEnvelope(
-  text: string,
-): ParseResult<ServerEnvelope> {
+export function parseServerEnvelope(text: string): ParseResult<ServerEnvelope> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

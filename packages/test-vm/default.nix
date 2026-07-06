@@ -31,7 +31,7 @@ vmDriver.mkVmLauncher {
   stateDirName = ".agent-vm";
   # Lazy under the non-x86 stub: mkVmLauncher never forces `vm` there,
   # so evaluating on aarch64 skips the x86-pinned test-machine config.
-  vm = inputs.self.nixosConfigurations.test-machine.config.system.build.vm;
+  inherit (inputs.self.nixosConfigurations.test-machine.config.system.build) vm;
   disk = "test-vm.qcow2";
   preRun = ''
     # One EXIT trap: the OpenRouter keyfile. (The display is QEMU's own

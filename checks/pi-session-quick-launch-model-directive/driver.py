@@ -267,9 +267,7 @@ def main() -> None:
             die("quickshell never bound the test:quick-launch IPC target")
 
         if not wait_until(
-            lambda: (
-                ipc("executorConnected", "host") == "true"
-            ),
+            lambda: ipc("executorConnected", "host") == "true",
             timeout_s=30,
         ):
             die("panel never connected/authenticated to the host executor")
@@ -322,10 +320,7 @@ def main() -> None:
         # daemon's pi logged its chat request — the model assertion reads
         # that log).
         if not wait_until(
-            lambda: (
-                "Background task complete"
-                in ipc("lastAssistantText", sid)
-            ),
+            lambda: "Background task complete" in ipc("lastAssistantText", sid),
             timeout_s=60,
         ):
             die("background session never received the streamed mock reply")

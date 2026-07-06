@@ -19,7 +19,7 @@
 #      silently shipping undocumented.
 { pkgs, inputs, ... }:
 let
-  lib = inputs.nixpkgs.lib;
+  inherit (inputs.nixpkgs) lib;
   kb = import ../../modules/keybinds.nix { inherit lib; };
 
   # Chord spellings: niri collapses SMod (spaces command modifier) to
@@ -27,15 +27,14 @@ let
   # additionally write `/` for the Slash keysym.
   niriChord =
     chord:
-    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (
-      lib.splitString "+" chord
-    );
+    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (lib.splitString "+" chord);
   docChord = chord: lib.replaceStrings [ "Slash" ] [ "/" ] (niriChord chord);
 
   # Exact kdl lines niri.nix must have injected, one per model niri bind.
   expectedKdlLines = pkgs.writeText "expected-niri-bind-lines" (
     lib.concatMapStringsSep "\n" (
-      bind: "    ${niriChord bind.chord} hotkey-overlay-title=\"${bind.title}\" { spawn \"${bind.spawn}\"; }"
+      bind:
+      "    ${niriChord bind.chord} hotkey-overlay-title=\"${bind.title}\" { spawn \"${bind.spawn}\"; }"
     ) kb.niriSpawnBinds
   );
 

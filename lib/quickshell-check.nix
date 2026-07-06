@@ -95,9 +95,7 @@ in
             export NIXPKGS_QT6_QML_IMPORT_PATH=${qtQmlPaths}
           ''}
           export PYTHONPATH=${harnessPy}''${PYTHONPATH:+:$PYTHONPATH}
-          ${lib.concatStringsSep "\n" (
-            lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") env
-          )}
+          ${lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") env)}
           ${python}/bin/python3 "$testDir/driver.py" \
             ${lib.getExe pkgs.quickshell} \
             "$testDir" \

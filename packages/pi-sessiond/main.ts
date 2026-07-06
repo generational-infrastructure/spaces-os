@@ -311,7 +311,6 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-
 // ---- model registry (local llama-swap provider, design §4.2) --------------
 
 const authStorage = AuthStorage.create(`${AGENT_DIR}/auth.json`);
@@ -1260,8 +1259,7 @@ Bun.serve<ConnData>({
       );
     },
     close(ws) {
-      for (const session of supervisor.values())
-        session.subscribers.delete(ws);
+      for (const session of supervisor.values()) session.subscribers.delete(ws);
       authedConns.delete(ws);
     },
   },

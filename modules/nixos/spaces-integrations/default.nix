@@ -28,7 +28,7 @@ let
   cfg = config.services.spaces-integrations;
   integLib = import ./lib.nix {
     inherit pkgs lib;
-    seccompDenylist = pkgsSelf.pi-sessiond.seccompDenylist;
+    inherit (pkgsSelf.pi-sessiond) seccompDenylist;
   };
 
   pkgsSelf = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};

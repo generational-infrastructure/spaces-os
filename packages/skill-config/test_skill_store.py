@@ -4,7 +4,6 @@ no subprocess, no sys.exit; failures are typed exceptions."""
 import json
 
 import pytest
-
 import skill_store
 
 

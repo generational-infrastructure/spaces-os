@@ -408,7 +408,10 @@ export async function callIntegrationTool(
 ): Promise<{ text: string; isError: boolean }> {
   const res = await mcpExchange(
     socketPath,
-    handshake({ method: "tools/call", params: { name: tool, arguments: args } }),
+    handshake({
+      method: "tools/call",
+      params: { name: tool, arguments: args },
+    }),
     { signal, timeoutMs },
   );
   if (!res.ok) {

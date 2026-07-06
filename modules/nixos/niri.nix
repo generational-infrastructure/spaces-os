@@ -43,9 +43,7 @@ let
   # collapses to "Mod" here.
   niriChord =
     chord:
-    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (
-      lib.splitString "+" chord
-    );
+    lib.concatMapStringsSep "+" (tok: if tok == "SMod" then "Mod" else tok) (lib.splitString "+" chord);
 
   # Every spaces-* spawn must be a notifying wrapper actually built by
   # spaces-commands.nix — fail eval loudly if the model names one that

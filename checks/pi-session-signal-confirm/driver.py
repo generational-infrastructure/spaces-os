@@ -25,7 +25,6 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.1):
     return _wait_until(predicate, timeout_s=timeout_s, interval_s=interval_s)
 
 
-
 def main() -> None:
     if len(sys.argv) != 5:
         fail("usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>")

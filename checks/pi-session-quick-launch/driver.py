@@ -229,9 +229,7 @@ def main() -> None:
         # The launch needs a welcomed executor (create_session is queued
         # behind whenConnected, but a connected panel makes failures sharp).
         if not wait_until(
-            lambda: (
-                ipc("executorConnected", "host") == "true"
-            ),
+            lambda: ipc("executorConnected", "host") == "true",
             timeout_s=30,
         ):
             die("panel never connected/authenticated to the host executor")
@@ -286,10 +284,7 @@ def main() -> None:
         # (2) the prompt must stream a response back over the WS — the
         # daemon's pi turn, answered by the mock LLM.
         if not wait_until(
-            lambda: (
-                "Background task complete"
-                in ipc("lastAssistantText", sid)
-            ),
+            lambda: "Background task complete" in ipc("lastAssistantText", sid),
             timeout_s=60,
         ):
             die("background session never received the streamed reply")

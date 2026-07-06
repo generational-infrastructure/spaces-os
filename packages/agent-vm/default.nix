@@ -30,12 +30,15 @@ vmDriver.mkVmDriver {
     disk = "test-machine.qcow2";
     # Lazy under the non-x86 stub: mkVmDriver never forces `vm` there,
     # so evaluating on aarch64 skips the x86-pinned test-machine config.
-    vm =
-      (inputs.self.nixosConfigurations.test-machine.extendModules {
+    inherit
+      ((inputs.self.nixosConfigurations.test-machine.extendModules {
         modules = [
           inputs.self.nixosModules.test-support
           { services.spaces.vm-debug.headless = true; }
         ];
-      }).config.system.build.vm;
+      }).config.system.build
+      )
+      vm
+      ;
   };
 }

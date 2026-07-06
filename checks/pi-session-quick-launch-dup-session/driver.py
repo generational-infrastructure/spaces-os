@@ -168,9 +168,7 @@ def main() -> None:
         # and the `sessions` broadcasts have been processed, so any orphan/dup
         # has already materialised.
         if not wait_until(
-            lambda: (
-                "Hello from the remote executor" in ipc("lastAssistantText", sid)
-            ),
+            lambda: "Hello from the remote executor" in ipc("lastAssistantText", sid),
             timeout_s=60,
         ):
             die("remote session never received the streamed reply")

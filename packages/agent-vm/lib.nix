@@ -256,10 +256,10 @@ in
               ${eachSep "\n" (n: "  ok_${san n}=0")}
                 while [ "$(date +%s)" -lt "$deadline" ]; do
               ${each (n: ''
-                  if [ "$ok_${san n}" -eq 0 ] && ssh_alive ${port n}; then
-                    ok_${san n}=1
-                    echo "${name}: ${n} ssh up"
-                  fi
+                if [ "$ok_${san n}" -eq 0 ] && ssh_alive ${port n}; then
+                  ok_${san n}=1
+                  echo "${name}: ${n} ssh up"
+                fi
               '')}
                   if ${eachSep " && " (n: "[ \"$ok_${san n}\" -eq 1 ]")}; then
                     exit 0

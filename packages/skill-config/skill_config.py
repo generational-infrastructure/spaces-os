@@ -24,9 +24,8 @@ import socket
 import sys
 import time
 
-import yaml
-
 import skill_store
+import yaml
 from skill_store import (
     Paths,
     SkillStore,
@@ -230,7 +229,9 @@ def api_dispatch(req: dict, store: SkillStore) -> dict:
     """One api request -> its `result` payload. Raises SkillStoreError
     (or ValueError for envelope-level problems) on failure."""
     if req.get("v") != API_VERSION:
-        raise ValueError(f"unsupported api version {req.get('v')!r} (want {API_VERSION})")
+        raise ValueError(
+            f"unsupported api version {req.get('v')!r} (want {API_VERSION})"
+        )
     op = req.get("op")
     if op == "set":
         store.set(req["skill"], req["profile"], req["field"], req["value"])

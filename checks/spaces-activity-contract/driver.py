@@ -153,9 +153,7 @@ def main():
             {
                 "version": 2,
                 "activeSessionId": "sess-a",
-                "sessions": [
-                    {"id": "sess-a", "name": "Chat A", "state": "working"}
-                ],
+                "sessions": [{"id": "sess-a", "name": "Chat A", "state": "working"}],
             }
         )
         expect(
@@ -177,9 +175,7 @@ def main():
 
         # (7) `sessions` not an array → Array.isArray guard empties the
         # list, while activeSessionId still applies from the same parse.
-        write_feed(
-            {"version": 1, "activeSessionId": "sess-x", "sessions": {"oops": 1}}
-        )
+        write_feed({"version": 1, "activeSessionId": "sess-x", "sessions": {"oops": 1}})
         expect("", "sess-x", "step7 non-array sessions guard")
 
         # (8) Feed removed (pi-chat gone) → onLoadFailed → blank bar.

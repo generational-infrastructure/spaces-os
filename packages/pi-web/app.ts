@@ -65,7 +65,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-
 // Compose a `wss://` (or `ws://` in dev) URL for one executor. Same-origin
 // peers reuse `location.host` (preserves the port the page was served on —
 // matters in nix-sandbox tests where the daemon binds an ephemeral port);
@@ -240,7 +239,8 @@ class ExecutorConn {
       case "error":
         // A failed correlated create settles here: release the pending id so
         // a retry can mint a fresh one.
-        if (msg.requestId !== undefined) this.pendingCreates.delete(msg.requestId);
+        if (msg.requestId !== undefined)
+          this.pendingCreates.delete(msg.requestId);
         this.onUpdate(this, "error", msg.error || "unknown");
         break;
       default:

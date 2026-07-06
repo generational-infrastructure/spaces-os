@@ -15,8 +15,7 @@ let
   inherit (inputs.nixpkgs) lib;
   integLib = import ../../modules/nixos/spaces-integrations/lib.nix {
     inherit pkgs lib;
-    seccompDenylist =
-      inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond.seccompDenylist;
+    inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond) seccompDenylist;
   };
 
   system = inputs.self.lib.mkEvalSystem {

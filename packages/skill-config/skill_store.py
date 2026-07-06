@@ -259,9 +259,7 @@ class SkillStore:
         skills_dir = self.paths.skills_dir
         if not skills_dir.exists():
             return []
-        return sorted(
-            p.name for p in skills_dir.iterdir() if (p / "SKILL.md").exists()
-        )
+        return sorted(p.name for p in skills_dir.iterdir() if (p / "SKILL.md").exists())
 
     def resolve_skill(self, name: str) -> str:
         """Map a user/agent-supplied skill name to its on-disk directory name.

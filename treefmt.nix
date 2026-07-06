@@ -30,6 +30,8 @@ _: {
     "programs/pi-chat/MsgText.js"
     "programs/pi-chat/Msg.js"
     "programs/pi-chat/BarParse.js"
+    "programs/pi-chat/Reducer.js"
+    "programs/pi-chat/SessionRegistry.js"
     # Qt Linguist translation source: a .ts file, but XML, not TypeScript.
     "packages/calamares-spaces-extensions/files/branding/spaces-os/lang/calamares-spaces-os_en.ts"
   ];

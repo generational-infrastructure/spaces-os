@@ -349,7 +349,11 @@ describe("builders", () => {
   });
 
   test("errorEnvelope carries sessionId/requestId only when given", () => {
-    expect(errorEnvelope("boom")).toEqual({ v: 1, kind: "error", error: "boom" });
+    expect(errorEnvelope("boom")).toEqual({
+      v: 1,
+      kind: "error",
+      error: "boom",
+    });
     expect(errorEnvelope("boom", { sessionId: "s1", requestId: "r1" })).toEqual(
       { v: 1, kind: "error", error: "boom", sessionId: "s1", requestId: "r1" },
     );

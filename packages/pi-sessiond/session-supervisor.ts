@@ -74,7 +74,10 @@ export interface SupervisorOptions<C> {
   idleTimeoutMs: number;
   // Spawns the per-session child (argv build, sandbox staging) — main.ts owns
   // that plumbing; tests inject a fake.
-  createDriver: (spec: SessionSpec, callbacks: DriverCallbacks) => SessionDriver;
+  createDriver: (
+    spec: SessionSpec,
+    callbacks: DriverCallbacks,
+  ) => SessionDriver;
   // The session event stream, after lifecycle peeking — transport fan-out.
   onEvent: (session: Session<C>, frame: RpcFrame) => void;
   // extension_ui_request frames: surfaced to the panel as a side-channel.
@@ -178,11 +181,7 @@ export class SessionSupervisor<C> {
         id: s.id,
         name: s.name,
         executor: this.opts.executorId,
-        state: s.ledger.parked
-          ? "parked"
-          : s.busy
-            ? "live-busy"
-            : "live-idle",
+        state: s.ledger.parked ? "parked" : s.busy ? "live-busy" : "live-idle",
         updated: s.lastActivity,
       });
     }

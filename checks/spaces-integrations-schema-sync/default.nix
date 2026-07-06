@@ -14,8 +14,7 @@ let
   inherit (inputs.nixpkgs) lib;
   integLib = import ../../modules/nixos/spaces-integrations/lib.nix {
     inherit pkgs lib;
-    seccompDenylist =
-      inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond.seccompDenylist;
+    inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond) seccompDenylist;
   };
 
   system = inputs.self.lib.mkEvalSystem {
@@ -52,9 +51,9 @@ let
 
   outOfSync = lib.filter (name: !inSync name) (lib.attrNames integrations);
 in
-assert lib.assertMsg (outOfSync == [ ]) (
-  "integrations out of sync with their package schema.json: ${toString outOfSync}"
-);
+assert lib.assertMsg (
+  outOfSync == [ ]
+) "integrations out of sync with their package schema.json: ${toString outOfSync}";
 pkgs.runCommand "spaces-integrations-schema-sync-test" { } ''
   echo "manifest fields match the package schemas; autoRun within exported tools"
   touch "$out"

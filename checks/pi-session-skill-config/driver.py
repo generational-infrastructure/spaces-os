@@ -19,7 +19,6 @@ Exercises the REAL production path:
 No pi process, no pi-sessiond, no LLM, no compositor. ~5s.
 """
 
-
 import json
 import os
 import subprocess
@@ -27,6 +26,7 @@ import sys
 import time
 
 from qs_harness import Quickshell, fail, qs_env, reap, stage_shell, wait_until
+
 
 def stage_test_skill(state_dir: str) -> None:
     """Create a minimal test-skill in skills-defs with a known schema."""
@@ -45,7 +45,6 @@ def stage_test_skill(state_dir: str) -> None:
             "\n"
             "This skill exists only in the test harness.\n"
         )
-
 
 
 # ── main ──────────────────────────────────────────────────────────
@@ -194,8 +193,7 @@ def main():
         request_id = prompt["id"]
 
         # 5. Submit a value through the QML IPC handler.
-        qs.ipc("submit", request_id, "https://test.example.com/api"
-        )
+        qs.ipc("submit", request_id, "https://test.example.com/api")
 
         # 6. CLI should exit 0 with "saved ..." on stdout.
         try:

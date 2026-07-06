@@ -331,9 +331,7 @@ def test_make_server_profile_resolution_error_passthrough(tmp_path, monkeypatch)
     assert is_error and "no profile" in text
 
 
-def test_make_server_secret_fingerprint_is_callable_and_stable(
-    tmp_path, monkeypatch
-):
+def test_make_server_secret_fingerprint_is_callable_and_stable(tmp_path, monkeypatch):
     _provision(tmp_path, monkeypatch)
     _, call_tool, _ = _demo_server()
     expected = hashlib.sha256(b"pw-1").hexdigest()[:16]

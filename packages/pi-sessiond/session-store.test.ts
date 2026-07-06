@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,7 +90,11 @@ test("readMeta tolerates missing or malformed sidecars", () => {
     store.metaPathOf(ID),
     JSON.stringify({ provider: "local", model: "m1" }),
   );
-  expect(store.readMeta(ID)).toEqual({ provider: "local", model: "m1", name: "" });
+  expect(store.readMeta(ID)).toEqual({
+    provider: "local",
+    model: "m1",
+    name: "",
+  });
 });
 
 test("ensureWorkdir recreates a workspace dropped from disk", () => {

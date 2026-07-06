@@ -27,6 +27,7 @@ def find_msg(msgs, **criteria):
             return m
     return None
 
+
 def main():
     qs_bin, test_dir, plugin_dir, work_dir = sys.argv[1:5]
 
@@ -60,7 +61,8 @@ def main():
         inject({"type": "agent_start"})
 
         # thinking_start.
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_start",
@@ -82,7 +84,8 @@ def main():
         thinking_id = thinking["id"]
 
         # thinking_delta — two chunks.
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_delta",
@@ -91,7 +94,8 @@ def main():
                 },
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_delta",
@@ -111,7 +115,8 @@ def main():
             fail(f"thinking text mismatch: {thinking['text']!r}")
 
         # thinking_end.
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_end",
@@ -134,12 +139,14 @@ def main():
 
         # ── Test 2: text follows thinking in same turn ──
 
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {"type": "text_start"},
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_delta",
@@ -147,7 +154,8 @@ def main():
                 },
             },
         )
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "text_end",
@@ -155,7 +163,8 @@ def main():
                 },
             },
         )
-        inject({
+        inject(
+            {
                 "type": "agent_end",
                 "messages": [],
             },
@@ -178,7 +187,8 @@ def main():
         # ── Test 3: empty thinking block gets removed ──
 
         inject({"type": "agent_start"})
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_start",
@@ -199,7 +209,8 @@ def main():
         empty_id = empty_thinking[0]["id"]
 
         # End with no deltas and no content.
-        inject({
+        inject(
+            {
                 "type": "message_update",
                 "assistantMessageEvent": {
                     "type": "thinking_end",
