@@ -840,60 +840,21 @@ Item {
   // event's `instance` field (set from SPACES_SESSION_ID inside the
   // scope), falling back to the active session.
 
-  Socket {
+  NdjsonSocket {
     id: skillSock
     path: root.skillConfigSockPath
-    connected: true
-    parser: SplitParser { onRead: line => root._recvSkillConfig(line) }
-    onConnectionStateChanged: {
-      if (connected) {
-        skillReconnect.stop();
-        skillReconnect.interval = 500;
-        write(JSON.stringify({ op: "subscribe" }) + "\n");
-        flush();
-      } else {
-        skillReconnect.start();
-        root._retractAllPendingPrompts();
-      }
-    }
-    onError: e => {
-      Logger.w("PiChat", "skill-config subscribe", e);
-      skillReconnect.start();
-    }
-  }
-  Timer {
-    id: skillReconnect
-    interval: 500
-    onTriggered: {
-      // Bounce the connection: setting connected=false closes the
-      // socket, =true reopens it. Matches the old Loader recreate
-      // semantics without losing the static Socket type.
-      skillSock.connected = false;
-      skillSock.connected = true;
-      interval = Math.min(interval * 2, 4000);
-    }
-  }
-  Component {
-    id: skillOneShotComponent
-    Socket {
-      property var payload: null
-      connected: path !== ""
-      onConnectionStateChanged: {
-        if (!connected) return;
-        write(JSON.stringify(payload) + "\n");
-        flush();
-      }
-      onError: e => Logger.w("PiChat", "skill-config one-shot", e)
-      parser: SplitParser { onRead: () => {} }
-    }
+    mode: "subscribe"
+    hello: ({ op: "subscribe" })
+    onMessage: ev => root._recvSkillConfig(ev)
+    onDropped: root._retractAllPendingPrompts()
+    onErrored: e => Logger.w("PiChat", "skill-config subscribe", e)
+    onBadLine: raw => Logger.w("PiChat", "bad skill-config json", raw)
   }
 
+  // One-shot writes (submit/cancel) ride a fresh connection on the
+  // same path; no reply expected.
   function skillConfigSend(payload) {
-    const c = skillOneShotComponent.createObject(root, {
-      path: root.skillConfigSockPath,
-      payload: payload,
-    });
-    Qt.callLater(() => c.destroy(2000));
+    skillSock.request(payload);
   }
 
   // ── open-url socket ──────────────────────────────────────────────
@@ -904,10 +865,7 @@ Item {
     sockPath: root.openUrlSockPath
   }
 
-  function _recvSkillConfig(raw) {
-    let ev;
-    try { ev = JSON.parse(raw); }
-    catch (_e) { Logger.w("PiChat", "bad skill-config json", raw); return; }
+  function _recvSkillConfig(ev) {
     switch (ev.op) {
     case "snapshot":
       _reconcileSkillSnapshot(ev.instance, ev.requests || []);

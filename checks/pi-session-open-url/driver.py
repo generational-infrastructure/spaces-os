@@ -33,7 +33,7 @@ shell_qml.parent.mkdir(parents=True, exist_ok=True)
 # stage shell.qml inside a dir that also contains the OpenUrlListener.
 # Copy plugin files alongside so the relative import works.
 shell_qml.write_text(Path(TEST_DIR, "shell.qml").read_text())
-for name in ("OpenUrlListener.qml",):
+for name in ("OpenUrlListener.qml", "NdjsonSocket.qml"):
     (shell_qml.parent / name).write_text(Path(PLUGIN_DIR, name).read_text())
 # Stub the qs.Commons.Logger import used by OpenUrlListener.
 commons_dir = shell_qml.parent / "Commons"

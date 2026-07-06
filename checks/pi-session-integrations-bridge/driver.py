@@ -50,6 +50,10 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
         os.path.join(plugin_dir, "IntegrationsBridge.qml"),
         os.path.join(root, "IntegrationsBridge.qml"),
     )
+    shutil.copy2(
+        os.path.join(plugin_dir, "NdjsonSocket.qml"),
+        os.path.join(root, "NdjsonSocket.qml"),
+    )
     now = time.time()
     for r, _dirs, files in os.walk(root):
         for f in files:

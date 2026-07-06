@@ -26,73 +26,25 @@ Item {
 
   // ── skill-config subscriber (mirror of PiChatBackend) ──────────
 
-  Loader {
+  NdjsonSocket {
     id: skillSock
-    sourceComponent: skillSockComponent
-    readonly property bool connected: item?.connected ?? false
-  }
-  Component {
-    id: skillSockComponent
-    Socket {
-      path: root.sockPath
-      connected: true
-      parser: SplitParser { onRead: line => root._recv(line) }
-      onConnectionStateChanged: {
-        if (connected) {
-          skillReconnect.stop();
-          skillReconnect.interval = 500;
-          write(JSON.stringify({ op: "subscribe" }) + "\n");
-          flush();
-        } else {
-          skillReconnect.start();
-        }
-      }
-      onError: (e) => {
-        console.warn("skill-config subscribe error:", e);
-        skillReconnect.start();
-      }
-    }
-  }
-  Timer {
-    id: skillReconnect
-    interval: 500
-    onTriggered: {
-      skillSock.active = false; skillSock.active = true;
-      interval = Math.min(interval * 2, 4000);
-    }
+    path: root.sockPath
+    mode: "subscribe"
+    hello: ({ op: "subscribe" })
+    onMessage: ev => root._recv(ev)
+    onErrored: e => console.warn("skill-config subscribe error:", e)
+    onBadLine: raw => console.warn("bad skill-config json", raw)
   }
 
-  // One-shot socket for submit/cancel.
-  Component {
-    id: skillOneShotComponent
-    Socket {
-      property var payload: null
-      connected: path !== ""
-      onConnectionStateChanged: {
-        if (!connected) return;
-        write(JSON.stringify(payload) + "\n");
-        flush();
-      }
-      onError: (e) => console.warn("skill-config one-shot error:", e)
-      parser: SplitParser { onRead: () => {} }
-    }
-  }
   // PiSession.promptRespond/promptCancel call this to push the value
   // back to the daemon. Same shape as PiChatBackend.skillConfigSend.
   function skillConfigSend(payload) {
-    const c = skillOneShotComponent.createObject(root, {
-      path: root.sockPath,
-      payload: payload,
-    });
-    Qt.callLater(() => c.destroy(2000));
+    skillSock.request(payload);
   }
 
   // ── event handling (mirrors PiChatBackend; records via Msg.js) ─
 
-  function _recv(raw) {
-    let ev;
-    try { ev = JSON.parse(raw); }
-    catch (_e) { console.warn("bad skill-config json", raw); return; }
+  function _recv(ev) {
     switch (ev.op) {
     case "snapshot":
       _reconcileSnapshot(ev.requests || []);

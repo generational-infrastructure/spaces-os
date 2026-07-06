@@ -2,10 +2,11 @@
 // panel UI.
 //
 // Owns the long-lived subscriber connection to
-// $XDG_RUNTIME_DIR/spaces-signal/panel.sock. Each `op:"snapshot"`
-// rebuilds `pending`; `op:"added"` appends one row; `op:"removed"`
-// drops a row by token. The panel binds `pending` directly to render
-// the approval cards.
+// $XDG_RUNTIME_DIR/spaces-signal/panel.sock (connection lifecycle —
+// reconnect, backoff, line framing — lives in NdjsonSocket). Each
+// `op:"snapshot"` rebuilds `pending`; `op:"added"` appends one row;
+// `op:"removed"` drops a row by token. The panel binds `pending`
+// directly to render the approval cards.
 //
 // `approve(token)` / `deny(token)` write one NDJSON line each on the
 // same socket; the bridge's broadcast then drops the row from
@@ -18,7 +19,6 @@
 // enqueue socket and has no way to mint approvals.
 pragma ComponentBehavior: Bound
 import QtQuick
-import Quickshell.Io
 
 QtObject {
   id: root
@@ -28,7 +28,7 @@ QtObject {
   property string sockPath: ""
 
   // Auto-reconnect: bridge service may restart (e.g. signal-cli
-  // daemon flapped). We retry with linear backoff so subscribers
+  // daemon flapped). NdjsonSocket retries with backoff so subscribers
   // pick the socket back up without operator intervention.
   property bool active: false
 
@@ -37,30 +37,29 @@ QtObject {
   //   { token, recipient, display_name, body, created_at, account_uuid, ... }
   property var pending: []
 
-  readonly property bool connected: _socket.item?.connected ?? false
+  readonly property bool connected: _sock.connected
 
   function approve(token) {
-    _send({ op: "approve", token: token });
+    _sock.send({ op: "approve", token: token });
   }
 
   function deny(token) {
-    _send({ op: "deny", token: token });
+    _sock.send({ op: "deny", token: token });
   }
 
-  function _send(payload) {
-    if (!_socket.item || !_socket.item.connected) return false;
-    try {
-      _socket.item.write(JSON.stringify(payload) + "\n");
-      _socket.item.flush();
-      return true;
-    } catch (e) {
-      return false;
-    }
+  property NdjsonSocket _sock: NdjsonSocket {
+    path: root.sockPath
+    mode: "subscribe"
+    active: root.active
+    hello: ({ op: "subscribe" })
+    onMessage: ev => root._onEvent(ev)
+    // Connection dropped — drop any cached state so the panel doesn't
+    // render stale approval cards against a bridge that may have
+    // restarted with fresh tokens.
+    onDropped: root.pending = []
   }
 
-  function _onLine(raw) {
-    let ev;
-    try { ev = JSON.parse(raw); } catch (_e) { return; }
+  function _onEvent(ev) {
     if (!ev || !ev.op) return;
     if (ev.op === "snapshot") {
       const arr = Array.isArray(ev.pending) ? ev.pending.slice() : [];
@@ -85,41 +84,5 @@ QtObject {
     // op === "decision" / "error" are responses to our own approve/
     // deny calls; nothing to render — the matching `removed` event
     // tells us the row is gone.
-  }
-
-  property var _socket: Loader {
-    active: root.active && root.sockPath !== ""
-    sourceComponent: Component {
-      Socket {
-        path: root.sockPath
-        connected: true
-        parser: SplitParser { onRead: line => root._onLine(line) }
-        onConnectionStateChanged: {
-          if (connected) {
-            root._reconnectTimer.stop();
-            root._reconnectTimer.interval = 500;
-            write(JSON.stringify({ op: "subscribe" }) + "\n");
-            flush();
-          } else {
-            // Connection dropped — drop any cached state so the
-            // panel doesn't render stale approval cards against a
-            // bridge that may have restarted with fresh tokens.
-            root.pending = [];
-            root._reconnectTimer.start();
-          }
-        }
-        onError: _e => root._reconnectTimer.start()
-      }
-    }
-  }
-
-  property var _reconnectTimer: Timer {
-    interval: 500
-    onTriggered: {
-      root._socket.active = false;
-      root._socket.active = true;
-      // Cap backoff at 4s — bridge restarts via systemd within ~3s.
-      interval = Math.min(interval * 2, 4000);
-    }
   }
 }
