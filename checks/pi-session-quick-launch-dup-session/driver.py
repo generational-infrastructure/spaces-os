@@ -97,8 +97,8 @@ def main() -> None:
     def daemon_url():
         try:
             with open(os.path.join(work_dir, "mock-daemon.log")) as fh:
-                for line in fh:
-                    line = line.strip()
+                for raw in fh:
+                    line = raw.strip()
                     if line.startswith("ws://"):
                         return line
         except OSError:

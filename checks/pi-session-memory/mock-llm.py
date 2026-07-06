@@ -69,7 +69,8 @@ def find_user_text(messages):
 
 def is_extractor_call(messages):
     """The extractor wraps EXTRACT_PROMPT + <turn>...</turn>; first user
-    message text starts with the EXTRACT_PROMPT opener."""
+    message text starts with the EXTRACT_PROMPT opener.
+    """
     for m in messages or []:
         if m.get("role") != "user":
             continue

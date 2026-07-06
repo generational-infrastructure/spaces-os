@@ -16,10 +16,11 @@ read the response trivially deadlocks.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 NotificationHandler = Callable[[str, object], None]
 
@@ -83,14 +84,10 @@ class JsonRpcClient:
         if self._closed.is_set():
             return
         self._closed.set()
-        try:
+        with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             self._sock.close()
-        except OSError:
-            pass
         # Unblock any in-flight call() waiters so callers don't hang
         # waiting for a response that will never arrive.
         with self._pending_lock:
@@ -99,7 +96,8 @@ class JsonRpcClient:
 
     def wait_closed(self, timeout: float | None = None) -> bool:
         """Block until the reader has exited (socket closed by either
-        side). Returns True iff the reader finished within `timeout`."""
+        side). Returns True iff the reader finished within `timeout`.
+        """
         self._reader_thread.join(timeout)
         return not self._reader_thread.is_alive()
 
@@ -114,7 +112,8 @@ class JsonRpcClient:
 
     def _send_line(self, payload: dict) -> None:
         if self._closed.is_set():
-            raise OSError("jsonrpc client is closed")
+            msg = "jsonrpc client is closed"
+            raise OSError(msg)
         line = json.dumps(payload, separators=(",", ":")) + "\n"
         data = line.encode("utf-8")
         with self._write_lock:
@@ -137,15 +136,15 @@ class JsonRpcClient:
                 req["params"] = params
             self._send_line(req)
             if not evt.wait(timeout):
-                raise TimeoutError(
-                    f"jsonrpc call {method!r} timed out after {timeout}s"
-                )
+                msg = f"jsonrpc call {method!r} timed out after {timeout}s"
+                raise TimeoutError(msg)
             with self._pending_lock:
                 resp = self._results.pop(req_id, None)
             if resp is None:
                 # Closed under us — close() sets every pending event so
                 # the caller wakes up and sees this state.
-                raise OSError(f"jsonrpc connection closed mid-call to {method!r}")
+                msg = f"jsonrpc connection closed mid-call to {method!r}"
+                raise OSError(msg)
         finally:
             with self._pending_lock:
                 self._pending.pop(req_id, None)
@@ -183,21 +182,17 @@ class JsonRpcClient:
                 if "id" in msg and msg["id"] is not None and "method" not in msg:
                     self._deliver_response(int(msg["id"]), msg)
                 elif "method" in msg and self._on_notification is not None:
-                    try:
+                    # Notification handler crashes must not kill the
+                    # read loop — the next response may be one the
+                    # main thread is waiting on. Swallow silently;
+                    # the handler is expected to log if it cares.
+                    with contextlib.suppress(Exception):
                         self._on_notification(str(msg["method"]), msg.get("params"))
-                    except Exception:
-                        # Notification handler crashes must not kill the
-                        # read loop — the next response may be one the
-                        # main thread is waiting on. Swallow silently;
-                        # the handler is expected to log if it cares.
-                        pass
         finally:
             self.close()
             if self._on_close is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._on_close()
-                except Exception:
-                    pass
 
     def _deliver_response(self, req_id: int, msg: dict) -> None:
         with self._pending_lock:

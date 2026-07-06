@@ -53,7 +53,8 @@ def main() -> None:
         out = qs.ipc("call", fn, json.dumps({"args": list(args)}), timeout=20)
         got = json.loads(out)
         if isinstance(got, dict) and "_error" in got:
-            raise RuntimeError(f"call({fn}): {got['_error']}")
+            msg = f"call({fn}): {got['_error']}"
+            raise RuntimeError(msg)
         return got
 
     qs.start()

@@ -58,7 +58,7 @@ from qs_harness import (
 TOKEN = "attach-image-secret"
 
 
-# 1×1 transparent PNG, constructed inline so the test stays hermetic.
+# 1x1 transparent PNG, constructed inline so the test stays hermetic.
 def _tiny_png_bytes() -> bytes:
     sig = b"\x89PNG\r\n\x1a\n"
 
@@ -66,7 +66,7 @@ def _tiny_png_bytes() -> bytes:
         crc = zlib.crc32(tag + payload)
         return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", crc)
 
-    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)  # 1×1, 8-bit RGBA
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)  # 1x1, 8-bit RGBA
     idat = zlib.compress(b"\x00\x00\x00\x00\x00")  # one scanline of zeroes
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 

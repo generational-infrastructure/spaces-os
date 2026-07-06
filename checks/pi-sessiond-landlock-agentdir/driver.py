@@ -27,6 +27,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import websockets
 
@@ -75,7 +76,7 @@ async def scenario(ws, state):
 
         # The per-session agent dir is seeded with the static config copies.
         for f in ("settings.json", "bash-confirm.json"):
-            if not os.path.isfile(os.path.join(adir, f)):
+            if not (Path(adir) / f).is_file():
                 fail(f"{name}: per-session agent dir missing {f} (looked in {adir})")
 
         # The policy grants the per-session tree rw and never the shared dir.

@@ -15,6 +15,7 @@ this RPC verb, so this is the cheapest layer at which a regression
 would actually break the user-facing behavior.
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -67,7 +68,8 @@ def send(proc, msg_id, payload):
 
 def drain_until(q, predicate):
     """Pull events off q until `predicate(ev)` returns True; return that
-    event. Times out via READ_TIMEOUT_S."""
+    event. Times out via READ_TIMEOUT_S.
+    """
     deadline = time.monotonic() + READ_TIMEOUT_S
     while True:
         remaining = deadline - time.monotonic()
@@ -252,10 +254,8 @@ def main():
 
         print("OK")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             proc.stdin.close()
-        except Exception:
-            pass
         try:
             proc.wait(timeout=5)
         except Exception:

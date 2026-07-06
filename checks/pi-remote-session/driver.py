@@ -178,7 +178,8 @@ async def run(uri, token, executor):
 async def run_resume(uri, token, session_id):
     """Attach to a *cold* session (its subprocess is gone): the daemon must
     respawn `pi --continue` from the committed jsonl and serve it live again
-    with the prior conversation restored."""
+    with the prior conversation restored.
+    """
     async with websockets.connect(uri) as ws:
         await ws.send(
             json.dumps(
@@ -236,7 +237,8 @@ async def run_resume(uri, token, session_id):
 
 async def run_models(uri, token):
     """Assert get_available_models surfaces the OpenRouter catalog (registered
-    in the daemon's AuthStorage from its API key) alongside the local provider."""
+    in the daemon's AuthStorage from its API key) alongside the local provider.
+    """
     async with websockets.connect(uri) as ws:
         await ws.send(
             json.dumps(
@@ -312,7 +314,7 @@ def main():
         asyncio.run(coro)
     except websockets.exceptions.WebSocketException as e:
         fail(f"websocket error: {e!r}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         fail("timed out waiting for a server envelope")
     except OSError as e:
         fail(f"could not reach server: {e!r}")

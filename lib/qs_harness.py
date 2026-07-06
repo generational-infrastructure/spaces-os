@@ -20,12 +20,15 @@ shell.qml or Commons/ always wins. Adding a new .js file to the plugin
 therefore never touches any driver again.
 """
 
+import contextlib
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 #: File names staged by the test-dir overlay: QML sources plus the qmldir
 #: module manifests. Python drivers, fixtures and default.nix stay out of
@@ -48,7 +51,9 @@ def free_port() -> int:
     return port
 
 
-def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
+def wait_until(
+    predicate: Callable[[], object], *, timeout_s: float, interval_s: float = 0.2
+) -> bool:
     """Poll `predicate` until truthy or `timeout_s` elapses."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -72,7 +77,7 @@ def wait_for_port(port: int, *, timeout_s: float = 15, host: str = "127.0.0.1") 
 
 def wait_for_path(path: str, *, timeout_s: float = 15) -> bool:
     """Wait until `path` exists (unix sockets, ready files)."""
-    return wait_until(lambda: os.path.exists(path), timeout_s=timeout_s, interval_s=0.1)
+    return wait_until(Path(path).exists, timeout_s=timeout_s, interval_s=0.1)
 
 
 def touch_tree(root: str) -> None:
@@ -85,10 +90,8 @@ def touch_tree(root: str) -> None:
     now = time.time()
     for r, _dirs, files in os.walk(root):
         for f in files:
-            try:
-                os.utime(os.path.join(r, f), (now, now))
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                os.utime(Path(r) / f, (now, now))
 
 
 def _is_qml_asset(name: str) -> bool:
@@ -104,20 +107,21 @@ def _subtree_has_qml_assets(src: str) -> bool:
 
 def _overlay_qml_assets(src: str, dst: str) -> None:
     """Copy the QML assets of `src` into `dst` (recursing into dirs that hold
-    any), replacing read-only files already staged from the store."""
-    os.makedirs(dst, exist_ok=True)
-    for name in sorted(os.listdir(src)):
-        s = os.path.join(src, name)
-        d = os.path.join(dst, name)
-        if os.path.isdir(s):
+    any), replacing read-only files already staged from the store.
+    """
+    dst_path = Path(dst)
+    dst_path.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(Path(src).iterdir()):
+        target = dst_path / entry.name
+        if entry.is_dir():
             # skip asset-less dirs entirely (fixtures/, __pycache__/, ...)
-            if _subtree_has_qml_assets(s):
-                _overlay_qml_assets(s, d)
-        elif _is_qml_asset(name):
-            if os.path.exists(d):
-                os.chmod(d, 0o644)
-            shutil.copy2(s, d)
-            os.chmod(d, 0o644)
+            if _subtree_has_qml_assets(str(entry)):
+                _overlay_qml_assets(str(entry), str(target))
+        elif _is_qml_asset(entry.name):
+            if target.exists():
+                target.chmod(0o644)
+            shutil.copy2(entry, target)
+            target.chmod(0o644)
 
 
 def stage_shell(
@@ -125,8 +129,8 @@ def stage_shell(
     plugin_dir: str,
     work_dir: str,
     *,
-    plugin_files=None,
-    overlay_dirs=None,
+    plugin_files: Sequence[str] | None = None,
+    overlay_dirs: Sequence[str] | None = None,
 ) -> str:
     """Stage <work_dir>/shell and return its path.
 
@@ -136,40 +140,48 @@ def stage_shell(
     (default: the check dir itself) so test-local files win. Everything is
     made writable and mtime-touched.
     """
-    root = os.path.join(work_dir, "shell")
-    os.makedirs(root, exist_ok=True)
+    root = Path(work_dir) / "shell"
+    root.mkdir(parents=True, exist_ok=True)
     if plugin_files is None:
         shutil.copytree(plugin_dir, root, dirs_exist_ok=True)
     else:
         for name in plugin_files:
-            src = os.path.join(plugin_dir, name)
-            if os.path.isdir(src):
-                shutil.copytree(src, os.path.join(root, name), dirs_exist_ok=True)
+            src = Path(plugin_dir) / name
+            if src.is_dir():
+                shutil.copytree(src, root / name, dirs_exist_ok=True)
             else:
-                shutil.copy2(src, os.path.join(root, name))
+                shutil.copy2(src, root / name)
     # store copies are read-only; the overlay (and any scenario writes) need
     # +w — including the root itself, whose mode copytree copied from the store
-    os.chmod(root, 0o755)
+    root.chmod(0o755)
     for r, dirs, files in os.walk(root):
         for name in dirs:
-            os.chmod(os.path.join(r, name), 0o755)
+            (Path(r) / name).chmod(0o755)
         for name in files:
-            os.chmod(os.path.join(r, name), 0o644)
+            (Path(r) / name).chmod(0o644)
     for od in overlay_dirs if overlay_dirs is not None else (test_dir,):
-        _overlay_qml_assets(od, root)
-    touch_tree(root)
-    return root
+        _overlay_qml_assets(od, str(root))
+    touch_tree(str(root))
+    return str(root)
 
 
-def spawn(cmd, work_dir: str, log_name: str, env=None) -> subprocess.Popen:
+def spawn(
+    cmd: Sequence[str],
+    work_dir: str,
+    log_name: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen:
     """Spawn a helper process (fake daemon, mock LLM, ...) with its stdout+
-    stderr captured to <work_dir>/<log_name>."""
-    log = open(os.path.join(work_dir, log_name), "w")
+    stderr captured to <work_dir>/<log_name>.
+    """
+    # The handle is handed to the child and must outlive this function;
+    # it is reclaimed when the Popen object (and this fd) are GC'd.
+    log = (Path(work_dir) / log_name).open("w")
     return subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
 
 
-def reap(*procs, timeout_s: float = 5) -> None:
-    """terminate → wait(timeout) → kill each given process (None entries ok)."""
+def reap(*procs: subprocess.Popen | None, timeout_s: float = 5) -> None:
+    """Terminate → wait(timeout) → kill each given process (None entries ok)."""
     live = [p for p in procs if p is not None]
     for p in live:
         p.terminate()
@@ -180,19 +192,19 @@ def reap(*procs, timeout_s: float = 5) -> None:
             p.kill()
 
 
-def qs_env(work_dir: str, extra=None) -> dict:
+def qs_env(work_dir: str, extra: dict[str, str] | None = None) -> dict:
     """The minimal offscreen-quickshell environment.
 
     HOME/XDG_RUNTIME_DIR live under `work_dir`; the Qt plugin/import paths
     come from the exports set up by lib/quickshell-check.nix.
     """
-    xdg = os.path.join(work_dir, "xdg")
-    os.makedirs(xdg, exist_ok=True)
-    os.chmod(xdg, 0o700)
+    xdg = Path(work_dir) / "xdg"
+    xdg.mkdir(parents=True, exist_ok=True)
+    xdg.chmod(0o700)
     env = {
         "HOME": work_dir,
         "PATH": os.environ.get("PATH", "/bin:/usr/bin"),
-        "XDG_RUNTIME_DIR": xdg,
+        "XDG_RUNTIME_DIR": str(xdg),
         "QT_QPA_PLATFORM": "offscreen",
         "QT_PLUGIN_PATH": os.environ.get("QT_PLUGIN_PATH", ""),
         "QML2_IMPORT_PATH": os.environ.get("QML2_IMPORT_PATH", ""),
@@ -215,7 +227,14 @@ class Quickshell:
 
     LOG_NAMES = ("qs.stdout.log", "qs.stderr.log")
 
-    def __init__(self, qs_bin, shell_qml, env, work_dir, ipc_target=None):
+    def __init__(
+        self,
+        qs_bin: str,
+        shell_qml: str,
+        env: dict[str, str],
+        work_dir: str,
+        ipc_target: str | None = None,
+    ) -> None:
         self.qs_bin = qs_bin
         self.shell_qml = shell_qml
         self.env = env
@@ -224,14 +243,16 @@ class Quickshell:
         self.proc = None
 
     def start(self) -> subprocess.Popen:
-        out = open(os.path.join(self.work_dir, self.LOG_NAMES[0]), "w")
-        err = open(os.path.join(self.work_dir, self.LOG_NAMES[1]), "w")
+        # Both handles are handed to the qs child process and must outlive
+        # this method; they are reclaimed when the process is reaped/GC'd.
+        out = (Path(self.work_dir) / self.LOG_NAMES[0]).open("w")
+        err = (Path(self.work_dir) / self.LOG_NAMES[1]).open("w")
         self.proc = subprocess.Popen(
             [self.qs_bin, "-p", self.shell_qml], env=self.env, stdout=out, stderr=err
         )
         return self.proc
 
-    def ipc(self, *args, target=None, timeout: float = 15) -> str:
+    def ipc(self, *args: str, target: str | None = None, timeout: float = 15) -> str:
         """`qs ipc call <target> <args...>` → stripped stdout; raises on rc != 0."""
         t = target or self.ipc_target
         r = subprocess.run(
@@ -240,15 +261,17 @@ class Quickshell:
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
         if r.returncode != 0:
-            raise RuntimeError(
+            msg = (
                 f"qs ipc call {t} {args} failed (exit={r.returncode}):\n"
                 f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}"
             )
+            raise RuntimeError(msg)
         return r.stdout.strip()
 
-    def ipc_ready(self, target=None) -> bool:
+    def ipc_ready(self, target: str | None = None) -> bool:
         """True once `qs ipc show` lists the target (the shell finished loading)."""
         t = target or self.ipc_target
         r = subprocess.run(
@@ -257,22 +280,29 @@ class Quickshell:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         return r.returncode == 0 and t in r.stdout
 
-    def wait_ipc_ready(self, *, timeout_s: float = 20, target=None, extra_logs=()):
+    def wait_ipc_ready(
+        self,
+        *,
+        timeout_s: float = 20,
+        target: str | None = None,
+        extra_logs: Sequence[str] = (),
+    ) -> None:
         t = target or self.ipc_target
         if not wait_until(lambda: self.ipc_ready(t), timeout_s=timeout_s):
             self.die(f"quickshell never bound the {t} IPC target", extra_logs)
 
-    def dump_logs(self, extra=()) -> None:
+    def dump_logs(self, extra: Sequence[str] = ()) -> None:
         """Dump the qs logs plus any `extra` log names under work_dir to stderr."""
         for name in (*self.LOG_NAMES, *extra):
-            path = os.path.join(self.work_dir, name)
-            if os.path.isfile(path):
-                sys.stderr.write(f"\n== {name} ==\n" + open(path).read())
+            path = Path(self.work_dir) / name
+            if path.is_file():
+                sys.stderr.write(f"\n== {name} ==\n" + path.read_text())
 
-    def die(self, msg: str, extra_logs=()) -> None:
+    def die(self, msg: str, extra_logs: Sequence[str] = ()) -> None:
         self.dump_logs(extra_logs)
         fail(msg)
 

@@ -70,7 +70,7 @@ async def drain_for(ws, pred, timeout=30):
             return None
         try:
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         if msg.get("kind") == "event" and pred(msg.get("payload") or {}):
             return msg.get("payload") or {}
@@ -83,7 +83,7 @@ async def collect_all(ws, idle=1.5, timeout=10):
     while time.monotonic() < end:
         try:
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=idle))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
         out.append(msg)
     return out
@@ -163,6 +163,7 @@ async def wait_state(sid, want, timeout=10):
             return st
         await asyncio.sleep(0.2)
     fail(f"session {sid} state never satisfied (last={st!r})")
+    return None  # unreachable: fail() exits
 
 
 async def scenario_park():

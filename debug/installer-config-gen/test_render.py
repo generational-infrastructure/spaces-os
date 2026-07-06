@@ -15,9 +15,10 @@ import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 # Inject the patched main.py and our libcalamares stub.
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = str(Path(__file__).resolve().parent)
 sys.path.insert(0, HERE)
 
 # `main.py` shells out twice from inside `render_configuration`:
@@ -39,8 +40,8 @@ def _stub_check_output(argv, *a, **kw):
 
 subprocess.check_output = _stub_check_output
 
-import libcalamares  # noqa: E402, F401 — must register before main.py imports it
-import main  # noqa: E402
+import libcalamares
+import main
 
 # Representative fixture: EFI boot, no LUKS, en_US locale, US keyboard.
 BASE_GS = {
@@ -163,7 +164,7 @@ class RenderConfigurationTests(unittest.TestCase):
         cfg = self.render()
         self.assertIn('time.timeZone = "Europe/Berlin";', cfg)
 
-    def test_default_locale_uses_LANG_only(self):
+    def test_default_locale_uses_lang_only(self):
         cfg = self.render()
         self.assertIn('i18n.defaultLocale = "en_US.UTF-8";', cfg)
         # Upstream emits an `extraLocaleSettings` block whenever the

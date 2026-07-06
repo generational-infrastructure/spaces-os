@@ -71,7 +71,7 @@ async def scenario_auth():
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             if msg.get("kind") == "welcome":
                 sys.exit("daemon accepted a wrong token")
-    except (websockets.ConnectionClosed, asyncio.TimeoutError):
+    except (TimeoutError, websockets.ConnectionClosed):
         pass  # rejection by close/silence is fine
 
 
@@ -88,7 +88,7 @@ async def scenario_sandbox():
         while time.monotonic() < deadline:
             try:
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             transcript.append(msg)
             payload = msg.get("payload") or {}

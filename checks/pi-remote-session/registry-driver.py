@@ -155,7 +155,7 @@ def main():
         asyncio.run(coro)
     except websockets.exceptions.WebSocketException as e:
         fail(f"websocket error: {e!r}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         fail("timed out waiting for a server envelope")
     except OSError as e:
         fail(f"could not reach server: {e!r}")

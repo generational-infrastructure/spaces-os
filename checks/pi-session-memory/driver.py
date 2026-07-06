@@ -21,6 +21,7 @@ Usage: driver.py <pi_bin> <mock_llm_script> <ext_src> <stub_script> <work_dir>
 extension shells out to our deterministic stub.
 """
 
+import contextlib
 import json
 import os
 import stat
@@ -135,10 +136,8 @@ class PiClient:
                 return collected
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self.proc.stdin.close()
-        except Exception:
-            pass
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -150,14 +149,12 @@ def read_jsonl(path):
         return []
     out = []
     with open(path) as fh:
-        for line in fh:
-            line = line.strip()
+        for raw in fh:
+            line = raw.strip()
             if not line:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 out.append(json.loads(line))
-            except Exception:
-                pass
     return out
 
 
@@ -171,10 +168,11 @@ def request_system_prompt(req):
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            parts = []
-            for c in content:
-                if isinstance(c, dict) and c.get("type") == "text":
-                    parts.append(c.get("text") or "")
+            parts = [
+                c.get("text") or ""
+                for c in content
+                if isinstance(c, dict) and c.get("type") == "text"
+            ]
             return "\n".join(parts)
     return ""
 

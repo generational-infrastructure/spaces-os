@@ -23,10 +23,14 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 URGENCY_LABEL = {0: "low", 1: "normal", 2: "critical"}
 URGENCY_VALUE = {label: value for value, label in URGENCY_LABEL.items()}
+MAX_URGENCY = max(URGENCY_LABEL)
 
 
 def _default_history_path() -> Path:
@@ -42,7 +46,7 @@ def _default_history_path() -> Path:
         value = os.environ.get(var)
         if value:
             return Path(value)
-    cache_root = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    cache_root = os.environ.get("XDG_CACHE_HOME") or Path("~/.cache").expanduser()
     return Path(cache_root) / "noctalia" / "notifications.json"
 
 
@@ -63,9 +67,9 @@ class Notification:
     timestamp_ms: int
 
     @classmethod
-    def from_dict(cls, entry: dict) -> "Notification":
+    def from_dict(cls, entry: dict) -> Notification:
         urgency = entry.get("urgency", 1)
-        if not isinstance(urgency, int) or urgency < 0 or urgency > 2:
+        if not isinstance(urgency, int) or urgency < 0 or urgency > MAX_URGENCY:
             urgency = 1
         return cls(
             raw=entry,
@@ -83,7 +87,7 @@ class Notification:
 
     @property
     def iso_timestamp(self) -> str:
-        dt = _dt.datetime.fromtimestamp(self.timestamp_ms / 1000, tz=_dt.timezone.utc)
+        dt = _dt.datetime.fromtimestamp(self.timestamp_ms / 1000, tz=_dt.UTC)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -94,15 +98,19 @@ def _load(path: Path) -> list[Notification]:
     install). Malformed JSON → raise `ValueError`; callers translate that
     into a one-line stderr message.
     """
-
     if not path.exists():
         return []
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
-        raise ValueError(f"{path}: {exc.msg} at line {exc.lineno}") from exc
+        msg = f"{path}: {exc.msg} at line {exc.lineno}"
+        raise ValueError(msg) from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"{path}: expected object at top level")
+        msg = f"{path}: expected object at top level"
+        # ValueError is this function's documented malformed-store contract,
+        # matching the JSONDecodeError re-raise above; TypeError would
+        # escape the callers that translate it into a stderr one-liner.
+        raise ValueError(msg)  # noqa: TRY004
     entries = payload.get("notifications") or []
     return [Notification.from_dict(e) for e in entries if isinstance(e, dict)]
 
@@ -158,14 +166,12 @@ def _resolve_urgency(value: str | None) -> int | None:
     # Tolerate numeric input too — the schema stores 0/1/2 raw.
     try:
         n = int(label)
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"--urgency expects one of low/normal/critical or 0/1/2, got {value!r}"
-        )
+    except ValueError as exc:
+        msg = f"--urgency expects one of low/normal/critical or 0/1/2, got {value!r}"
+        raise argparse.ArgumentTypeError(msg) from exc
     if n not in URGENCY_LABEL:
-        raise argparse.ArgumentTypeError(
-            f"--urgency numeric value must be 0/1/2, got {n}"
-        )
+        msg = f"--urgency numeric value must be 0/1/2, got {n}"
+        raise argparse.ArgumentTypeError(msg)
     return n
 
 

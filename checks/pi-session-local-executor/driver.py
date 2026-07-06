@@ -59,7 +59,8 @@ def main():
 
     def start_run(name: str, config: dict) -> Quickshell:
         """One headless quickshell instance with its own HOME + XDG_RUNTIME_DIR
-        (per-run runtime dir keeps the IPC sockets of the two runs apart)."""
+        (per-run runtime dir keeps the IPC sockets of the two runs apart).
+        """
         run_dir = os.path.join(work_dir, name)
         os.makedirs(run_dir, exist_ok=True)
         config_path = os.path.join(run_dir, "pi-chat.json")

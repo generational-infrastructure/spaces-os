@@ -5,7 +5,8 @@ Branches on the conversation so one mock drives both PWA scenarios:
   - a prompt containing "confirm" -> a `bash` tool_call (bash-confirm then gates
     it -> the confirm card); after the tool result, a short final reply.
   - any other prompt            -> streams "Hello, world!".
-Serves GET /v1/models and POST /v1/chat/completions (SSE)."""
+Serves GET /v1/models and POST /v1/chat/completions (SSE).
+"""
 
 import json
 import sys

@@ -35,6 +35,7 @@ def api(request, env, tmp):
         env=e,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -87,8 +88,10 @@ def test_set_routes_to_schema_designated_files(tmp_path):
     doc = envelope(set_req("mail", "work", "password", "hunter2"), env, tmp_path)
     assert doc["ok"] is True
 
-    assert "imap.corp.com" in cfg.read_text() and "hunter2" not in cfg.read_text()
-    assert "hunter2" in sec.read_text() and "imap.corp.com" not in sec.read_text()
+    assert "imap.corp.com" in cfg.read_text()
+    assert "hunter2" not in cfg.read_text()
+    assert "hunter2" in sec.read_text()
+    assert "imap.corp.com" not in sec.read_text()
 
 
 def test_profiles_snapshot(tmp_path):
@@ -126,7 +129,8 @@ def test_remove_profile(tmp_path):
         env,
         tmp_path,
     )
-    assert doc["ok"] is True and doc["result"]["removed"] is True
+    assert doc["ok"] is True
+    assert doc["result"]["removed"] is True
 
     snap = envelope({"v": 1, "op": "profiles", "skill": "mail"}, env, tmp_path)
     assert set(snap["result"]["profiles"]) == {"home"}
@@ -136,7 +140,8 @@ def test_remove_profile(tmp_path):
         env,
         tmp_path,
     )
-    assert doc["ok"] is True and doc["result"]["removed"] is False
+    assert doc["ok"] is True
+    assert doc["result"]["removed"] is False
 
 
 def test_errors_travel_in_envelope_not_exit_code(tmp_path):
@@ -185,6 +190,7 @@ def test_garbage_stdin_rejected_in_envelope(tmp_path):
         env=e,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert proc.returncode == 0
     doc = json.loads(proc.stdout)

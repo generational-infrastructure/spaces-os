@@ -37,6 +37,7 @@ Migration strategy by leaf:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -110,7 +111,7 @@ def merge_sessions_index(legacy: Path, new: Path) -> bool:
 
     new_active = new_data.get("activeSessionId")
     legacy_active = legacy_data.get("activeSessionId")
-    active = new_active if new_active else legacy_active
+    active = new_active or legacy_active
 
     output = {
         "version": new_data.get("version") or legacy_data.get("version") or 1,
@@ -122,7 +123,7 @@ def merge_sessions_index(legacy: Path, new: Path) -> bool:
     # interrupted run never leaves a half-written index.
     tmp = new.with_name(new.name + ".migrate-tmp")
     tmp.write_text(json.dumps(output, indent=4) + "\n")
-    os.replace(tmp, new)
+    tmp.replace(new)
     legacy.unlink()
     return True
 
@@ -216,7 +217,7 @@ def swap_with_backup(legacy: Path, new: Path, *, suffix: str = ".post-rename") -
         if backup.exists():
             log.warning("backup path %s already exists; aborting swap", backup)
             return False
-        os.replace(new, backup)
+        new.replace(backup)
     new.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(legacy), str(new))
     return True
@@ -280,15 +281,13 @@ def rewrite_workspace_paths(index_path: Path) -> bool:
         return False
     tmp = index_path.with_name(index_path.name + ".migrate-tmp")
     tmp.write_text(json.dumps(data, indent=4) + "\n")
-    os.replace(tmp, index_path)
+    tmp.replace(index_path)
     return True
 
 
 def _rmdir_if_empty(p: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         p.rmdir()
-    except OSError:
-        pass
 
 
 def _remove_path(p: Path) -> None:
@@ -380,7 +379,7 @@ def run(home: Path) -> None:
             legacy_access.unlink()
         else:
             new_access.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(legacy_access, new_access)
+            legacy_access.replace(new_access)
 
     _rmdir_if_empty(legacy_state / "pi")
     _rmdir_if_empty(legacy_state)
@@ -392,7 +391,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    home = Path(os.environ.get("HOME") or os.path.expanduser("~"))
+    home = Path(os.environ.get("HOME") or Path("~").expanduser())
     log.info("migrating user state under %s", home)
     run(home)
     log.info("migration complete")

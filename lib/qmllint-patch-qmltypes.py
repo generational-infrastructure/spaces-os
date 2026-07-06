@@ -41,7 +41,8 @@ _MARGINS_COMPONENT = """    Component {
 
 def patch_window(path: pathlib.Path) -> None:
     """Drop `isCreatable: false` from PanelWindowInterface and register a
-    local structured `Margins` value type."""
+    local structured `Margins` value type.
+    """
     text = path.read_text()
     new_text = re.sub(
         r'(name: "PanelWindowInterface"[\s\S]*?)(\s*isCreatable: false\s*\n)',
@@ -78,7 +79,8 @@ def patch_io(path: pathlib.Path) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
+    expected_argc = 3  # prog + <window.qmltypes> + <io.qmltypes>
+    if len(sys.argv) != expected_argc:
         sys.exit(
             "usage: qmllint-patch-qmltypes.py <quickshell-window.qmltypes> <quickshell-io.qmltypes>"
         )

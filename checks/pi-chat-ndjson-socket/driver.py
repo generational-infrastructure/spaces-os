@@ -31,13 +31,14 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.05):
 
 
 def read_line(conn: socket.socket, timeout_s: float = 10.0) -> str:
-    """Read one \\n-terminated line off a unix socket."""
+    r"""Read one \n-terminated line off a unix socket."""
     conn.settimeout(timeout_s)
     buf = b""
     while not buf.endswith(b"\n"):
         chunk = conn.recv(4096)
         if not chunk:
-            raise RuntimeError(f"peer closed mid-line, buffer={buf!r}")
+            msg = f"peer closed mid-line, buffer={buf!r}"
+            raise RuntimeError(msg)
         buf += chunk
     return buf.decode().rstrip("\n")
 

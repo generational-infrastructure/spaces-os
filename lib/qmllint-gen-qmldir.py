@@ -51,7 +51,8 @@ def gen_dir(d: pathlib.Path, root: pathlib.Path) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
+    expected_argc = 2  # prog + <qs-import-root>
+    if len(sys.argv) != expected_argc:
         sys.exit("usage: qmllint-gen-qmldir.py <qs-import-root>")
     root = pathlib.Path(sys.argv[1])
     for d in [root, *sorted(p for p in root.rglob("*") if p.is_dir())]:

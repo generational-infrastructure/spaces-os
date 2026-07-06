@@ -17,6 +17,7 @@ Assertions:
 Usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <notifications_bin> <work_dir>
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -113,10 +114,8 @@ class PiClient:
                 return collected
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self.proc.stdin.close()
-        except Exception:
-            pass
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -162,13 +161,13 @@ def collect_assistant_text(events):
             if isinstance(content, str):
                 parts.append(content)
             elif isinstance(content, list):
-                for c in content:
-                    if (
-                        isinstance(c, dict)
-                        and c.get("type") == "text"
-                        and (c.get("text") or "").strip()
-                    ):
-                        parts.append(c["text"])
+                parts.extend(
+                    c["text"]
+                    for c in content
+                    if isinstance(c, dict)
+                    and c.get("type") == "text"
+                    and (c.get("text") or "").strip()
+                )
     return "\n".join(parts)
 
 

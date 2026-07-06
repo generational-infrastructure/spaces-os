@@ -35,7 +35,9 @@ def call(quickshell_bin, config, target, fn, *args, timeout=15):
         fn,
         *(str(a) for a in args),
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    res = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False
+    )
     if res.returncode != 0:
         sys.exit(
             f"ipc call {fn}({', '.join(args)!r}) failed (code={res.returncode}): "
@@ -150,6 +152,7 @@ def main():
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
         if res.returncode != 0:
             sys.exit(f"llama-swap /v1/models failed: {res.stderr}")

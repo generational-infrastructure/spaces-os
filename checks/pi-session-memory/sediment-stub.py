@@ -55,10 +55,7 @@ def main():
     if cmd == "recall":
         # `sediment recall <query> --limit N --json [--scope ...]`
         query = args[1] if len(args) > 1 else ""
-        if query.startswith("["):
-            payload = {"results": []}
-        else:
-            payload = CANNED
+        payload = {"results": []} if query.startswith("[") else CANNED
         sys.stdout.write(json.dumps(payload))
         sys.stdout.flush()
         return 0

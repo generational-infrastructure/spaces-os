@@ -13,14 +13,21 @@ at runtime via `backend.auth.cmd`, which points at the second console script
 stdout for the named profile and nothing else.
 """
 
+from __future__ import annotations
+
 import contextlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from spaces_integration_mcp import make_server, store_profile
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 SERVER_NAME = "integration-mail"
 SERVER_VERSION = "0.1.0"
@@ -42,7 +49,7 @@ AUTHCMD = "integration-mail-authcmd"
 _NEEDS = ("password", "email", "imap_host", "smtp_host")
 
 
-def _authcmd():
+def _authcmd() -> str:
     # himalaya (spawned by this server, under the integration unit) does not
     # have the package's own bin dir on PATH, so a bare name would not resolve.
     # Prefer the env override (tests), then the sibling script next to our own
@@ -50,17 +57,17 @@ def _authcmd():
     override = os.environ.get("SPACES_MAIL_AUTHCMD")
     if override:
         return override
-    here = os.path.dirname(os.path.realpath(sys.argv[0]))
-    sibling = os.path.join(here, AUTHCMD)
-    if os.path.exists(sibling):
-        return sibling
+    sibling = Path(os.path.realpath(sys.argv[0])).parent / AUTHCMD
+    if sibling.exists():
+        return str(sibling)
     return shutil.which(AUTHCMD) or AUTHCMD
 
 
-def _enc_for_port(port):
-    """himalaya encryption type inferred from a port when none is pinned:
+def _enc_for_port(port: int | str) -> str:
+    """Himalaya encryption type inferred from a port when none is pinned:
     993/465 are implicit TLS, 587/143 negotiate STARTTLS, 25 is plaintext,
-    anything else defaults to TLS (mirrors mail.sh's enc_for_port)."""
+    anything else defaults to TLS (mirrors mail.sh's enc_for_port).
+    """
     return {
         "993": "tls",
         "465": "tls",
@@ -70,17 +77,19 @@ def _enc_for_port(port):
     }.get(str(port), "tls")
 
 
-def _toml_escape(s):
+def _toml_escape(s: str) -> str:
     """TOML basic-string escaping for the few free-text values."""
     return str(s).replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _build_config(profile, vals):
+def _build_config(
+    profile: str, vals: dict[str, str]
+) -> tuple[str, None] | tuple[None, str]:
     """Return (config_toml, None) for the profile, or (None, error_text) when a
     port is not numeric. The required fields are gated by the scaffold before
     any impl runs. The password is never emitted — himalaya fetches it via
-    backend.auth.cmd."""
-
+    backend.auth.cmd.
+    """
     email = vals["email"]
     imap_host = vals["imap_host"]
     smtp_host = vals["smtp_host"]
@@ -126,28 +135,31 @@ def _build_config(profile, vals):
 
 
 @contextlib.contextmanager
-def _config_file(text):
+def _config_file(text: str) -> Iterator[str]:
     """Write the himalaya config to a 0600 file inside a private tempdir, yield
-    its path, and remove the tempdir on exit."""
+    its path, and remove the tempdir on exit.
+    """
     d = tempfile.mkdtemp(prefix="integration-mail-")
     try:
-        path = os.path.join(d, "himalaya.toml")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chmod(path, 0o600)
-        yield path
+        path = Path(d) / "himalaya.toml"
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o600)
+        yield str(path)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _run_himalaya(cfg, sub_args, stdin=None):
+def _run_himalaya(
+    cfg: str, sub_args: list[str], stdin: str | bytes | None = None
+) -> tuple[str, bool]:
     """Exec himalaya against the generated config; return (stdout, False) or,
     on a non-zero exit / spawn failure, (stderr-or-stdout, True). stdin is sent
-    verbatim as bytes so a raw RFC822 message keeps its CRLF line endings."""
-    argv = [HIMALAYA, "-c", cfg] + sub_args
+    verbatim as bytes so a raw RFC822 message keeps its CRLF line endings.
+    """
+    argv = [HIMALAYA, "-c", cfg, *sub_args]
     data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
     try:
-        proc = subprocess.run(argv, input=data, capture_output=True)
+        proc = subprocess.run(argv, input=data, capture_output=True, check=False)
     except OSError as e:
         return f"failed to run {HIMALAYA}: {e.__class__.__name__}: {e}", True
     out = proc.stdout.decode("utf-8", "replace")
@@ -162,7 +174,9 @@ def _run_himalaya(cfg, sub_args, stdin=None):
     return out, False
 
 
-def _tool_envelope_list(args, profile, vals):
+def _tool_envelope_list(
+    args: dict[str, Any], profile: str, vals: dict[str, str]
+) -> tuple[str, bool]:
     cfg_text, err = _build_config(profile, vals)
     if err:
         return err, True
@@ -174,7 +188,9 @@ def _tool_envelope_list(args, profile, vals):
         return _run_himalaya(cfg, sub)
 
 
-def _tool_message_read(args, profile, vals):
+def _tool_message_read(
+    args: dict[str, Any], profile: str, vals: dict[str, str]
+) -> tuple[str, bool]:
     mid = args.get("id")
     if not mid:
         return "missing required argument: id", True
@@ -185,7 +201,9 @@ def _tool_message_read(args, profile, vals):
         return _run_himalaya(cfg, ["message", "read", "-a", profile, str(mid)])
 
 
-def _tool_message_send(args, profile, vals):
+def _tool_message_send(
+    args: dict[str, Any], profile: str, vals: dict[str, str]
+) -> tuple[str, bool]:
     message = args.get("message")
     if not isinstance(message, str) or not message:
         return "missing required argument: message", True
@@ -196,10 +214,11 @@ def _tool_message_send(args, profile, vals):
         return _run_himalaya(cfg, ["message", "send", "-a", profile], stdin=message)
 
 
-def authcmd():
+def authcmd() -> None:
     """Second console script (integration-mail-authcmd): himalaya's
     backend.auth.cmd. Prints the sealed-store password for the profile named in
-    argv[1] to stdout so the password is never written to any file."""
+    argv[1] to stdout so the password is never written to any file.
+    """
     print(store_profile(sys.argv[1])["password"])
 
 
@@ -250,7 +269,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _tool_message_send,
         },
     ],
-    secret_field="password",
+    secret_field="password",  # noqa: S106 — names the store field, not a credential
     error_label="mail operation",
 )
 

@@ -56,7 +56,8 @@ async def hello(ws, name):
 
 async def await_push_sessions(ws, predicate, timeout=10):
     """Block until an unsolicited `sessions` envelope arrives that satisfies
-    `predicate(sessions_list)`. We tolerate other envelopes in between."""
+    `predicate(sessions_list)`. We tolerate other envelopes in between.
+    """
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
@@ -64,7 +65,7 @@ async def await_push_sessions(ws, predicate, timeout=10):
             return None
         try:
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         if msg.get("kind") == "sessions" and predicate(msg.get("sessions") or []):
             return msg.get("sessions")
@@ -98,7 +99,8 @@ async def scenario_create_session_push():
 
 async def scenario_cold_attach_push():
     """A creates → both detach → A re-attaches a *cold* session → B sees the
-    state flip from `cold` back to `live-idle` via push."""
+    state flip from `cold` back to `live-idle` via push.
+    """
     async with websockets.connect(uri()) as a:
         await hello(a, "a")
         await a.send(json.dumps({"v": 1, "kind": "create_session", "name": "beta"}))
@@ -151,7 +153,8 @@ async def scenario_cold_attach_push():
 async def scenario_delete_session_push():
     """A creates a session; B sees the create push containing it. A then
     deletes it; B sees a second push WITHOUT it. delete_session also acks
-    the requester with `kind: "deleted"` for diagnostics."""
+    the requester with `kind: "deleted"` for diagnostics.
+    """
     async with websockets.connect(uri()) as a, websockets.connect(uri()) as b:
         await hello(a, "a")
         await hello(b, "b")
@@ -175,7 +178,7 @@ async def scenario_delete_session_push():
         while time.monotonic() < deadline and not deleted_reply:
             try:
                 msg = json.loads(await asyncio.wait_for(a.recv(), timeout=2))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if msg.get("kind") == "deleted" and msg.get("sessionId") == sid:
                 deleted_reply = True

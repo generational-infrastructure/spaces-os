@@ -41,6 +41,7 @@ async def recv_event(ws, pred, what, timeout=10):
         if m.get("kind") == "event" and pred(m.get("payload", {})):
             return m["payload"]
     fail(f"never saw {what}")
+    return None  # unreachable: fail() exits
 
 
 async def scenario(ws):

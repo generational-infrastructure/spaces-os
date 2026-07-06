@@ -31,6 +31,7 @@ Usage: driver.py <qs_bin> <test_dir> <plugin_dir> <work_dir>
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
@@ -90,8 +91,8 @@ def main() -> None:
     def daemon_url():
         try:
             with open(os.path.join(work_dir, "mock-daemon.log")) as fh:
-                for line in fh:
-                    line = line.strip()
+                for raw in fh:
+                    line = raw.strip()
                     if line.startswith("ws://"):
                         return line
         except OSError:
@@ -128,14 +129,12 @@ def main() -> None:
     def read_frames():
         out = []
         with open(frame_log) as fh:
-            for line in fh:
-                line = line.strip()
+            for raw in fh:
+                line = raw.strip()
                 if not line:
                     continue
-                try:
+                with contextlib.suppress(ValueError):
                     out.append(json.loads(line))
-                except ValueError:
-                    pass
         return out
 
     def detach_sids():

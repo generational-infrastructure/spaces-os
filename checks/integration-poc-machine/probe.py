@@ -29,9 +29,10 @@ def try_read(path):
     try:
         with open(path, "rb") as fh:
             fh.read(1)
-        return "OK"
     except OSError as e:
         return f"DENIED {_errname(e)}"
+    else:
+        return "OK"
 
 
 def main():

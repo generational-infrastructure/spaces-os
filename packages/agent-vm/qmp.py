@@ -28,7 +28,10 @@ import struct
 import sys
 import time
 
-QMP_PATH = os.environ.get("AGENT_VM_QMP", "/tmp/agent-vm-qmp.sock")
+QMP_PATH = os.environ.get(
+    "AGENT_VM_QMP",
+    "/tmp/agent-vm-qmp.sock",  # noqa: S108  # deliberate well-known host path, matches vm-debug.nix's headless qemu options
+)
 
 # Human-friendly key tokens that don't match the QEMU QKeyCode name
 # verbatim. Anything not in here passes through unchanged (a, b, …, z,
@@ -53,16 +56,17 @@ def qcode(token: str) -> str:
     return ALIASES.get(t, t)
 
 
-def qmp_exchange(commands):
+def qmp_exchange(commands: list[dict[str, object]]) -> list[dict[str, object]]:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(QMP_PATH)
     f = s.makefile("rw", buffering=1, encoding="utf-8", newline="\n")
 
-    def recv():
+    def recv() -> dict[str, object]:
         while True:
             line = f.readline()
             if not line:
-                raise RuntimeError("qmp socket closed")
+                msg = "qmp socket closed"
+                raise RuntimeError(msg)
             msg = json.loads(line)
             if "return" in msg or "error" in msg:
                 return msg
@@ -82,7 +86,7 @@ def qmp_exchange(commands):
     return out
 
 
-def cmd_key(args):
+def cmd_key(args: list[str]) -> None:
     if not args:
         sys.exit("agent-vm key: missing chord (e.g. alt-a)")
     keys = [{"type": "qcode", "data": qcode(tok)} for tok in args[0].split("-")]
@@ -94,11 +98,15 @@ def cmd_key(args):
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 PNG_END = b"IEND\xaeB`\x82"
+# Signature (8) + IHDR length/type (8) + width/height (8): a dump this
+# long has the fields `_framebuffer_size` unpacks at bytes [16:24].
+PNG_IHDR_WH_END = 24
 ABS_MAX = 0x7FFF
 BUTTONS = ("left", "right", "middle")
+N_COORDS = 2  # pointer verbs take <x> <y>
 
 
-def _screendump(path, ctx="screenshot"):
+def _screendump(path: pathlib.Path, ctx: str = "screenshot") -> bytes:
     """Dump the primary head to `path` and block until it is a full PNG.
 
     QEMU's `screendump` runs in a coroutine and the QMP reply can land
@@ -121,13 +129,17 @@ def _screendump(path, ctx="screenshot"):
             data = pathlib.Path(path).read_bytes()
         except FileNotFoundError:
             data = b""
-        if len(data) >= 24 and data[:8] == PNG_SIG and data[-8:] == PNG_END:
+        if (
+            len(data) >= PNG_IHDR_WH_END
+            and data[:8] == PNG_SIG
+            and data[-8:] == PNG_END
+        ):
             return data
         time.sleep(0.05)
     sys.exit(f"agent-vm {ctx}: {path} never completed as a PNG")
 
 
-def cmd_screenshot(args):
+def cmd_screenshot(args: list[str]) -> None:
     if not args:
         sys.exit("agent-vm screenshot: missing output path")
     out = pathlib.Path(args[0]).resolve()
@@ -136,7 +148,7 @@ def cmd_screenshot(args):
     print(out)
 
 
-def _framebuffer_size():
+def _framebuffer_size() -> tuple[int, int]:
     """(width, height) of the primary head, via a throwaway screendump.
 
     QEMU has no portable "query resolution" command, so we dump a PNG
@@ -157,7 +169,7 @@ def _framebuffer_size():
     return width, height
 
 
-def _abs_events(px, py):
+def _abs_events(px: int, py: int) -> list[dict[str, object]]:
     width, height = _framebuffer_size()
     if not (0 <= px < width and 0 <= py < height):
         sys.exit(f"agent-vm pointer: ({px},{py}) outside {width}x{height}")
@@ -170,15 +182,15 @@ def _abs_events(px, py):
     ]
 
 
-def _input_cmd(events):
+def _input_cmd(events: list[dict[str, object]]) -> dict[str, object]:
     return {"execute": "input-send-event", "arguments": {"events": events}}
 
 
-def _btn(button, down):
+def _btn(button: str, down: bool) -> dict[str, object]:
     return _input_cmd([{"type": "btn", "data": {"down": down, "button": button}}])
 
 
-def _run(commands, ctx="pointer"):
+def _run(commands: list[dict[str, object]], ctx: str = "pointer") -> list[object]:
     """Send QMP commands in order; exit on the first error.
 
     Returns each command's `return` payload, so callers that need the
@@ -194,7 +206,7 @@ def _run(commands, ctx="pointer"):
     return payloads
 
 
-def _select_tablet():
+def _select_tablet() -> None:
     """Make the absolute USB tablet the current QEMU mouse.
 
     input-send-event is routed to whichever pointer QEMU considers
@@ -223,8 +235,8 @@ def _select_tablet():
     )
 
 
-def _xy(args, verb):
-    if len(args) < 2:
+def _xy(args: list[str], verb: str) -> tuple[int, int]:
+    if len(args) < N_COORDS:
         sys.exit(f"agent-vm {verb}: need <x> <y> in pixels")
     try:
         return int(args[0]), int(args[1])
@@ -232,15 +244,15 @@ def _xy(args, verb):
         sys.exit(f"agent-vm {verb}: x and y must be integers")
 
 
-def cmd_move(args):
+def cmd_move(args: list[str]) -> None:
     px, py = _xy(args, "move")
     _select_tablet()
     _run([_input_cmd(_abs_events(px, py))])
 
 
-def cmd_click(args):
+def cmd_click(args: list[str]) -> None:
     px, py = _xy(args, "click")
-    button = args[2] if len(args) > 2 else "left"
+    button = args[N_COORDS] if len(args) > N_COORDS else "left"
     if button not in BUTTONS:
         sys.exit("agent-vm click: button must be one of " + ", ".join(BUTTONS))
     motion = _abs_events(px, py)
@@ -296,7 +308,7 @@ SHIFTED = {
 }
 
 
-def cmd_type(args):
+def cmd_type(args: list[str]) -> None:
     """Type a literal string into the focused field, one key per char."""
     if not args:
         sys.exit("agent-vm type: missing text (e.g. type 'hello world')")
@@ -324,8 +336,8 @@ def cmd_type(args):
     _run(cmds, "type")
 
 
-def main():
-    if len(sys.argv) < 2:
+def main() -> None:
+    if not sys.argv[1:]:
         sys.exit("usage: qmp.py key|type|screenshot|move|click ...")
     cmd, *args = sys.argv[1:]
     handlers = {

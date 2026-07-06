@@ -92,6 +92,7 @@ class StubSkillConfig:
             [str(self.bin), "get", key],
             capture_output=True,
             text=True,
+            check=False,
         )
         if res.returncode != 0:
             return None
@@ -204,7 +205,7 @@ class OpenUrlTests(unittest.TestCase):
 
     def test_open_url_writes_json_line_to_socket_when_env_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            sock_path = os.path.join(tmp, "open-url.sock")
+            sock_path = str(Path(tmp) / "open-url.sock")
             received: list[str] = []
             ready = threading.Event()
 
@@ -269,7 +270,8 @@ class OpenUrlTests(unittest.TestCase):
 class CmdAuthBrowserTests(unittest.TestCase):
     """End-to-end: cmd_auth must route the consent URL through _open_url
     (not call webbrowser directly), so the socket path is exercised when
-    pi-chat sets SPACES_OPEN_URL_SOCKET inside the sandbox."""
+    pi-chat sets SPACES_OPEN_URL_SOCKET inside the sandbox.
+    """
 
     def setUp(self) -> None:
         self.sc = StubSkillConfig()

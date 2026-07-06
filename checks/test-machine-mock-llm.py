@@ -84,9 +84,12 @@ def pick_reply(messages):
     # <recalled_memories> block carrying the hobby fact, surface it in
     # the answer. The driver asserts the body string is in the reply, so
     # recall regressions are caught even if the model output drifts.
-    if "<recalled_memories>" in sys_text and MEMORY_FACT_BODY in sys_text:
-        if "hobby" in lower or "remember" in lower:
-            return f"Per your memory, your hobby is {MEMORY_FACT_BODY}."
+    if (
+        "<recalled_memories>" in sys_text
+        and MEMORY_FACT_BODY in sys_text
+        and ("hobby" in lower or "remember" in lower)
+    ):
+        return f"Per your memory, your hobby is {MEMORY_FACT_BODY}."
 
     # First leg of the memory subtest: user states the fact; mock
     # acknowledges so pi reaches agent_end and triggers the extractor.

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import http.server
 import json
 import os
@@ -49,10 +50,15 @@ import subprocess
 import sys
 import threading
 import urllib.parse
+import urllib.request
 import webbrowser
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import Any, Iterable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Lazy-imported in the functions that need them so `google-cli --help`
 # and any pure-formatting unit test can run without google-auth installed.
@@ -62,7 +68,7 @@ CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 DEFAULT_SCOPES = (GMAIL_SCOPE, CALENDAR_SCOPE)
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
+TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 -- OAuth endpoint URL, not a credential
 
 SKILL = "google"
 
@@ -90,6 +96,7 @@ def sc_get(key: str) -> str | None:
         [_skill_config_bin(), "get", key],
         capture_output=True,
         text=True,
+        check=False,
     )
     if res.returncode != 0:
         return None
@@ -103,9 +110,11 @@ def sc_set(key: str, value: str) -> None:
         [_skill_config_bin(), "set", key, value],
         capture_output=True,
         text=True,
+        check=False,
     )
     if res.returncode != 0:
-        raise RuntimeError(f"skill-config set {key} failed: {res.stderr.strip()}")
+        msg = f"skill-config set {key} failed: {res.stderr.strip()}"
+        raise RuntimeError(msg)
 
 
 @dataclass
@@ -138,7 +147,12 @@ def load_profile(profile: str, *, require_refresh: bool) -> ProfileCreds:
         if require_refresh and "refresh_token" in missing and cid and csec:
             hint = f"run `google-cli auth {profile}` to mint a refresh_token"
         sys.exit(f"error: google.{profile} missing: {names}. {hint}.")
-    assert cid and csec
+    if not cid:
+        msg = "unreachable: cid already validated above"
+        raise AssertionError(msg)
+    if not csec:
+        msg = "unreachable: csec already validated above"
+        raise AssertionError(msg)
     return ProfileCreds(client_id=cid, client_secret=csec, refresh_token=rt)
 
 
@@ -185,9 +199,9 @@ def build_auth_url(
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     # Set by the parent server in cmd_auth.
     expected_state: str = ""
-    result: dict[str, str] = {}
+    result: ClassVar[dict[str, str]] = {}
 
-    def do_GET(self) -> None:  # noqa: N802 — http.server name
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         qs = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
         if qs.get("state") != self.expected_state:
@@ -217,7 +231,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             "return to pi-chat.",
         )
 
-    def log_message(self, *_args: Any) -> None:  # noqa: D401
+    def log_message(self, *_args: Any) -> None:
         # Silence default request logging — the user is looking at the
         # CLI, not at stderr noise.
         pass
@@ -240,8 +254,6 @@ def _exchange_code(
     """Hit Google's token endpoint to swap the authorization code for a
     refresh_token. Uses urllib so we don't pull in `requests` for one POST.
     """
-    import urllib.request as _ur
-
     body = urllib.parse.urlencode(
         {
             "client_id": client_id,
@@ -251,17 +263,18 @@ def _exchange_code(
             "redirect_uri": redirect_uri,
         }
     ).encode()
-    req = _ur.Request(
+    req = urllib.request.Request(
         TOKEN_URL,
         data=body,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
     try:
-        with _ur.urlopen(req, timeout=30) as resp:  # noqa: S310 — known host
+        with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
-    except _ur.HTTPError as e:  # pragma: no cover — network branch
+    except urllib.request.HTTPError as e:  # pragma: no cover — network branch
         detail = e.read().decode(errors="replace")
-        raise SystemExit(f"token exchange failed: HTTP {e.code} {detail.strip()}")
+        msg = f"token exchange failed: HTTP {e.code} {detail.strip()}"
+        raise SystemExit(msg) from e
 
 
 def _open_url(url: str) -> None:
@@ -288,16 +301,15 @@ def _open_url(url: str) -> None:
                 s.settimeout(2.0)
                 s.connect(sock_path)
                 s.sendall((json.dumps({"url": url}) + "\n").encode())
-            return
         except OSError:
             # Daemon not running / stale bind / refused — fall through to
             # the local webbrowser so the user at least gets *some* way to
             # reach the URL.
             pass
-    try:
+        else:
+            return
+    with contextlib.suppress(webbrowser.Error):
         webbrowser.open(url, new=2)
-    except webbrowser.Error:
-        pass
 
 
 def cmd_auth(args: argparse.Namespace) -> None:
@@ -532,7 +544,7 @@ def cmd_mail_send(args: argparse.Namespace) -> None:
         if args.body_file == "-":
             body = sys.stdin.read()
         elif args.body_file:
-            with open(args.body_file, encoding="utf-8") as f:
+            with Path(args.body_file).open(encoding="utf-8") as f:
                 body = f.read()
         else:
             sys.exit("error: --body or --body-file is required")

@@ -17,6 +17,7 @@ Usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>
 llama-swap-discover.ts (= the built pi-chat-extensions package).
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -128,10 +129,8 @@ class PiClient:
                 return collected
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self.proc.stdin.close()
-        except Exception:
-            pass
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:

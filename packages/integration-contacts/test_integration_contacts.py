@@ -1,10 +1,13 @@
 import base64
+import hashlib
 import json
 import os
 import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import ClassVar
 
 import integration_contacts
 import pytest
@@ -16,7 +19,8 @@ HOME_PASS = "home-pass-456"
 class StubDAV(BaseHTTPRequestHandler):
     """Records requests and serves canned CardDAV responses."""
 
-    requests = []  # (method, path, headers-dict, body-bytes)
+    # (method, path, headers-dict, body-bytes)
+    requests: ClassVar[list[tuple[str, str, dict[str, str], bytes]]] = []
 
     def _record(self, body=b""):
         StubDAV.requests.append((self.command, self.path, dict(self.headers), body))
@@ -113,7 +117,7 @@ def env(tmp_path_factory):
 
     threading.Thread(target=integration_contacts.main, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(sock_path):
+    while not Path(sock_path).exists():
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
@@ -136,8 +140,8 @@ class Client:
         assert line, "connection closed unexpectedly"
         return json.loads(line)
 
-    def rpc(self, method, params=None, id=1):
-        msg = {"jsonrpc": "2.0", "id": id, "method": method}
+    def rpc(self, method, params=None, req_id=1):
+        msg = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             msg["params"] = params
         self.send(msg)
@@ -156,7 +160,7 @@ def client(env):
 
 
 def call_tool(client, name, arguments):
-    return client.rpc("tools/call", {"name": name, "arguments": arguments}, id=2)
+    return client.rpc("tools/call", {"name": name, "arguments": arguments}, req_id=2)
 
 
 def _result(resp):
@@ -177,7 +181,8 @@ def _last(method):
     for req in reversed(StubDAV.requests):
         if req[0] == method:
             return req
-    raise AssertionError(f"no {method} request recorded")
+    msg = f"no {method} request recorded"
+    raise AssertionError(msg)
 
 
 # --- protocol / schema ---
@@ -191,7 +196,7 @@ def test_initialize_handshake(client):
             "capabilities": {},
             "clientInfo": {"name": "t"},
         },
-        id=1,
+        req_id=1,
     )
     assert resp["id"] == 1
     assert resp["result"]["serverInfo"]["name"] == "integration-contacts"
@@ -226,7 +231,7 @@ def test_discover_lists_hrefs_and_sends_basic_auth(client):
     assert _result(resp)["isError"] is False
     hrefs = json.loads(_text(resp))
     assert hrefs == ["/work/alice.vcf", "/work/bob.vcf"]
-    method, path, headers, body = _last("PROPFIND")
+    _method, path, headers, body = _last("PROPFIND")
     assert path == "/work/"
     assert headers.get("Depth") == "1"
     assert _basic(headers) == f"workuser:{WORK_PASS}"
@@ -243,7 +248,8 @@ def test_search_builds_report_with_fn_and_email(client):
     assert path == "/work/"
     assert headers.get("Depth") == "1"
     assert "addressbook-query" in text
-    assert 'name="FN"' in text and 'name="EMAIL"' in text
+    assert 'name="FN"' in text
+    assert 'name="EMAIL"' in text
     assert "alice" in text
     assert 'match-type="contains"' in text
 
@@ -295,7 +301,8 @@ def test_new_without_uid_falls_back_to_uuid(client):
     resp = call_tool(client, "new", {"profile": "work", "vcard": vcard})
     assert _result(resp)["isError"] is False
     _m, path, _h, _b = _last("PUT")
-    assert path.startswith("/work/") and path.endswith(".vcf")
+    assert path.startswith("/work/")
+    assert path.endswith(".vcf")
     assert path != "/work/.vcf"
 
 
@@ -377,8 +384,6 @@ def test_missing_password_is_error_and_leaks_nothing(client, env, tmp_path):
 def test_secret_fingerprint(client):
     resp = call_tool(client, "secret_fingerprint", {"profile": "work"})
     assert _result(resp)["isError"] is False
-    import hashlib
-
     expected = hashlib.sha256(WORK_PASS.encode()).hexdigest()[:16]
     assert _text(resp) == expected
 
@@ -400,7 +405,7 @@ def test_http_error_is_tool_error(client):
 
 
 def test_unknown_method_is_jsonrpc_error(client):
-    resp = client.rpc("frobnicate", id=9)
+    resp = client.rpc("frobnicate", req_id=9)
     assert resp["id"] == 9
     assert resp["error"]["code"] == -32601
 
@@ -411,9 +416,9 @@ def test_unknown_method_is_jsonrpc_error(client):
 def test_schema_json_matches_advertised_tools_and_needs():
     """schema.json is what the host manifest and the schema-sync check consume;
     it must track the module: same advertised tool names, and its required
-    config/secrets fields are exactly what every tool's gating needs."""
-    with open(os.path.join(os.path.dirname(__file__), "schema.json")) as f:
-        schema = json.load(f)
+    config/secrets fields are exactly what every tool's gating needs.
+    """
+    schema = json.loads((Path(__file__).parent / "schema.json").read_text())
     assert schema["tools"] == [t["name"] for t in integration_contacts.TOOLS]
     fields = {**schema["config"], **schema["secrets"]}
     required = {k for k, v in fields.items() if v["required"]}

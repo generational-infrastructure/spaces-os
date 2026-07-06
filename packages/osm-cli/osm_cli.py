@@ -2,6 +2,7 @@
 """OpenStreetMap CLI - search, nearby, and route using free OSM APIs."""
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -10,6 +11,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+from typing import Any
 
 BASE_NOMINATIM = "https://nominatim.openstreetmap.org"
 BASE_OVERPASS = "https://overpass-api.de/api/interpreter"
@@ -17,6 +20,12 @@ BASE_OSRM = "https://router.project-osrm.org"
 USER_AGENT = "spaces-pi-chat"
 _runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 LOCATION_FILE = f"{_runtime_dir}/spaces/location.json"
+
+# A LAT,LON pair splits into exactly this many comma-separated parts.
+LATLON_PARTS = 2
+METERS_PER_KM = 1000
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 3600
 
 # Maps common English terms to OSM key=value tags.
 TAG_MAP = {
@@ -54,17 +63,27 @@ TAG_MAP = {
     "swimming pool": ("leisure", "swimming_pool"),
 }
 
-_last_nominatim = 0.0
+
+@functools.cache
+def _throttle_state() -> list[float]:
+    """Single-element mutable cache holding the monotonic time of the last
+    Nominatim request. `functools.cache` hands back the same list on every
+    call, which gives `_request` a persistent slot to update without a
+    module `global`.
+    """
+    return [0.0]
 
 
-def _request(url, data=None, timeout=15):
+def _request(
+    url: str, data: bytes | str | None = None, timeout: int = 15
+) -> dict[str, Any]:
     """HTTP request with User-Agent header. Returns parsed JSON."""
-    global _last_nominatim
     if BASE_NOMINATIM in url:
-        elapsed = time.monotonic() - _last_nominatim
+        state = _throttle_state()
+        elapsed = time.monotonic() - state[0]
         if elapsed < 1.0:
             time.sleep(1.0 - elapsed)
-        _last_nominatim = time.monotonic()
+        state[0] = time.monotonic()
 
     headers = {"User-Agent": USER_AGENT}
     if data is not None:
@@ -88,16 +107,17 @@ def _request(url, data=None, timeout=15):
         sys.exit(1)
 
 
-def _geocode(query):
+def _geocode(query: str) -> tuple[float, float, str]:
     """Forward geocode a place name. Returns (lat, lon, display_name) or exits."""
     # Check if query is already lat,lon.
     parts = query.split(",")
-    if len(parts) == 2:
+    if len(parts) == LATLON_PARTS:
         try:
             lat, lon = float(parts[0].strip()), float(parts[1].strip())
-            return lat, lon, query
         except ValueError:
             pass
+        else:
+            return lat, lon, query
 
     params = urllib.parse.urlencode({"q": query, "format": "jsonv2", "limit": "1"})
     results = _request(f"{BASE_NOMINATIM}/search?{params}")
@@ -108,9 +128,9 @@ def _geocode(query):
     return float(r["lat"]), float(r["lon"]), r.get("display_name", query)
 
 
-def _haversine(lat1, lon1, lat2, lon2):
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Distance in meters between two points."""
-    R = 6371000
+    earth_radius_m = 6371000
     rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -118,37 +138,37 @@ def _haversine(lat1, lon1, lat2, lon2):
         math.sin(dlat / 2) ** 2
         + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
     )
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _format_distance(meters):
-    if meters < 1000:
+def _format_distance(meters: float) -> str:
+    if meters < METERS_PER_KM:
         return f"{int(meters)}m"
     return f"{meters / 1000:.1f} km"
 
 
-def _format_duration(seconds):
+def _format_duration(seconds: float) -> str:
     seconds = int(seconds)
-    if seconds < 60:
+    if seconds < SECONDS_PER_MINUTE:
         return f"{seconds}s"
-    if seconds < 3600:
+    if seconds < SECONDS_PER_HOUR:
         return f"{seconds // 60}min"
     h, m = divmod(seconds, 3600)
     m //= 60
     return f"{h}h {m}min" if m else f"{h}h"
 
 
-def _read_location():
+def _read_location() -> tuple[float, float] | None:
     """Read current location from the GeoClue file. Returns (lat, lon) or None."""
     try:
-        with open(LOCATION_FILE) as f:
+        with Path(LOCATION_FILE).open() as f:
             data = json.load(f)
         return data["latitude"], data["longitude"]
     except (FileNotFoundError, KeyError, json.JSONDecodeError):
         return None
 
 
-def _maneuver_text(step):
+def _maneuver_text(step: dict[str, Any]) -> str:
     """Build a human-readable instruction from an OSRM step."""
     maneuver = step.get("maneuver", {})
     mtype = maneuver.get("type", "")
@@ -171,7 +191,7 @@ def _maneuver_text(step):
     if mtype == "fork":
         direction = modifier.replace("-", " ") if modifier else ""
         return f"Keep {direction} onto {name}" if name else f"Keep {direction}"
-    if mtype == "roundabout" or mtype == "rotary":
+    if mtype in {"roundabout", "rotary"}:
         exit_nr = maneuver.get("exit", "")
         base = f"Take exit {exit_nr} from roundabout" if exit_nr else "Enter roundabout"
         return f"{base} onto {name}" if name else base
@@ -192,7 +212,7 @@ def _maneuver_text(step):
     return " ".join(parts).strip().capitalize()
 
 
-def cmd_search(args):
+def cmd_search(args: argparse.Namespace) -> None:
     """Search for a place by name."""
     params = urllib.parse.urlencode(
         {
@@ -217,7 +237,7 @@ def cmd_search(args):
             print(f"Type: {r['type']}")
 
 
-def cmd_nearby(args):
+def cmd_nearby(args: argparse.Namespace) -> None:
     """Find nearby points of interest."""
     if args.location:
         parts = args.location.split(",")
@@ -274,10 +294,9 @@ def cmd_nearby(args):
         dist = _haversine(lat, lon, elat, elon)
         tags = el.get("tags", {})
         name = tags.get("name", "")
-        addr_parts = []
-        for k in ("addr:street", "addr:housenumber"):
-            if tags.get(k):
-                addr_parts.append(tags[k])
+        addr_parts = [
+            tags[k] for k in ("addr:street", "addr:housenumber") if tags.get(k)
+        ]
         street = " ".join(addr_parts)
         city = tags.get("addr:city", "")
         address = ", ".join(filter(None, [street, city]))
@@ -295,7 +314,7 @@ def cmd_nearby(args):
             print()
 
 
-def cmd_route(args):
+def cmd_route(args: argparse.Namespace) -> None:
     """Get driving directions between two places."""
     if args.mode != "driving":
         print("Note: only driving directions are available. Showing driving route.\n")
@@ -331,7 +350,7 @@ def cmd_route(args):
             print(f"  {i}. {text} ({sdist})")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="osm-cli",
         description="Search, nearby, and route using OpenStreetMap",

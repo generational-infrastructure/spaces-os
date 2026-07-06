@@ -1,6 +1,7 @@
 """skill-config: the SKILL.md path (unchanged, used by the agent-facing
 skills) plus the $SKILL_CONFIG_SCHEMA / $SKILL_CONFIG_*_FILE overrides the
-relocated integration store drives."""
+relocated integration store drives.
+"""
 
 import json
 import os
@@ -18,7 +19,7 @@ def run(argv, env, tmp):
     e["SPACES_PI_CHAT_STATE_DIR"] = str(tmp / "state")
     e.update(env)
     return subprocess.run(
-        [sys.executable, SC, *argv], env=e, capture_output=True, text=True
+        [sys.executable, SC, *argv], env=e, capture_output=True, text=True, check=False
     )
 
 
@@ -62,7 +63,8 @@ def test_env_schema_routes_config_and_secret_to_the_named_files(tmp_path):
     assert "imap.corp.com" not in sec.read_text()
 
     g = run(["get", "mail.work.password"], env, tmp_path)
-    assert g.returncode == 0 and g.stdout.strip() == "hunter2"
+    assert g.returncode == 0
+    assert g.stdout.strip() == "hunter2"
     g = run(["get", "mail.work.imap_host"], env, tmp_path)
     assert g.stdout.strip() == "imap.corp.com"
 
@@ -132,8 +134,6 @@ def test_skill_md_mode_unchanged(tmp_path):
 
 
 def test_env_schema_list_json_reports_values_and_set_status(tmp_path):
-    import json as _json
-
     _schema, _cfg, _sec, env = _env_schema(tmp_path)
     run(["set", "mail.work.imap_host", "imap.corp.com"], env, tmp_path)
     run(["set", "mail.work.password", "hunter2"], env, tmp_path)
@@ -141,7 +141,7 @@ def test_env_schema_list_json_reports_values_and_set_status(tmp_path):
 
     r = run(["list", "mail", "--json"], env, tmp_path)
     assert r.returncode == 0, r.stderr
-    doc = _json.loads(r.stdout)
+    doc = json.loads(r.stdout)
     assert doc["skill"] == "mail"
     assert set(doc["profiles"]) == {"work", "home"}
     # config carries values; secrets carry set-status only, never the value.

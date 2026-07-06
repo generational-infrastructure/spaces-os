@@ -8,6 +8,8 @@ field gating, and the hidden secret_fingerprint tool. GitHub is single-account
 ($SPACES_INTEGRATION_SHARED_DIR).
 """
 
+from __future__ import annotations
+
 import io
 import json
 import os
@@ -16,8 +18,13 @@ import sys
 import tarfile
 import urllib.error
 import urllib.request
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from spaces_integration_mcp import make_server, shared_dir
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 SERVER_NAME = "integration-github"
 SERVER_VERSION = "0.1.0"
@@ -25,11 +32,11 @@ SERVER_VERSION = "0.1.0"
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
-def _api_base():
+def _api_base() -> str:
     return os.environ.get("SPACES_GITHUB_API_URL", "https://api.github.com").rstrip("/")
 
 
-def _http(req):
+def _http(req: urllib.request.Request) -> tuple[Any, None] | tuple[None, str]:
     """Run an urllib request, return (parsed-json, None) or (None, error-text)."""
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -43,7 +50,7 @@ def _http(req):
         return None, f"GitHub API request failed: {e.__class__.__name__}: {e}"
 
 
-def _tool_get_repo(args, token):
+def _tool_get_repo(args: dict[str, Any], _token: str) -> tuple[str, bool]:
     repo = args.get("repo", "")
     if not REPO_RE.fullmatch(repo):
         return f"invalid repo name: {repo!r}", True
@@ -61,7 +68,7 @@ def _tool_get_repo(args, token):
     return text, False
 
 
-def _tool_create_issue(args, token):
+def _tool_create_issue(args: dict[str, Any], token: str) -> tuple[str, bool]:
     repo = args.get("repo", "")
     if not REPO_RE.fullmatch(repo):
         return f"invalid repo name: {repo!r}", True
@@ -85,16 +92,17 @@ def _tool_create_issue(args, token):
     return f"created issue #{data.get('number')}: {data.get('html_url')}", False
 
 
-def _workspace_for(repo):
+def _workspace_for(repo: str) -> Path | None:
     """The clone destination for a repo under the shared dir, or None when no
-    shared workspace is provisioned (the agent's session never granted one)."""
+    shared workspace is provisioned (the agent's session never granted one).
+    """
     shared = shared_dir()
     if not shared:
         return None
-    return os.path.join(shared, repo.split("/")[1])
+    return Path(shared) / repo.split("/")[1]
 
 
-def _http_bytes(req):
+def _http_bytes(req: urllib.request.Request) -> tuple[bytes, None] | tuple[None, str]:
     """Run an urllib request, return (raw-bytes, None) or (None, error-text)."""
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -108,42 +116,40 @@ def _http_bytes(req):
         return None, f"GitHub API request failed: {e.__class__.__name__}: {e}"
 
 
-def _extract_tree(raw, dest):
+def _extract_tree(raw: bytes, dest: Path) -> int:
     """Extract a GitHub tarball into dest, dropping the single "<owner>-<repo>-
     <sha>/" wrapper dir GitHub wraps the tree in and refusing path traversal.
-    Returns the count of regular files written."""
+    Returns the count of regular files written.
+    """
     count = 0
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
         for member in tar.getmembers():
             rel = "/".join(member.name.split("/")[1:])  # drop the wrapper
-            if not rel or os.path.isabs(rel) or ".." in rel.split("/"):
+            if not rel or Path(rel).is_absolute() or ".." in rel.split("/"):
                 continue  # never escape dest
-            target = os.path.join(dest, rel)
+            target = dest / rel
             if member.isdir():
-                os.makedirs(target, exist_ok=True)
+                target.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
-                os.makedirs(os.path.dirname(target) or dest, exist_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 src = tar.extractfile(member)
                 if src is None:
                     continue
-                with open(target, "wb") as f:
-                    f.write(src.read())
+                target.write_bytes(src.read())
                 count += 1
     return count
 
 
-def _workspace_files(root):
+def _workspace_files(root: Path) -> list[str]:
     """Relative paths of every regular file under root (sorted, '/'-joined)."""
-    out = []
-    for dirpath, _dirs, names in os.walk(root):
-        for nm in names:
-            out.append(
-                os.path.relpath(os.path.join(dirpath, nm), root).replace(os.sep, "/")
-            )
-    return sorted(out)
+    return sorted(
+        os.path.relpath(Path(dirpath) / name, root).replace(os.sep, "/")
+        for dirpath, _dirs, names in os.walk(root)
+        for name in names
+    )
 
 
-def _tool_clone_to_workspace(args, token):
+def _tool_clone_to_workspace(args: dict[str, Any], token: str) -> tuple[str, bool]:
     repo = args.get("repo", "")
     if not REPO_RE.fullmatch(repo):
         return f"invalid repo name: {repo!r}", True
@@ -161,7 +167,7 @@ def _tool_clone_to_workspace(args, token):
     raw, err = _http_bytes(req)
     if err:
         return err, True
-    os.makedirs(dest, exist_ok=True)
+    dest.mkdir(parents=True, exist_ok=True)
     try:
         n = _extract_tree(raw, dest)
     except tarfile.TarError as e:
@@ -169,7 +175,7 @@ def _tool_clone_to_workspace(args, token):
     return f"cloned {repo} into {dest} ({n} file{'' if n == 1 else 's'})", False
 
 
-def _tool_open_pull_request(args, token):
+def _tool_open_pull_request(args: dict[str, Any], token: str) -> tuple[str, bool]:
     repo = args.get("repo", "")
     if not REPO_RE.fullmatch(repo):
         return f"invalid repo name: {repo!r}", True
@@ -177,7 +183,7 @@ def _tool_open_pull_request(args, token):
     if not isinstance(title, str) or not title:
         return "missing required argument: title", True
     dest = _workspace_for(repo)
-    if dest is None or not os.path.isdir(dest):
+    if dest is None or not dest.is_dir():
         return f"no workspace for {repo}; clone_to_workspace first", True
     # The "push": reflect the agent's edited tree into the PR so the effect
     # observably carries its work — the shared dir round-trips end to end.
@@ -209,9 +215,11 @@ def _tool_open_pull_request(args, token):
     )
 
 
-def _tok(impl):
+def _tok(
+    impl: Callable[[dict[str, Any], str], tuple[str, bool]],
+) -> Callable[[dict[str, Any], str, dict[str, str]], tuple[str, bool]]:
     """Adapt an (args, token)-style impl to the scaffold's record signature."""
-    return lambda args, profile, vals: impl(args, vals["token"])
+    return lambda args, _profile, vals: impl(args, vals["token"])
 
 
 _NEEDS = ("token",)
@@ -291,7 +299,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _tok(_tool_open_pull_request),
         },
     ],
-    secret_field="token",
+    secret_field="token",  # noqa: S106 — names the store field, not a credential
     multi_profile=False,
 )
 

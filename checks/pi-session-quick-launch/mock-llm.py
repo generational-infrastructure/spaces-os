@@ -45,7 +45,8 @@ def model_ids():
         return ["mock-model"]
     ids = json.loads(raw)
     if not isinstance(ids, list) or not ids:
-        raise ValueError(f"MOCK_MODELS_JSON must be a non-empty list, got {raw!r}")
+        msg = f"MOCK_MODELS_JSON must be a non-empty list, got {raw!r}"
+        raise ValueError(msg)
     return [str(i) for i in ids]
 
 

@@ -34,7 +34,8 @@ BASE_FIELDS = {"id", "from", "text", "ts", "state", "image", "replyTo", "type"}
 def project(messages: list[dict]) -> tuple[list[dict], list[dict]]:
     """The renderer-agnostic projection shared with checks/pi-web-reducer:
     plain chat text as (role, text, streaming) in order, plus confirm
-    cards as (id, state)."""
+    cards as (id, state).
+    """
     transcript = []
     confirms = []
     for m in messages:
@@ -76,7 +77,8 @@ def main() -> None:
         out = qs.ipc(verb, json.dumps(payload), timeout=20)
         got = json.loads(out)
         if isinstance(got, dict) and "_error" in got:
-            raise RuntimeError(f"{verb}: {got['_error']}")
+            msg = f"{verb}: {got['_error']}"
+            raise RuntimeError(msg)
         return got
 
     qs.start()
@@ -101,7 +103,7 @@ def main() -> None:
                 f"{label}: got {len(got)} entries, want {len(want)}: {got!r}"
             )
             return
-        for i, (g, w) in enumerate(zip(got, want)):
+        for i, (g, w) in enumerate(zip(got, want, strict=True)):
             check_partial(f"{label}[{i}]", g, w)
 
     try:

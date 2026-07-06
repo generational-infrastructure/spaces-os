@@ -1,5 +1,6 @@
 """skill_store: the pure store library. Everything here is in-process —
-no subprocess, no sys.exit; failures are typed exceptions."""
+no subprocess, no sys.exit; failures are typed exceptions.
+"""
 
 import json
 
@@ -9,7 +10,8 @@ import skill_store
 
 def make_paths(tmp_path, monkeypatch, *, env_schema=None):
     """Paths pinned to tmp dirs; optionally with the env-schema overrides
-    the relocated integration store uses."""
+    the relocated integration store uses.
+    """
     monkeypatch.setenv("SPACES_PI_CHAT_STATE_DIR", str(tmp_path / "state"))
     if env_schema is not None:
         schema = tmp_path / "schema.json"
@@ -42,8 +44,10 @@ def test_round_trip_and_file_routing(tmp_path, monkeypatch):
 
     cfg = (tmp_path / "config.toml").read_text()
     sec = (tmp_path / "secrets.toml").read_text()
-    assert "imap.corp.com" in cfg and "hunter2" not in cfg
-    assert "hunter2" in sec and "imap.corp.com" not in sec
+    assert "imap.corp.com" in cfg
+    assert "hunter2" not in cfg
+    assert "hunter2" in sec
+    assert "imap.corp.com" not in sec
 
 
 def test_get_unset_returns_none(tmp_path, monkeypatch):

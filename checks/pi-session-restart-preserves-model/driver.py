@@ -59,8 +59,8 @@ def read_frames(frames_log: str) -> list[dict]:
         return []
     out: list[dict] = []
     with open(frames_log) as fh:
-        for line in fh:
-            line = line.strip()
+        for raw in fh:
+            line = raw.strip()
             if not line:
                 continue
             try:
@@ -116,8 +116,8 @@ def main() -> None:
     def daemon_url():
         try:
             with open(os.path.join(work_dir, "mock-daemon.log")) as fh:
-                for line in fh:
-                    line = line.strip()
+                for raw in fh:
+                    line = raw.strip()
                     if line.startswith("ws://"):
                         return line
         except OSError:
@@ -235,6 +235,7 @@ def main() -> None:
                 if pred(f):
                     return i
             die(f"{what} missing from frame log: {kinds!r}")
+            return None  # unreachable: die() exits
 
         detach_idx = index_of(
             lambda f: f.get("kind") == "detach" and f.get("sessionId") == d1,

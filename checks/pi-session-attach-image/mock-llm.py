@@ -54,9 +54,8 @@ class Handler(BaseHTTPRequestHandler):
         # Record the verbatim request body; the driver asserts the multimodal
         # image part (the base64 PNG) is in here. JSON bodies carry no raw
         # newlines, so one line per request keeps the capture greppable.
-        with CAPTURE_LOCK:
-            with open(CAPTURE_PATH, "ab") as fh:
-                fh.write(raw + b"\n")
+        with CAPTURE_LOCK, open(CAPTURE_PATH, "ab") as fh:
+            fh.write(raw + b"\n")
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

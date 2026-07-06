@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # Spaces fork of calamares-nixos-extensions/modules/nixos/main.py.
 #
@@ -27,12 +26,15 @@
 # Boot/LUKS/btrfs-subvol logic preserved verbatim from upstream — those
 # are correctness-critical and not spaces-specific.
 
+from __future__ import annotations
+
 import configparser
 import gettext
 import json
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import libcalamares
 
@@ -198,7 +200,7 @@ _SPACES_CONFIG_PATH = os.environ.get(
     "CALAMARES_SPACES_CONFIG", "/etc/calamares-spaces/install.json"
 )
 try:
-    with open(_SPACES_CONFIG_PATH, "r") as _fh:
+    with Path(_SPACES_CONFIG_PATH).open() as _fh:
         _spaces_config = json.load(_fh)
     SPACES_FLAKE_PATH = _spaces_config["spacesFlake"]
     INPUT_OVERRIDES = _spaces_config.get("inputOverrides", {})
@@ -229,40 +231,43 @@ flake_template = """{
 """
 
 
-def env_is_set(name):
-    envValue = os.environ.get(name)
-    return not (envValue is None or envValue == "")
+def env_is_set(name: str) -> bool:
+    env_value = os.environ.get(name)
+    return not (env_value is None or env_value == "")
 
 
-def generateProxyStrings():
-    proxyEnv = []
-    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        if env_is_set(var):
-            proxyEnv.append("{}={}".format(var, os.environ.get(var)))
-    if proxyEnv:
-        proxyEnv.insert(0, "env")
-    return proxyEnv
+def generate_proxy_strings() -> list[str]:
+    proxy_env = [
+        f"{var}={os.environ.get(var)}"
+        for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
+        if env_is_set(var)
+    ]
+    if proxy_env:
+        proxy_env.insert(0, "env")
+    return proxy_env
 
 
-def pretty_name():
+def pretty_name() -> str:
     return _("Installing Spaces OS.")
 
 
 status = pretty_name()
 
 
-def pretty_status_message():
+def pretty_status_message() -> str:
     return status
 
 
-def catenate(d, key, *values):
+def catenate(d: dict[str, str], key: str, *values: str | None) -> None:
     """Set `d[key]` to the concatenation of `values`, unless any value is None."""
     if [v for v in values if v is None]:
         return
     d[key] = "".join(values)
 
 
-def fix_btrfs_subvolumes(hardware_config, partitions):
+def fix_btrfs_subvolumes(
+    hardware_config: str, partitions: list[dict[str, object]]
+) -> str:
     """Fix btrfs subvolume options in hardware-configuration.nix.
 
     `nixos-generate-config` writes `subvol=<mount-point>` instead of the
@@ -282,15 +287,15 @@ def fix_btrfs_subvolumes(hardware_config, partitions):
 
     libcalamares.utils.debug("Fixing btrfs subvolume configuration")
     for mount_point, correct_subvol in subvol_map.items():
-        pattern = r'(fileSystems\."{}"[^;]*"subvol=)[^"]*"'.format(
-            re.escape(mount_point)
-        )
-        replacement = r'\g<1>{}"'.format(correct_subvol)
+        pattern = rf'(fileSystems\."{re.escape(mount_point)}"[^;]*"subvol=)[^"]*"'
+        replacement = rf'\g<1>{correct_subvol}"'
         hardware_config = re.sub(pattern, replacement, hardware_config, flags=re.DOTALL)
     return hardware_config
 
 
-def render_configuration(gs, ngc_cfg):
+def render_configuration(
+    gs: libcalamares.GlobalStorage, _ngc_cfg: configparser.ConfigParser
+) -> str:
     """Pure builder: assemble configuration.nix text from globalstorage.
 
     Returns the rendered configuration string. Side effects (LUKS
@@ -352,7 +357,7 @@ def render_configuration(gs, ngc_cfg):
         catenate(variables, "LANG", locale)
         if (
             len(set(localeconf.values())) != 1
-            or list(set(localeconf.values()))[0] != locale
+            or next(iter(set(localeconf.values()))) != locale
         ):
             cfg += cfglocaleextra
             for conf in localeconf:
@@ -378,27 +383,27 @@ def render_configuration(gs, ngc_cfg):
         cfg += cfggreetd
 
     cfg += cfgtail
-    version = ".".join(subprocess.getoutput(["nixos-version"]).split(".")[:2])[:5]
+    # getoutput's shell invocation is a fixed literal argv (no untrusted
+    # input) and the unit test stubs subprocess.getoutput in this exact form.
+    version = ".".join(subprocess.getoutput(["nixos-version"]).split(".")[:2])[:5]  # noqa: S605
     catenate(variables, "nixosversion", version)
 
     # Sanity: warn on unused variables / undefined patterns.
     for key in variables:
-        pattern = "@@{}@@".format(key)
+        pattern = f"@@{key}@@"
         if pattern not in cfg:
-            libcalamares.utils.warning("Variable '{}' is not used.".format(key))
+            libcalamares.utils.warning(f"Variable '{key}' is not used.")
     for match in re.finditer(r"@@\w+@@", cfg):
         name = match.group(0)[2:-2]
         if name not in variables:
-            libcalamares.utils.warning(
-                "Variable '{}' is used but not defined.".format(name)
-            )
+            libcalamares.utils.warning(f"Variable '{name}' is used but not defined.")
 
     for key, value in variables.items():
-        cfg = cfg.replace("@@{}@@".format(key), str(value))
+        cfg = cfg.replace(f"@@{key}@@", str(value))
     return cfg
 
 
-def render_flake_nix(gs):
+def render_flake_nix(gs: libcalamares.GlobalStorage) -> str:
     """Render the wrapper `flake.nix` for the installed system."""
     expr = flake_template
     expr = expr.replace("@@hostname@@", gs.value("hostname") or "nixos")
@@ -409,15 +414,19 @@ def render_flake_nix(gs):
     # post-install boot has serial console + niri software-rendering patch.
     # File-based (not env var) because GDM/GNOME sessions don't reliably
     # inherit environment.variables from /etc/set-environment.
-    if os.path.exists("/etc/spaces-test-support"):
+    if Path("/etc/spaces-test-support").exists():
         extra = "        inputs.spaces.nixosModules.test-support\n"
     else:
         extra = ""
-    expr = expr.replace("@@extra_modules@@", extra)
-    return expr
+    return expr.replace("@@extra_modules@@", extra)
 
 
-def _resolve_vconsole(gs):
+# kbd-model-map columns: consolemap, xlayout, xmodel, xvariant, xoptions —
+# a row is only matchable once it carries at least the xvariant column.
+KBD_MODEL_MAP_MIN_FIELDS = 4
+
+
+def _resolve_vconsole(gs: libcalamares.GlobalStorage) -> str | None:
     """Return the console keymap name implied by the chosen X keyboard layout.
 
     Mirrors upstream's logic but extracted so `render_configuration` is
@@ -432,20 +441,21 @@ def _resolve_vconsole(gs):
             subprocess.check_output(
                 ["pkexec", "loadkeys", explicit], stderr=subprocess.STDOUT
             )
-            return explicit
         except subprocess.CalledProcessError as e:
-            libcalamares.utils.error("loadkeys: {}".format(e.output))
+            libcalamares.utils.error(f"loadkeys: {e.output}")
             return None
+        else:
+            return explicit
 
     try:
-        with open("/run/current-system/sw/share/systemd/kbd-model-map", "r") as f:
+        with Path("/run/current-system/sw/share/systemd/kbd-model-map").open() as f:
             rows = [line.split() for line in f if not line.startswith("#")]
     except OSError:
         return None
 
     layout = gs.value("keyboardLayout")
     variant = gs.value("keyboardVariant") or "-"
-    matches = [r for r in rows if len(r) >= 4 and r[1] == layout]
+    matches = [r for r in rows if len(r) >= KBD_MODEL_MAP_MIN_FIELDS and r[1] == layout]
     if not matches:
         return None
     vconsole = matches[0][0]
@@ -459,13 +469,16 @@ def _resolve_vconsole(gs):
         subprocess.check_output(
             ["pkexec", "loadkeys", vconsole], stderr=subprocess.STDOUT
         )
-        return vconsole
     except subprocess.CalledProcessError as e:
-        libcalamares.utils.error("loadkeys: {}".format(e.output))
+        libcalamares.utils.error(f"loadkeys: {e.output}")
         return None
+    else:
+        return vconsole
 
 
-def setup_luks_keyfile(gs, root_mount_point):
+def setup_luks_keyfile(
+    gs: libcalamares.GlobalStorage, root_mount_point: str
+) -> tuple[str | None, tuple[str, str] | None]:
     """For BIOS+grub-cryptodisk setups, prime /boot/crypto_keyfile.bin.
 
     Mirrors upstream verbatim — correctness-critical, not spaces-specific.
@@ -545,16 +558,14 @@ def setup_luks_keyfile(gs, root_mount_point):
                 )
                 return None, (
                     _("cryptsetup failed"),
-                    _(
-                        "Failed to add {} to /boot/crypto_keyfile.bin".format(
-                            part["luksMapperName"]
-                        )
+                    _("Failed to add {} to /boot/crypto_keyfile.bin").format(
+                        part["luksMapperName"]
                     ),
                 )
     return cfg_extra, None
 
 
-def run():
+def run() -> tuple[str, str] | None:
     """Generate the installed system's flake + configuration and run nixos-install."""
     global status
     status = _("Configuring Spaces OS")
@@ -617,7 +628,7 @@ def run():
     # unfree-extraModulePackages stripping is dropped — spaces
     # `nixpkgs.config.allowUnfree = true` is already set).
     hwpath = root_mount_point + "/etc/nixos/hardware-configuration.nix"
-    with open(hwpath, "r") as hf:
+    with Path(hwpath).open() as hf:
         htxt = hf.read()
     htxt_fixed = fix_btrfs_subvolumes(htxt, gs.value("partitions") or [])
     if htxt_fixed != htxt:
@@ -626,13 +637,13 @@ def run():
         )
 
     # Lay down the generated host-overlay configuration.nix.
-    config_path = os.path.join(root_mount_point, "etc/nixos/configuration.nix")
+    config_path = str(Path(root_mount_point) / "etc/nixos/configuration.nix")
     libcalamares.utils.host_env_process_output(
         ["cp", "/dev/stdin", config_path], None, cfg
     )
 
     # Lay down the wrapper flake.nix.
-    flake_path = os.path.join(root_mount_point, "etc/nixos/flake.nix")
+    flake_path = str(Path(root_mount_point) / "etc/nixos/flake.nix")
     libcalamares.utils.host_env_process_output(
         ["cp", "/dev/stdin", flake_path], None, flake_nix
     )
@@ -643,10 +654,10 @@ def run():
     # has zero github fetches and the install runs offline. The user's
     # post-install `nix flake update spaces` rewrites the lock back to
     # canonical github.
-    flake_dir = os.path.join(root_mount_point, "etc/nixos")
-    nixFlakeLockCmd = ["pkexec"]
-    nixFlakeLockCmd.extend(generateProxyStrings())
-    nixFlakeLockCmd.extend(
+    flake_dir = str(Path(root_mount_point) / "etc/nixos")
+    nix_flake_lock_cmd = ["pkexec"]
+    nix_flake_lock_cmd.extend(generate_proxy_strings())
+    nix_flake_lock_cmd.extend(
         [
             "nix",
             "--extra-experimental-features",
@@ -660,9 +671,11 @@ def run():
         ]
     )
     for name, path in INPUT_OVERRIDES.items():
-        nixFlakeLockCmd.extend(["--override-input", "spaces/" + name, "path:" + path])
+        nix_flake_lock_cmd.extend(
+            ["--override-input", "spaces/" + name, "path:" + path]
+        )
     try:
-        subprocess.check_output(nixFlakeLockCmd, stderr=subprocess.STDOUT)
+        subprocess.check_output(nix_flake_lock_cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         libcalamares.utils.error("nix flake lock failed:\n" + e.output.decode("utf8"))
         return (
@@ -680,7 +693,7 @@ def run():
         )
     except subprocess.CalledProcessError as e:
         libcalamares.utils.warning(
-            "Failed to set permissions on {}: {}".format(root_mount_point, e.output)
+            f"Failed to set permissions on {root_mount_point}: {e.output}"
         )
 
     # Build the system toplevel out-of-band, then hand it to
@@ -690,11 +703,11 @@ def run():
     # lock untouched, so the wrapper's narHash is stable mid-install.
     hostname = gs.value("hostname") or "nixos"
     flake_ref = "path:{}#nixosConfigurations.{}.config.system.build.toplevel".format(
-        os.path.join(root_mount_point, "etc/nixos"), hostname
+        Path(root_mount_point) / "etc/nixos", hostname
     )
-    nixBuildCmd = ["pkexec"]
-    nixBuildCmd.extend(generateProxyStrings())
-    nixBuildCmd.extend(
+    nix_build_cmd = ["pkexec"]
+    nix_build_cmd.extend(generate_proxy_strings())
+    nix_build_cmd.extend(
         [
             "nix",
             "--extra-experimental-features",
@@ -709,7 +722,7 @@ def run():
     try:
         output_lines = []
         proc = subprocess.Popen(
-            nixBuildCmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            nix_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
         while True:
             line = proc.stdout.readline().decode("utf-8", errors="replace")
@@ -717,7 +730,7 @@ def run():
                 break
             if line:
                 output_lines.append(line)
-                libcalamares.utils.debug("nix build: {}".format(line.rstrip()))
+                libcalamares.utils.debug(f"nix build: {line.rstrip()}")
         rc = proc.wait()
         out = "".join(output_lines)
         if rc != 0:
@@ -729,9 +742,9 @@ def run():
         libcalamares.utils.error("nix build invocation failed: " + str(e))
         return (_("Building the system configuration failed"), str(e))
 
-    nixosInstallCmd = ["pkexec"]
-    nixosInstallCmd.extend(generateProxyStrings())
-    nixosInstallCmd.extend(
+    nixos_install_cmd = ["pkexec"]
+    nixos_install_cmd.extend(generate_proxy_strings())
+    nixos_install_cmd.extend(
         [
             "nixos-install",
             "--no-root-passwd",
@@ -750,17 +763,17 @@ def run():
     try:
         output = ""
         proc = subprocess.Popen(
-            nixosInstallCmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            nixos_install_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
         while True:
             line = proc.stdout.readline().decode("utf-8")
             output += line
-            libcalamares.utils.debug("nixos-install: {}".format(line.strip()))
+            libcalamares.utils.debug(f"nixos-install: {line.strip()}")
             if not line:
                 break
         if proc.wait() != 0:
             return (_("nixos-install failed"), _(output))
-    except Exception:
+    except Exception:  # noqa: BLE001  # Calamares job boundary: report any failure via the UI instead of crashing the installer with a traceback
         return (_("nixos-install failed"), _("Installation failed to complete"))
 
     return None

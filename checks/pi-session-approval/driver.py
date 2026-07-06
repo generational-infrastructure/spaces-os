@@ -13,6 +13,7 @@ The cheap per-feature counterpart to the full VM test: no compositor, pi, LLM,
 or VM. Usage: driver.py <quickshell_bin> <test_dir> <plugin_dir> <work_dir>
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -85,13 +86,11 @@ def main():
         if not os.path.isfile(record):
             return []
         out = []
-        for line in open(record):
-            line = line.strip()
+        for raw in open(record):
+            line = raw.strip()
             if line:
-                try:
+                with contextlib.suppress(ValueError):
                     out.append(json.loads(line))
-                except ValueError:
-                    pass
         return out
 
     try:

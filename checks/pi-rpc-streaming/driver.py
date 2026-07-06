@@ -10,6 +10,7 @@ Sends a single prompt, then asserts:
 Usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -186,10 +187,8 @@ def main():
             fail(f"agent_end text {final_text!r} did not match {EXPECTED_REPLY!r}")
         print("OK")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             proc.stdin.close()
-        except Exception:
-            pass
         try:
             proc.wait(timeout=5)
         except Exception:

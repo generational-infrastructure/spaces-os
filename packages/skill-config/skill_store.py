@@ -72,14 +72,14 @@ class StoreIOError(SkillStoreError):
 
 
 class UnknownFieldError(SkillStoreError):
-    def __init__(self, field: str, skill: str):
+    def __init__(self, field: str, skill: str) -> None:
         super().__init__(f"unknown field '{field}' for skill '{skill}'")
         self.field = field
         self.skill = skill
 
 
 class Paths:
-    def __init__(self, instance: str):
+    def __init__(self, instance: str) -> None:
         self.instance = instance
         env_state = os.environ.get("SPACES_PI_CHAT_STATE_DIR")
         self.state_dir = (
@@ -117,16 +117,18 @@ def resolve_instance(flag: str | None, var_lib: Path = Path("/var/lib")) -> str:
         return candidates[0]
     if not candidates:
         return DEFAULT_INSTANCE
-    raise AmbiguousInstanceError(
+    msg = (
         f"multiple spaces-pi-chat instances found ({', '.join(candidates)}); "
         "pass --instance or set SPACES_PI_CHAT_INSTANCE"
     )
+    raise AmbiguousInstanceError(msg)
 
 
 def load_frontmatter(skill_dir: Path) -> dict:
     md = skill_dir / "SKILL.md"
     if not md.exists():
-        raise SkillNotFoundError(f"{md} not found")
+        msg = f"{md} not found"
+        raise SkillNotFoundError(msg)
     text = md.read_text()
     if not text.startswith("---\n"):
         return {}
@@ -142,7 +144,8 @@ def skill_md_schema(skill_dir: Path) -> tuple[dict, dict]:
     cfg = fm.get("config") or {}
     sec = fm.get("secrets") or {}
     if not isinstance(cfg, dict) or not isinstance(sec, dict):
-        raise SchemaError(f"malformed config:/secrets: in {skill_dir}/SKILL.md")
+        msg = f"malformed config:/secrets: in {skill_dir}/SKILL.md"
+        raise SchemaError(msg)
     return cfg, sec
 
 
@@ -152,7 +155,8 @@ def load_toml(path: Path) -> tomlkit.TOMLDocument:
             return tomlkit.document()
         return tomlkit.parse(path.read_text())
     except OSError as e:
-        raise StoreIOError(f"cannot read {path}: {e}") from e
+        msg = f"cannot read {path}: {e}"
+        raise StoreIOError(msg) from e
 
 
 def save_toml(path: Path, doc: tomlkit.TOMLDocument, mode: int) -> None:
@@ -163,7 +167,8 @@ def save_toml(path: Path, doc: tomlkit.TOMLDocument, mode: int) -> None:
         tmp.chmod(mode)
         tmp.rename(path)
     except OSError as e:
-        raise StoreIOError(f"cannot write {path}: {e}") from e
+        msg = f"cannot write {path}: {e}"
+        raise StoreIOError(msg) from e
 
 
 def section_get(doc: tomlkit.TOMLDocument, skill: str, profile: str) -> dict:
@@ -211,7 +216,7 @@ class SkillStore:
     resolve_skill() first.
     """
 
-    def __init__(self, paths: Paths):
+    def __init__(self, paths: Paths) -> None:
         self.paths = paths
 
     # ── schema ──────────────────────────────────────────────────────
@@ -228,17 +233,18 @@ class SkillStore:
             try:
                 doc = json.loads(Path(env_schema).read_text())
             except (OSError, ValueError) as e:
-                raise SchemaError(
-                    f"cannot read SKILL_CONFIG_SCHEMA {env_schema}: {e}"
-                ) from e
+                msg = f"cannot read SKILL_CONFIG_SCHEMA {env_schema}: {e}"
+                raise SchemaError(msg) from e
             cfg = doc.get("config") or {}
             sec = doc.get("secrets") or {}
             if not isinstance(cfg, dict) or not isinstance(sec, dict):
-                raise SchemaError(f"malformed config:/secrets: in {env_schema}")
+                msg = f"malformed config:/secrets: in {env_schema}"
+                raise SchemaError(msg)
             return cfg, sec
         skill_dir = self.paths.skills_dir / skill
         if not skill_dir.exists():
-            raise SkillNotFoundError(f"skill '{skill}' not found at {skill_dir}")
+            msg = f"skill '{skill}' not found at {skill_dir}"
+            raise SkillNotFoundError(msg)
         return skill_md_schema(skill_dir)
 
     def route(self, skill: str, field: str) -> Route:
@@ -281,9 +287,10 @@ class SkillStore:
 
     # ── values ──────────────────────────────────────────────────────
 
-    def get(self, skill: str, profile: str, field: str):
+    def get(self, skill: str, profile: str, field: str) -> str | None:
         """The stored value, or None when unset. Raises UnknownFieldError
-        for fields outside the schema."""
+        for fields outside the schema.
+        """
         route = self.route(skill, field)
         doc = load_toml(route.path)
         return doc.get(skill, {}).get(profile, {}).get(field)
@@ -320,7 +327,8 @@ class SkillStore:
 
     def profiles_snapshot(self, skill: str) -> dict:
         """Machine-readable state for one skill: per profile, config VALUES
-        and secret SET-STATUS. A secret value never leaves the store here."""
+        and secret SET-STATUS. A secret value never leaves the store here.
+        """
         cfg_fields, sec_fields = self.load_schema(skill)
         config_doc = load_toml(self.paths.config_toml)
         secrets_doc = load_toml(self.paths.secrets_toml)

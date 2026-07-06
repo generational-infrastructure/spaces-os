@@ -8,22 +8,32 @@ per second (the same courtesy osm-cli extends to Nominatim).
 """
 
 import argparse
+import functools
 import json
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+from typing import Any
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 ENTITY_DATA = "https://www.wikidata.org/wiki/Special:EntityData"
 WDQS = "https://query.wikidata.org/sparql"
 USER_AGENT = "distro-pi-chat-wikidata/0.1"
 
-_last_request = 0.0
+
+@functools.cache
+def _throttle_state() -> list[float]:
+    """Single-element mutable cache holding the monotonic time of the last
+    request. `functools.cache` hands back the same list on every call, which
+    gives `_request` a persistent slot to update without a module `global`.
+    """
+    return [0.0]
 
 
-def search_url(query, limit):
+def search_url(query: str, limit: int) -> str:
     """Build the wbsearchentities request URL for a label search."""
     params = urllib.parse.urlencode(
         {
@@ -38,18 +48,18 @@ def search_url(query, limit):
     return f"{WIKIDATA_API}?{params}"
 
 
-def entity_url(qid):
+def entity_url(qid: str) -> str:
     """Build the Special:EntityData JSON URL for an entity."""
     return f"{ENTITY_DATA}/{qid}.json"
 
 
-def sparql_url(query):
+def sparql_url(query: str) -> str:
     """Build the WDQS request URL for a SPARQL query."""
     params = urllib.parse.urlencode({"query": query, "format": "json"})
     return f"{WDQS}?{params}"
 
 
-def parse_search(data):
+def parse_search(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract id/label/description per hit from a wbsearchentities body."""
     return [
         {
@@ -61,7 +71,7 @@ def parse_search(data):
     ]
 
 
-def _render_snak(snak):
+def _render_snak(snak: dict[str, Any]) -> Any:
     """Render a claim's mainsnak as a compact, readable value string."""
     if snak.get("snaktype") != "value":
         # "somevalue" (unknown) / "novalue" (explicit absence) carry no datavalue.
@@ -84,7 +94,7 @@ def _render_snak(snak):
     return json.dumps(value, ensure_ascii=False)
 
 
-def summarize_entity(data, qid):
+def summarize_entity(data: dict[str, Any], qid: str) -> dict[str, Any]:
     """Reduce a Special:EntityData body to id, en label/description, claims.
 
     Claims collapse to property → list of rendered values; referenced
@@ -107,12 +117,14 @@ def summarize_entity(data, qid):
     }
 
 
-def parse_sparql(data):
+def parse_sparql(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the results.bindings rows from a SPARQL JSON result set."""
     return data.get("results", {}).get("bindings", [])
 
 
-def select_query(positional, file_text, stdin_text):
+def select_query(
+    positional: str | None, file_text: str | None, stdin_text: str | None
+) -> str | None:
     """Resolve the SPARQL query text: positional, then --file, then stdin."""
     if positional:
         return positional
@@ -123,13 +135,15 @@ def select_query(positional, file_text, stdin_text):
     return None
 
 
-def _request(url, accept="application/json", timeout=30):
+def _request(
+    url: str, accept: str = "application/json", timeout: int = 30
+) -> dict[str, Any]:
     """HTTP GET with a polite User-Agent and 1 req/s throttle. Returns JSON."""
-    global _last_request
-    elapsed = time.monotonic() - _last_request
+    state = _throttle_state()
+    elapsed = time.monotonic() - state[0]
     if elapsed < 1.0:
         time.sleep(1.0 - elapsed)
-    _last_request = time.monotonic()
+    state[0] = time.monotonic()
 
     headers = {"User-Agent": USER_AGENT, "Accept": accept}
     req = urllib.request.Request(url, headers=headers)
@@ -147,17 +161,17 @@ def _request(url, accept="application/json", timeout=30):
         sys.exit(1)
 
 
-def _print_json(obj):
+def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, ensure_ascii=False))
 
 
-def cmd_search(args):
+def cmd_search(args: argparse.Namespace) -> None:
     """Resolve a label to candidate QIDs with labels and descriptions."""
     data = _request(search_url(args.query, args.limit))
     _print_json(parse_search(data))
 
 
-def cmd_get(args):
+def cmd_get(args: argparse.Namespace) -> None:
     """Fetch one entity; summarize by default, dump raw JSON with --raw."""
     data = _request(entity_url(args.qid))
     if args.raw:
@@ -166,12 +180,11 @@ def cmd_get(args):
         _print_json(summarize_entity(data, args.qid))
 
 
-def cmd_sparql(args):
+def cmd_sparql(args: argparse.Namespace) -> None:
     """Run a SPARQL query against WDQS and print results.bindings."""
     file_text = None
     if args.file:
-        with open(args.file) as f:
-            file_text = f.read()
+        file_text = Path(args.file).read_text()
     stdin_text = None
     if not sys.stdin.isatty():
         stdin_text = sys.stdin.read()
@@ -186,7 +199,7 @@ def cmd_sparql(args):
     _print_json(parse_sparql(data))
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="wikidata-cli",
         description="Search entities, fetch entity data, and run SPARQL on Wikidata",

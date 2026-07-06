@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -248,8 +249,6 @@ class TestConnectReadonly(unittest.TestCase):
     def test_insert_rejected(self) -> None:
         ro = dbmod.connect_readonly(self.path)
         self.addCleanup(ro.close)
-        import sqlite3
-
         with self.assertRaises(sqlite3.OperationalError):
             ro.execute(
                 "INSERT INTO messages (uid, ts_ms, received_at_ms, thread_id, thread_kind)"
@@ -259,23 +258,17 @@ class TestConnectReadonly(unittest.TestCase):
     def test_update_rejected(self) -> None:
         ro = dbmod.connect_readonly(self.path)
         self.addCleanup(ro.close)
-        import sqlite3
-
         with self.assertRaises(sqlite3.OperationalError):
             ro.execute("UPDATE messages SET body = 'tampered' WHERE uid = 'u1'")
 
     def test_create_table_rejected(self) -> None:
         ro = dbmod.connect_readonly(self.path)
         self.addCleanup(ro.close)
-        import sqlite3
-
         with self.assertRaises(sqlite3.OperationalError):
             ro.execute("CREATE TABLE evil (x INTEGER)")
 
     def test_missing_file_raises(self) -> None:
         missing = Path(self.tmp.name) / "nope.db"
-        import sqlite3
-
         with self.assertRaises(sqlite3.OperationalError):
             dbmod.connect_readonly(missing)
 

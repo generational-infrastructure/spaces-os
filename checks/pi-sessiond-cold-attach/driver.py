@@ -25,6 +25,7 @@ Three scenarios against the real daemon, no LLM, no VM, ~5s:
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -64,8 +65,9 @@ async def create_session(ws, name):
 
 
 async def scenario_cold_attach_pipelined(sid):
-    """attach + immediate command on one socket: the command MUST be
-    answered (processed after the resume finishes), not bounced."""
+    """Attach + immediate command on one socket: the command MUST be
+    answered (processed after the resume finishes), not bounced.
+    """
     async with websockets.connect(uri()) as ws:
         await hello(ws)
         # Pipelined burst, exactly like the panel's _wsSpawn + _wsFlush.
@@ -104,7 +106,8 @@ async def scenario_cold_attach_pipelined(sid):
 
 async def scenario_meta_only_resurrect(state):
     """A session that was created but never ran a turn persists only its
-    meta sidecar (no jsonl). Attach must resurrect it, not bounce."""
+    meta sidecar (no jsonl). Attach must resurrect it, not bounce.
+    """
     sid = str(uuid.uuid4())
     sessions_dir = os.path.join(state, "sessions")
     os.makedirs(os.path.join(sessions_dir, sid), exist_ok=True)
@@ -125,7 +128,8 @@ async def scenario_meta_only_resurrect(state):
 
 async def scenario_unknown_id_error_carries_session_id():
     """Errors for session-scoped envelopes must echo the sessionId so a
-    client multiplexing many sessions over one socket can route them."""
+    client multiplexing many sessions over one socket can route them.
+    """
     ghost = str(uuid.uuid4())
     async with websockets.connect(uri()) as ws:
         await hello(ws)
@@ -153,8 +157,6 @@ async def scenario_unknown_id_error_carries_session_id():
 
 
 def wait_port(port, timeout=30):
-    import socket
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

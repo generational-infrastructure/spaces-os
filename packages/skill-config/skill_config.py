@@ -38,10 +38,13 @@ DAEMON_CONNECT_TIMEOUT = 3.0  # seconds, retried while daemon is starting
 
 API_VERSION = 1
 
+KEY_PARTS = 3  # <skill>.<profile>.<field>
+SKILL_PROFILE_PARTS = 2  # <skill>.<profile>
 
-def cmd_get(args, store: SkillStore) -> None:
+
+def cmd_get(args: argparse.Namespace, store: SkillStore) -> None:
     parts = args.key.split(".")
-    if len(parts) != 3:
+    if len(parts) != KEY_PARTS:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
     skill = store.resolve_skill(skill)
@@ -57,7 +60,7 @@ def cmd_get(args, store: SkillStore) -> None:
     print(val)
 
 
-def cmd_list(args, store: SkillStore) -> None:
+def cmd_list(args: argparse.Namespace, store: SkillStore) -> None:
     paths = store.paths
 
     if getattr(args, "json", False):
@@ -75,7 +78,7 @@ def cmd_list(args, store: SkillStore) -> None:
         cfg_fields, sec_fields = store.load_schema(skill)
         snapshot = store.profiles_snapshot(skill)["profiles"]
 
-        if len(parts) == 2:
+        if len(parts) == SKILL_PROFILE_PARTS:
             profiles = [parts[1]]
         else:
             profiles = sorted(snapshot)
@@ -114,16 +117,16 @@ def cmd_list(args, store: SkillStore) -> None:
                 print(f"  - {p}")
 
 
-def cmd_set(args, store: SkillStore) -> None:
+def cmd_set(args: argparse.Namespace, store: SkillStore) -> None:
     parts = args.key.split(".")
-    if len(parts) != 3:
+    if len(parts) != KEY_PARTS:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
     skill = store.resolve_skill(skill)
     store.set(skill, profile, field, args.value)
 
 
-def cmd_schema(args, store: SkillStore) -> None:
+def cmd_schema(args: argparse.Namespace, store: SkillStore) -> None:
     skill = store.resolve_skill(args.skill)
     cfg_fields, sec_fields = store.load_schema(skill)
     out = {}
@@ -147,17 +150,18 @@ def daemon_connect() -> socket.socket:
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(path)
-            return s
         except (FileNotFoundError, ConnectionRefusedError) as e:
             last_err = e
             time.sleep(0.2)
+        else:
+            return s
     sys.stderr.write(f"error: cannot reach skill-config-daemon at {path}: {last_err}\n")
     sys.exit(3)
 
 
-def cmd_request_input(args, store: SkillStore) -> None:
+def cmd_request_input(args: argparse.Namespace, store: SkillStore) -> None:
     parts = args.key.split(".")
-    if len(parts) != 3:
+    if len(parts) != KEY_PARTS:
         sys.exit("error: key must be <skill>.<profile>.<field>")
     skill, profile, field = parts
     skill = store.resolve_skill(skill)
@@ -214,7 +218,7 @@ def cmd_request_input(args, store: SkillStore) -> None:
     sys.exit(f"error: unexpected terminal op: {op}")
 
 
-def cmd_remove(args, store: SkillStore) -> None:
+def cmd_remove(args: argparse.Namespace, store: SkillStore) -> None:
     skill = store.resolve_skill(args.skill)
     if store.remove_profile(skill, args.profile):
         print(f"✓ Removed profile '{args.profile}' for skill '{skill}'.")
@@ -227,11 +231,11 @@ def cmd_remove(args, store: SkillStore) -> None:
 
 def api_dispatch(req: dict, store: SkillStore) -> dict:
     """One api request -> its `result` payload. Raises SkillStoreError
-    (or ValueError for envelope-level problems) on failure."""
+    (or ValueError for envelope-level problems) on failure.
+    """
     if req.get("v") != API_VERSION:
-        raise ValueError(
-            f"unsupported api version {req.get('v')!r} (want {API_VERSION})"
-        )
+        msg = f"unsupported api version {req.get('v')!r} (want {API_VERSION})"
+        raise ValueError(msg)
     op = req.get("op")
     if op == "set":
         store.set(req["skill"], req["profile"], req["field"], req["value"])
@@ -240,10 +244,25 @@ def api_dispatch(req: dict, store: SkillStore) -> dict:
         return {"removed": store.remove_profile(req["skill"], req["profile"])}
     if op == "profiles":
         return store.profiles_snapshot(req["skill"])
-    raise ValueError(f"unknown op {op!r}")
+    msg = f"unknown op {op!r}"
+    raise ValueError(msg)
 
 
-def cmd_api(args, store: SkillStore) -> None:
+def _parse_api_request(text: str) -> dict:
+    """Parse one JSON request object; raises ValueError on any malformation
+    (including "well-formed JSON but not an object").
+    """
+    req = json.loads(text)
+    if not isinstance(req, dict):
+        msg = "request must be a JSON object"
+        # ValueError is this function's documented malformed-request
+        # contract: callers catch it together with json.JSONDecodeError
+        # (a ValueError subclass), so TypeError would escape them.
+        raise ValueError(msg)  # noqa: TRY004
+    return req
+
+
+def cmd_api(_args: argparse.Namespace, store: SkillStore) -> None:
     """The versioned JSON seam for machine callers (spaces-integrationd).
 
     Reads ONE JSON request object from stdin and writes ONE response
@@ -265,9 +284,7 @@ def cmd_api(args, store: SkillStore) -> None:
                            "secrets": {field: is_set}}}}
     """
     try:
-        req = json.loads(sys.stdin.read())
-        if not isinstance(req, dict):
-            raise ValueError("request must be a JSON object")
+        req = _parse_api_request(sys.stdin.read())
     except ValueError as e:
         req, err = None, f"malformed request: {e}"
     else:
@@ -276,10 +293,11 @@ def cmd_api(args, store: SkillStore) -> None:
     if req is not None:
         try:
             result = api_dispatch(req, store)
-            print(json.dumps({"v": API_VERSION, "ok": True, "result": result}))
-            return
         except (SkillStoreError, ValueError, KeyError) as e:
             err = f"missing key {e}" if isinstance(e, KeyError) else str(e)
+        else:
+            print(json.dumps({"v": API_VERSION, "ok": True, "result": result}))
+            return
     print(json.dumps({"v": API_VERSION, "ok": False, "error": err}))
 
 

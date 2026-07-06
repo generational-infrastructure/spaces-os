@@ -6,50 +6,56 @@ side-effecting host-env helpers are stubbed as no-ops; tests that
 exercise them would need to wire their own fakes.
 """
 
+from collections.abc import Callable
+
 
 class _GlobalStorage:
-    def __init__(self, data=None):
+    def __init__(self, data: dict[str, object] | None = None) -> None:
         self._data = dict(data or {})
 
-    def value(self, key):
+    def value(self, key: str) -> object:
         return self._data.get(key)
 
-    def insert(self, key, value):
+    def insert(self, key: str, value: object) -> None:
         self._data[key] = value
 
     # Test-only helper.
-    def reset(self, data=None):
+    def reset(self, data: dict[str, object] | None = None) -> None:
         self._data = dict(data or {})
 
 
 class _Job:
-    def setprogress(self, fraction):
+    def setprogress(self, fraction: float) -> None:
         pass
 
 
 class _Utils:
     @staticmethod
-    def gettext_path():
+    def gettext_path() -> str:
         return "/dev/null"
 
     @staticmethod
-    def gettext_languages():
+    def gettext_languages() -> list[str]:
         return []
 
     @staticmethod
-    def debug(msg):
+    def debug(msg: str) -> None:
         pass
 
     @staticmethod
-    def warning(msg):
+    def warning(msg: str) -> None:
         pass
 
     @staticmethod
-    def error(msg):
+    def error(msg: str) -> None:
         pass
 
     @staticmethod
-    def host_env_process_output(cmd, callback=None, stdin=None):
+    def host_env_process_output(
+        _cmd: list[str] | str,
+        _callback: Callable[[str], None] | None = None,
+        _stdin: str | None = None,
+    ) -> int:
         # Tests that need to observe filesystem writes should monkeypatch this.
         return 0
 

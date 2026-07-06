@@ -43,6 +43,7 @@ Usage: driver.py <daemon_bin> <qs_bin> <mock_llm> <systemd_run_stub>
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -102,7 +103,8 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
 
     It discovers MODELS from the mock LLM's /v1/models at startup (the
     port only opens after discovery) and defaults to DEFAULT_MODEL — the
-    model the launch directive must override."""
+    model the launch directive must override.
+    """
     state_dir = os.path.join(work_dir, "daemon-state")
     creds_dir = os.path.join(work_dir, "creds")
     os.makedirs(state_dir, exist_ok=True)
@@ -149,7 +151,8 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
 
 def stage_bin(harness_dir: str, work_dir: str) -> str:
     """PATH overlay for quickshell: just the harness's notify-send witness
-    (sessions run daemon-side; the panel only execs notify-send)."""
+    (sessions run daemon-side; the panel only execs notify-send).
+    """
     bin_dir = os.path.join(work_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
     dst = os.path.join(bin_dir, "notify-send")
@@ -163,14 +166,12 @@ def read_ndjson(path: str) -> list:
         return []
     out = []
     with open(path) as fh:
-        for line in fh:
-            line = line.strip()
+        for raw in fh:
+            line = raw.strip()
             if not line:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 out.append(json.loads(line))
-            except Exception:
-                pass
     return out
 
 

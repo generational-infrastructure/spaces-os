@@ -105,8 +105,8 @@ def handle(cmd):
 
 
 def main():
-    for line in sys.stdin:
-        line = line.strip()
+    for raw in sys.stdin:
+        line = raw.strip()
         if not line:
             continue
         try:

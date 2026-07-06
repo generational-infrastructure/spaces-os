@@ -62,7 +62,7 @@ def main() -> None:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
     try:
-        if not wait_until(lambda: qs.ipc_ready(), timeout_s=30):
+        if not wait_until(qs.ipc_ready, timeout_s=30):
             die("quickshell never bound the test:bar-parse IPC target")
 
         # `/` + Tab opens the directive-key menu.

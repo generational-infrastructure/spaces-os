@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import time
+import tomllib
 
 from qs_harness import Quickshell, fail, qs_env, reap, stage_shell, wait_until
 
@@ -231,8 +232,6 @@ def main():
             fail(f"prompt bubble never transitioned to 'submitted', messages={raw}")
 
         # 8. Verify the value was persisted to config.toml.
-        import tomllib
-
         config_path = os.path.join(skill_config_store, "config.toml")
         if not os.path.isfile(config_path):
             cleanup()

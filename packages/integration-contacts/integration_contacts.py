@@ -10,6 +10,8 @@ needed. Every tool is multi-profile: the target account is resolved from
 arguments["profile"] (or the sole profile).
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import re
@@ -18,18 +20,23 @@ import urllib.error
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urljoin, urlsplit
 from xml.sax.saxutils import escape as _xml_escape
 
 from spaces_integration_mcp import make_server
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 SERVER_NAME = "integration-contacts"
 SERVER_VERSION = "0.1.0"
 
 
-def _collection(vals):
+def _collection(vals: dict[str, str]) -> str:
     """The addressbook collection URL: `server` directly, or `server` with the
-    optional `book` path resolved against it when configured."""
+    optional `book` path resolved against it when configured.
+    """
     server = (vals.get("server") or "").strip()
     book = (vals.get("book") or "").strip()
     if book:
@@ -38,10 +45,11 @@ def _collection(vals):
     return server
 
 
-def _resolve_path(path, collection):
+def _resolve_path(path: str, collection: str) -> str:
     """Turn an argument path into an absolute URL: an absolute href is used as
     is, an absolute path joins to the collection's scheme://host, and a bare
-    resource name joins to the collection."""
+    resource name joins to the collection.
+    """
     if re.match(r"^https?://", path, re.IGNORECASE):
         return path
     parts = urlsplit(collection)
@@ -51,11 +59,19 @@ def _resolve_path(path, collection):
     return collection.rstrip("/") + "/" + path
 
 
-def _http(method, url, user, password, body=None, extra_headers=None):
+def _http(
+    method: str,
+    url: str,
+    user: str,
+    password: str,
+    body: str | bytes | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int | None, dict[str, str], bytes, str | None]:
     """Run an authenticated urllib request. Returns
     (status, headers-dict, raw-bytes, None) or (None-ish, {}, b"", error-text).
-    2xx (including 207 Multi-Status) is success; anything else is an error."""
-    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    2xx (including 207 Multi-Status) is success; anything else is an error.
+    """
+    token = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     headers = {"Authorization": f"Basic {token}"}
     if extra_headers:
         headers.update(extra_headers)
@@ -85,10 +101,14 @@ _PROPFIND_BODY = (
 )
 
 
-def _vcard_hrefs(raw):
+def _vcard_hrefs(raw: bytes) -> list[str]:
     """The hrefs from a PROPFIND multistatus that name vCard resources (by
-    content type text/vcard or a .vcf suffix)."""
-    root = ET.fromstring(raw)
+    content type text/vcard or a .vcf suffix).
+    """
+    # The XML is the user's own configured CardDAV server's response to an
+    # authenticated request, and this stdlib-only package cannot grow a
+    # defusedxml dependency, so plain ElementTree is deliberate.
+    root = ET.fromstring(raw)  # noqa: S314
     out = []
     for resp in root.iter("{DAV:}response"):
         href_el = resp.find("{DAV:}href")
@@ -104,7 +124,7 @@ def _vcard_hrefs(raw):
     return out
 
 
-def _search_body(query):
+def _search_body(query: str) -> str:
     lines = [
         '<?xml version="1.0" encoding="utf-8" ?>',
         '<c:addressbook-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">',
@@ -125,13 +145,13 @@ def _search_body(query):
     return "\n".join(lines)
 
 
-def _vcard_uid(vcard):
+def _vcard_uid(vcard: str) -> str:
     """The UID value from a vCard body, or "" when absent."""
     m = re.search(r"(?im)^UID(?:;[^:]*)?:(.*)$", vcard)
     return m.group(1).strip() if m else ""
 
 
-def _tool_discover(args, vals):
+def _tool_discover(_args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     collection = _collection(vals)
     _, _, raw, err = _http(
         "PROPFIND",
@@ -150,7 +170,7 @@ def _tool_discover(args, vals):
     return json.dumps(hrefs), False
 
 
-def _tool_search(args, vals):
+def _tool_search(args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     collection = _collection(vals)
     query = (args.get("query") or "").strip()
     _, _, raw, err = _http(
@@ -166,7 +186,7 @@ def _tool_search(args, vals):
     return raw.decode("utf-8", "replace"), False
 
 
-def _tool_get(args, vals):
+def _tool_get(args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     path = args.get("path")
     if not path:
         return "missing required argument: path", True
@@ -177,7 +197,7 @@ def _tool_get(args, vals):
     return raw.decode("utf-8", "replace"), False
 
 
-def _tool_new(args, vals):
+def _tool_new(args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     vcard = args.get("vcard")
     if not vcard:
         return "missing required argument: vcard", True
@@ -200,7 +220,7 @@ def _tool_new(args, vals):
     return url, False
 
 
-def _tool_edit(args, vals):
+def _tool_edit(args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     path = args.get("path")
     vcard = args.get("vcard")
     if not path:
@@ -225,7 +245,7 @@ def _tool_edit(args, vals):
     return json.dumps({"path": url, "etag": resp_headers.get("ETag", "")}), False
 
 
-def _tool_delete(args, vals):
+def _tool_delete(args: dict[str, Any], vals: dict[str, str]) -> tuple[str, bool]:
     path = args.get("path")
     if not path:
         return "missing required argument: path", True
@@ -236,9 +256,11 @@ def _tool_delete(args, vals):
     return f"deleted {url}", False
 
 
-def _vals(impl):
+def _vals(
+    impl: Callable[[dict[str, Any], dict[str, str]], tuple[str, bool]],
+) -> Callable[[dict[str, Any], str, dict[str, str]], tuple[str, bool]]:
     """Adapt an (args, vals)-style impl to the scaffold's record signature."""
-    return lambda args, profile, vals: impl(args, vals)
+    return lambda args, _profile, vals: impl(args, vals)
 
 
 _NEEDS = ("server", "user", "password")
@@ -341,7 +363,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _vals(_tool_delete),
         },
     ],
-    secret_field="password",
+    secret_field="password",  # noqa: S106 — names the store field, not a credential
 )
 
 

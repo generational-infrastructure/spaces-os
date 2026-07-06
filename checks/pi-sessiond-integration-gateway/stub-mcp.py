@@ -11,8 +11,8 @@ usage: stub-mcp.py <socket-path> <calls-out-path>
 
 import asyncio
 import json
-import os
 import sys
+from pathlib import Path
 
 SOCK = sys.argv[1]
 CALLS_OUT = sys.argv[2]
@@ -77,7 +77,9 @@ async def handle(reader, writer):
         method = msg.get("method")
         mid = msg.get("id")
 
-        def send(result):
+        # Bind `mid` at definition time: `send` is only called within this
+        # iteration, but a late-bound closure over the loop variable is fragile.
+        def send(result, mid=mid):
             writer.write(
                 (
                     json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}) + "\n"
@@ -139,12 +141,13 @@ async def handle(reader, writer):
 
 
 async def main():
-    if os.path.exists(SOCK):
-        os.remove(SOCK)
     server = await asyncio.start_unix_server(handle, path=SOCK)
     async with server:
         await server.serve_forever()
 
 
 if __name__ == "__main__":
+    # Clear a stale socket before the event loop starts (keeps blocking
+    # filesystem work out of the async path).
+    Path(SOCK).unlink(missing_ok=True)
     asyncio.run(main())

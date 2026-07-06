@@ -27,7 +27,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import websockets
 
@@ -143,7 +145,7 @@ async def scenarios(state, calls_out, shared_base):
         shared = os.path.join(shared_base, "github")
         if shared not in rw_parents(read_policy(state, sid)):
             fail(f"session policy must grant the integration shared dir rw: {shared}")
-        if not os.path.isdir(shared):
+        if not await asyncio.to_thread(Path(shared).is_dir):
             fail(f"supervisor must create the shared dir: {shared}")
 
         # The daemon stages the discovered tools for the extension to register.
@@ -328,8 +330,6 @@ def main():
             "usage: driver.py <daemon> <stub_pi> <stub_mcp> <systemd_run> <landlock_exec>"
         )
     daemon, stub_pi, stub_mcp, systemd_run, landlock_exec = sys.argv[1:6]
-
-    import tempfile
 
     root = tempfile.mkdtemp(prefix="gw-")
     # The file-exchange base; the daemon creates <base>/<name> per enabled

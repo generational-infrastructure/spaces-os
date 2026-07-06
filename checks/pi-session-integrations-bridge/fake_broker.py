@@ -13,6 +13,7 @@ Usage: fake_broker.py <sock_path>
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -149,11 +150,9 @@ def serve(conn: socket.socket) -> None:
         with LOCK:
             reply = handle(json.loads(buf.decode()))
         conn.sendall((json.dumps(reply) + "\n").encode())
-    except Exception as e:  # noqa: BLE001
-        try:
+    except Exception as e:
+        with contextlib.suppress(OSError):
             conn.sendall((json.dumps({"op": "error", "error": str(e)}) + "\n").encode())
-        except OSError:
-            pass
     finally:
         conn.close()
 
@@ -162,10 +161,8 @@ def main() -> None:
     if len(sys.argv) != 2:
         sys.exit("usage: fake_broker.py <sock_path>")
     sock_path = sys.argv[1]
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(sock_path)
-    except FileNotFoundError:
-        pass
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(sock_path)
     os.chmod(sock_path, 0o600)

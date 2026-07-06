@@ -7,6 +7,8 @@ import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import ClassVar
 
 import integration_caldav
 import pytest
@@ -35,7 +37,8 @@ def _multistatus(hrefs):
 class StubCalDAV(BaseHTTPRequestHandler):
     """Records requests, serves canned CalDAV responses."""
 
-    requests = []  # (method, path, headers-dict, body-bytes)
+    # (method, path, headers-dict, body-bytes)
+    requests: ClassVar[list[tuple[str, str, dict[str, str], bytes]]] = []
 
     def _record(self, body=b""):
         StubCalDAV.requests.append((self.command, self.path, dict(self.headers), body))
@@ -146,7 +149,7 @@ def env(tmp_path_factory):
 
     threading.Thread(target=integration_caldav.main, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(sock_path):
+    while not Path(sock_path).exists():
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
@@ -172,8 +175,8 @@ class Client:
         assert line, "connection closed unexpectedly"
         return json.loads(line)
 
-    def rpc(self, method, params=None, id=1):
-        msg = {"jsonrpc": "2.0", "id": id, "method": method}
+    def rpc(self, method, params=None, req_id=1):
+        msg = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             msg["params"] = params
         self.send(msg)
@@ -192,7 +195,7 @@ def client(env):
 
 
 def call_tool(client, name, arguments):
-    return client.rpc("tools/call", {"name": name, "arguments": arguments}, id=2)
+    return client.rpc("tools/call", {"name": name, "arguments": arguments}, req_id=2)
 
 
 def _text(resp):
@@ -219,7 +222,7 @@ def test_initialize_handshake(client):
     assert result["serverInfo"]["name"] == "integration-caldav"
     assert result["capabilities"] == {"tools": {}}
     client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    resp = client.rpc("tools/list", id=2)
+    resp = client.rpc("tools/list", req_id=2)
     assert resp["id"] == 2
 
 
@@ -251,7 +254,8 @@ def test_list_time_range_and_auth(client):
         {"profile": "work", "start": "20260101T000000Z", "end": "20260201T000000Z"},
     )
     assert resp["result"]["isError"] is False
-    assert "calendar-data" in _text(resp) and "Standup" in _text(resp)
+    assert "calendar-data" in _text(resp)
+    assert "Standup" in _text(resp)
     method, path, headers, body = StubCalDAV.requests[-1]
     assert (method, path) == ("REPORT", "/dav/work")
     assert _decoded_auth(headers) == "alice:work-pass-123"
@@ -304,7 +308,7 @@ def test_put_without_etag_creates_resource(client):
     assert [(m, p) for (m, p, _h, _b) in StubCalDAV.requests] == [
         ("PUT", "/dav/work/new-evt.ics")
     ]
-    method, path, headers, body = StubCalDAV.requests[-1]
+    _method, _path, headers, body = StubCalDAV.requests[-1]
     assert body.decode() == ics
     assert headers["Content-Type"] == "text/calendar; charset=utf-8"
     assert "If-Match" not in headers
@@ -378,7 +382,7 @@ def test_missing_password_is_error(client, env, tmp_path):
 
 def test_secret_fingerprint(client):
     resp = call_tool(client, "secret_fingerprint", {"profile": "work"})
-    expected = hashlib.sha256("work-pass-123".encode()).hexdigest()[:16]
+    expected = hashlib.sha256(b"work-pass-123").hexdigest()[:16]
     assert resp["result"]["content"] == [{"type": "text", "text": expected}]
     assert resp["result"]["isError"] is False
 
@@ -386,8 +390,8 @@ def test_secret_fingerprint(client):
 def test_secret_fingerprint_per_profile(client):
     work = _text(call_tool(client, "secret_fingerprint", {"profile": "work"}))
     home = _text(call_tool(client, "secret_fingerprint", {"profile": "home"}))
-    assert work == hashlib.sha256("work-pass-123".encode()).hexdigest()[:16]
-    assert home == hashlib.sha256("home-pass-456".encode()).hexdigest()[:16]
+    assert work == hashlib.sha256(b"work-pass-123").hexdigest()[:16]
+    assert home == hashlib.sha256(b"home-pass-456").hexdigest()[:16]
     assert work != home
 
 
@@ -401,7 +405,7 @@ def test_http_error_is_tool_error(client):
 
 
 def test_unknown_method_is_jsonrpc_error(client):
-    resp = client.rpc("frobnicate", id=9)
+    resp = client.rpc("frobnicate", req_id=9)
     assert resp["id"] == 9
     assert resp["error"]["code"] == -32601
 
@@ -412,9 +416,9 @@ def test_unknown_method_is_jsonrpc_error(client):
 def test_schema_json_matches_advertised_tools_and_needs():
     """schema.json is what the host manifest and the schema-sync check consume;
     it must track the module: same advertised tool names, and its required
-    config/secrets fields are exactly what every tool's gating needs."""
-    with open(os.path.join(os.path.dirname(__file__), "schema.json")) as f:
-        schema = json.load(f)
+    config/secrets fields are exactly what every tool's gating needs.
+    """
+    schema = json.loads((Path(__file__).parent / "schema.json").read_text())
     assert schema["tools"] == [t["name"] for t in integration_caldav.TOOLS]
     fields = {**schema["config"], **schema["secrets"]}
     required = {k for k, v in fields.items() if v["required"]}

@@ -145,7 +145,7 @@ def main():
         probe = json.loads(
             ipc(
                 "mutationProbe",
-                ",".join(["local/x5", "local/a3", "local/y5"]),
+                "local/x5,local/a3,local/y5",
                 str(int(T0)),
             )
         )

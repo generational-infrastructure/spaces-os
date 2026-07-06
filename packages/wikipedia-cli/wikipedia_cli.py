@@ -8,6 +8,7 @@ a descriptive User-Agent and a gentle request rate; both are honoured here.
 """
 
 import argparse
+import functools
 import html
 import json
 import re
@@ -16,18 +17,27 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 USER_AGENT = "distro-pi-chat-wikipedia/0.1"
 
 _TAG_RE = re.compile(r"<[^>]+>")
-_last_request = 0.0
 
 
-def _api_base(lang):
+@functools.cache
+def _throttle_state() -> list[float]:
+    """Single-element mutable cache holding the monotonic time of the last
+    request. `functools.cache` hands back the same list on every call, which
+    gives `_request` a persistent slot to update without a module `global`.
+    """
+    return [0.0]
+
+
+def _api_base(lang: str) -> str:
     return f"https://{lang}.wikipedia.org/w/api.php"
 
 
-def build_search_url(query, limit, lang):
+def build_search_url(query: str, limit: int, lang: str) -> str:
     """Action API full-text search URL for a language edition."""
     params = urllib.parse.urlencode(
         {
@@ -41,14 +51,15 @@ def build_search_url(query, limit, lang):
     return f"{_api_base(lang)}?{params}"
 
 
-def build_summary_url(title, lang):
+def build_summary_url(title: str, lang: str) -> str:
     """REST v1 page-summary URL. Title is path-encoded so reserved
-    characters can't break the slash-delimited REST path."""
+    characters can't break the slash-delimited REST path.
+    """
     slug = urllib.parse.quote(title.replace(" ", "_"), safe="")
     return f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{slug}"
 
 
-def build_content_url(title, intro, lang):
+def build_content_url(title: str, intro: bool, lang: str) -> str:
     """Action API plaintext-extract URL; --intro limits it to the lead."""
     params = {
         "action": "query",
@@ -62,28 +73,27 @@ def build_content_url(title, intro, lang):
     return f"{_api_base(lang)}?{urllib.parse.urlencode(params)}"
 
 
-def strip_html(text):
+def strip_html(text: str) -> str:
     """Strip MediaWiki's snippet markup down to plain text."""
     return html.unescape(_TAG_RE.sub("", text))
 
 
-def parse_search(data):
+def parse_search(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Pull (title, pageid, plain snippet) out of a list=search response."""
-    hits = []
-    for hit in data.get("query", {}).get("search", []):
-        hits.append(
-            {
-                "title": hit.get("title", ""),
-                "pageid": hit.get("pageid"),
-                "snippet": strip_html(hit.get("snippet", "")),
-            }
-        )
-    return hits
+    return [
+        {
+            "title": hit.get("title", ""),
+            "pageid": hit.get("pageid"),
+            "snippet": strip_html(hit.get("snippet", "")),
+        }
+        for hit in data.get("query", {}).get("search", [])
+    ]
 
 
-def parse_summary(data):
+def parse_summary(data: dict[str, Any]) -> dict[str, Any]:
     """Pull title/description/extract and the canonical page URL out of a
-    REST summary response."""
+    REST summary response.
+    """
     return {
         "title": data.get("title", ""),
         "description": data.get("description", ""),
@@ -92,24 +102,26 @@ def parse_summary(data):
     }
 
 
-def parse_extract(data):
+def parse_extract(data: dict[str, Any]) -> str:
     """Return the plaintext extract from a prop=extracts response. The
-    pages map is keyed by pageid; a missing page carries no extract."""
+    pages map is keyed by pageid; a missing page carries no extract.
+    """
     for page in data.get("query", {}).get("pages", {}).values():
         return page.get("extract", "")
     return ""
 
 
-def _request(url, timeout=15):
+def _request(url: str, timeout: int = 15) -> dict[str, Any]:
     """HTTP GET with a descriptive User-Agent. Returns parsed JSON.
 
     Repeated calls are throttled to one per second to stay within
-    MediaWiki's etiquette, the way osm-cli throttles Nominatim."""
-    global _last_request
-    elapsed = time.monotonic() - _last_request
+    MediaWiki's etiquette, the way osm-cli throttles Nominatim.
+    """
+    state = _throttle_state()
+    elapsed = time.monotonic() - state[0]
     if elapsed < 1.0:
         time.sleep(1.0 - elapsed)
-    _last_request = time.monotonic()
+    state[0] = time.monotonic()
 
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -126,7 +138,7 @@ def _request(url, timeout=15):
         sys.exit(1)
 
 
-def cmd_search(args):
+def cmd_search(args: argparse.Namespace) -> None:
     """Resolve a query to encyclopedic article candidates."""
     data = _request(build_search_url(args.query, args.limit, args.lang))
     hits = parse_search(data)
@@ -142,7 +154,7 @@ def cmd_search(args):
             print(f"Snippet: {hit['snippet']}")
 
 
-def cmd_summary(args):
+def cmd_summary(args: argparse.Namespace) -> None:
     """One-shot factual summary of an article."""
     data = _request(build_summary_url(args.title, args.lang))
     out = parse_summary(data)
@@ -155,7 +167,7 @@ def cmd_summary(args):
         print(f"URL: {out['url']}")
 
 
-def cmd_content(args):
+def cmd_content(args: argparse.Namespace) -> None:
     """Full plaintext article, or just the lead with --intro."""
     data = _request(build_content_url(args.title, args.intro, args.lang))
     text = parse_extract(data)
@@ -165,14 +177,14 @@ def cmd_content(args):
     print(text)
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wikipedia-cli",
         description="Search Wikipedia and read article summaries or full text",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add_lang(p):
+    def add_lang(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--lang",
             default="en",
@@ -201,7 +213,7 @@ def build_parser():
     return parser
 
 
-def main():
+def main() -> None:
     args = build_parser().parse_args()
     args.func(args)
 

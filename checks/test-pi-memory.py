@@ -40,6 +40,7 @@ def call(quickshell_bin, config, target, fn, *args, timeout=15):
         capture_output=True,
         text=True,
         timeout=timeout,
+        check=False,
     )
     if res.returncode != 0:
         sys.exit(
@@ -70,7 +71,8 @@ def _sediment_env():
     DB + HF cache the chat sandbox uses. sudo strips
     environment.sessionVariables, so falling back to the in-process env
     would point at sediment's default ~/.sediment/data (empty) and
-    trigger a model download against the public internet."""
+    trigger a model download against the public internet.
+    """
     env = dict(os.environ)
     try:
         with open("/etc/spaces/pi-chat.json") as fh:
@@ -101,6 +103,7 @@ def sediment_list_json():
         text=True,
         timeout=20,
         env=_sediment_env(),
+        check=False,
     )
     if res.returncode != 0:
         sys.exit(
@@ -112,7 +115,8 @@ def sediment_list_json():
 def wait_for_stored_fact(timeout=120):
     """Block until `sediment list` returns at least one item that mentions
     FACT_BODY. The agent_end → extractor → sediment store chain is
-    asynchronous, so we poll rather than assume timing."""
+    asynchronous, so we poll rather than assume timing.
+    """
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:

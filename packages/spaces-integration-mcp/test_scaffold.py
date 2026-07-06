@@ -2,8 +2,10 @@ import hashlib
 import json
 import os
 import socket
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import spaces_integration_mcp as mcp
 
@@ -46,8 +48,8 @@ class Client:
         assert line, "connection closed unexpectedly"
         return json.loads(line)
 
-    def rpc(self, method, params=None, id=1):
-        msg = {"jsonrpc": "2.0", "id": id, "method": method}
+    def rpc(self, method, params=None, msg_id=1):
+        msg = {"jsonrpc": "2.0", "id": msg_id, "method": method}
         if params is not None:
             msg["params"] = params
         self.send(msg)
@@ -58,7 +60,8 @@ class Client:
         self.sock.close()
 
 
-sock_path = f"/tmp/spaces-mcp-test-{os.getpid()}.sock"
+# unique per test run; os.getpid() keeps parallel test workers apart
+sock_path = str(Path(tempfile.mkdtemp()) / f"spaces-mcp-test-{os.getpid()}.sock")
 
 
 def _serve():
@@ -70,7 +73,7 @@ def _serve():
 def setup_module():
     threading.Thread(target=_serve, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(sock_path):
+    while not Path(sock_path).exists():
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
@@ -96,7 +99,7 @@ def test_initialized_notification_gets_no_reply():
     try:
         c.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         # No reply owed; the same connection stays usable.
-        resp = c.rpc("tools/list", id=5)
+        resp = c.rpc("tools/list", msg_id=5)
         assert resp["id"] == 5
     finally:
         c.close()
@@ -114,11 +117,13 @@ def test_tools_list_returns_the_supplied_tools():
 def test_tools_call_ok_and_error_map_to_content():
     c = _client()
     try:
-        ok = c.rpc("tools/call", {"name": "echo", "arguments": {"text": "hi"}}, id=2)
+        ok = c.rpc(
+            "tools/call", {"name": "echo", "arguments": {"text": "hi"}}, msg_id=2
+        )
         assert ok["result"]["isError"] is False
         assert ok["result"]["content"] == [{"type": "text", "text": "hi"}]
 
-        bad = c.rpc("tools/call", {"name": "boom", "arguments": {}}, id=3)
+        bad = c.rpc("tools/call", {"name": "boom", "arguments": {}}, msg_id=3)
         assert bad["result"]["isError"] is True
         assert bad["result"]["content"][0]["text"] == "tool failed"
     finally:
@@ -128,7 +133,7 @@ def test_tools_call_ok_and_error_map_to_content():
 def test_unknown_method_is_jsonrpc_error():
     c = _client()
     try:
-        resp = c.rpc("frobnicate", id=9)
+        resp = c.rpc("frobnicate", msg_id=9)
         assert resp["id"] == 9
         assert resp["error"]["code"] == -32601
     finally:
@@ -142,7 +147,7 @@ def test_malformed_line_then_connection_survives():
         resp = c.recv()
         assert resp["id"] is None
         assert resp["error"]["code"] == -32700
-        resp = c.rpc("tools/list", id=7)
+        resp = c.rpc("tools/list", msg_id=7)
         assert resp["id"] == 7
     finally:
         c.close()
@@ -154,7 +159,7 @@ def test_unknown_method_notification_is_silent():
     c = _client()
     try:
         c.send({"jsonrpc": "2.0", "method": "frobnicate"})
-        resp = c.rpc("tools/list", id=8)
+        resp = c.rpc("tools/list", msg_id=8)
         assert resp["id"] == 8
     finally:
         c.close()
@@ -215,10 +220,12 @@ def test_store_profiles_and_resolve(tmp_path, monkeypatch):
     assert mcp.resolve_profile({"profile": "home"}) == ("home", None)
     # explicit, unknown
     name, err = mcp.resolve_profile({"profile": "nope"})
-    assert name is None and "not provisioned" in err
+    assert name is None
+    assert "not provisioned" in err
     # ambiguous (several, none named)
     name, err = mcp.resolve_profile({})
-    assert name is None and "multiple profiles" in err
+    assert name is None
+    assert "multiple profiles" in err
 
 
 def test_resolve_profile_single_and_none(tmp_path, monkeypatch):
@@ -227,7 +234,8 @@ def test_resolve_profile_single_and_none(tmp_path, monkeypatch):
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
     # none provisioned
     name, err = mcp.resolve_profile({})
-    assert name is None and "no profile" in err
+    assert name is None
+    assert "no profile" in err
     # exactly one → used implicitly
     (creds / "secrets").write_text('[mail.only]\npassword = "p"\n')
     assert mcp.resolve_profile({}) == ("only", None)
@@ -240,8 +248,9 @@ def _demo_records():
     def hello_impl(args, profile, vals):
         return f"hello {profile}:{vals['user']}:{args.get('text', '')}", False
 
-    def crash_impl(args, profile, vals):
-        raise OSError("disk gone")
+    def crash_impl(_args, _profile, _vals):
+        msg = "disk gone"
+        raise OSError(msg)
 
     return [
         {
@@ -328,7 +337,8 @@ def test_make_server_profile_resolution_error_passthrough(tmp_path, monkeypatch)
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path / "empty"))
     _, call_tool, _ = _demo_server()
     text, is_error = call_tool("hello", {})
-    assert is_error and "no profile" in text
+    assert is_error
+    assert "no profile" in text
 
 
 def test_make_server_secret_fingerprint_is_callable_and_stable(tmp_path, monkeypatch):

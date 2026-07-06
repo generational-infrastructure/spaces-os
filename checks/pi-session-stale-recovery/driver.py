@@ -104,7 +104,8 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
 
 def stage_stale_index(home: str) -> str:
     """A sessions.json whose only entry points at a daemon session that
-    does not exist, with the legacy executor:"" pin."""
+    does not exist, with the legacy executor:"" pin.
+    """
     state_dir = os.path.join(home, ".local", "state", "spaces", "pi")
     os.makedirs(state_dir, exist_ok=True)
     now_ms = int(time.time() * 1000)

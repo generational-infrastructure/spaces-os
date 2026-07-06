@@ -6,10 +6,11 @@ import stat
 import sys
 import threading
 import time
+import tomllib
+from pathlib import Path
 
 import integration_mail
 import pytest
-import tomllib
 
 # Stub himalaya binary: records argv/stdin, copies its -c config aside, and
 # prints canned output per subcommand. Shebang is pinned to this interpreter so
@@ -123,11 +124,11 @@ def env(tmp_path_factory):
 
     threading.Thread(target=integration_mail.main, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(sock_path):
+    while not Path(sock_path).exists():
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
-    yield {
+    return {
         "sock": sock_path,
         "creds": str(creds),
         "stub": str(stub_dir),
@@ -150,8 +151,8 @@ class Client:
         assert line, "connection closed unexpectedly"
         return json.loads(line)
 
-    def rpc(self, method, params=None, id=1):
-        msg = {"jsonrpc": "2.0", "id": id, "method": method}
+    def rpc(self, method, params=None, req_id=1):
+        msg = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             msg["params"] = params
         self.send(msg)
@@ -170,7 +171,7 @@ def client(env):
 
 
 def call_tool(client, name, arguments):
-    return client.rpc("tools/call", {"name": name, "arguments": arguments}, id=2)
+    return client.rpc("tools/call", {"name": name, "arguments": arguments}, req_id=2)
 
 
 def _text(resp):
@@ -178,11 +179,11 @@ def _text(resp):
 
 
 def _argv(env):
-    return (open(os.path.join(env["stub"], "last_argv")).read()).split("\n")
+    return (Path(env["stub"]) / "last_argv").read_text().split("\n")
 
 
 def _last_config(env):
-    with open(os.path.join(env["stub"], "last_config"), "rb") as f:
+    with (Path(env["stub"]) / "last_config").open("rb") as f:
         return tomllib.load(f)
 
 
@@ -210,7 +211,7 @@ def test_tools_list_shape(client):
 
 
 def test_unknown_method_is_jsonrpc_error(client):
-    resp = client.rpc("frobnicate", id=9)
+    resp = client.rpc("frobnicate", req_id=9)
     assert resp["error"]["code"] == -32601
 
 
@@ -223,7 +224,8 @@ def test_envelope_list_passes_json_and_returns_output(client, env):
     assert json.loads(_text(resp))[0]["subject"] == "hello"
     argv = _argv(env)
     assert argv[argv.index("-o") + 1] == "json"
-    assert "envelope" in argv and "list" in argv
+    assert "envelope" in argv
+    assert "list" in argv
     assert argv[argv.index("-a") + 1] == "personal"
 
 
@@ -314,8 +316,9 @@ def test_message_send_passes_body_on_stdin(client, env):
     assert resp["result"]["isError"] is False
     assert _text(resp) == "Message sent!"
     argv = _argv(env)
-    assert "message" in argv and "send" in argv
-    assert open(os.path.join(env["stub"], "last_stdin"), "rb").read() == raw.encode()
+    assert "message" in argv
+    assert "send" in argv
+    assert (Path(env["stub"]) / "last_stdin").read_bytes() == raw.encode()
 
 
 def test_message_send_missing_message_is_error(client):
@@ -367,7 +370,8 @@ def test_toml_escape():
     assert integration_mail._toml_escape('a"b\\c') == 'a\\"b\\\\c'
 
 
-def test_authcmd_prints_stored_password(env, capsys, monkeypatch):
+@pytest.mark.usefixtures("env")
+def test_authcmd_prints_stored_password(capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["integration-mail-authcmd", "work"])
     integration_mail.authcmd()
     assert capsys.readouterr().out.strip() == "pw-work-456"
@@ -379,9 +383,9 @@ def test_authcmd_prints_stored_password(env, capsys, monkeypatch):
 def test_schema_json_matches_advertised_tools_and_needs():
     """schema.json is what the host manifest and the schema-sync check consume;
     it must track the module: same advertised tool names, and its required
-    config/secrets fields are exactly what every tool's gating needs."""
-    with open(os.path.join(os.path.dirname(__file__), "schema.json")) as f:
-        schema = json.load(f)
+    config/secrets fields are exactly what every tool's gating needs.
+    """
+    schema = json.loads((Path(__file__).parent / "schema.json").read_text())
     assert schema["tools"] == [t["name"] for t in integration_mail.TOOLS]
     fields = {**schema["config"], **schema["secrets"]}
     required = {k for k, v in fields.items() if v["required"]}
