@@ -39,6 +39,42 @@
 #     roles.client.machines.kiwi     = { };
 #   };
 { flake-self }:
+let
+  # Instance-shared clan-var generators (share = true → generated once,
+  # deployed to every machine that declares them). Declared by BOTH roles
+  # so each secret reaches every member of the instance — executor-only,
+  # client-only, and dual-role machines alike (NixOS module merging
+  # collapses the duplicate declaration on dual-role machines).
+  #
+  # `<instanceName>-pi-sessiond-token`: the single shared auth token both
+  # ends of every pi-sessiond WebSocket link present — no manual token
+  # coordination.
+  piSessiondTokenGenerator = pkgs: {
+    share = true;
+    files."token" = { };
+    runtimeInputs = [ pkgs.openssl ];
+    script = ''
+      openssl rand -hex 32 > "$out/token"
+    '';
+  };
+
+  # `<instanceName>-llama-swap-key`: the llama-swap API key. Two files from
+  # one secret: `key` is the raw token (pi-sessiond LoadCredential + any
+  # member using the endpoint directly); `env` is an EnvironmentFile
+  # (`LLAMA_SWAP_API_KEY=<key>`) for llama-swap itself. Client-only members
+  # hold it too — enough to use a remote executor's llama-swap directly.
+  llamaSwapKeyGenerator = pkgs: {
+    share = true;
+    files."key" = { };
+    files."env" = { };
+    runtimeInputs = [ pkgs.openssl ];
+    script = ''
+      key="sk-$(openssl rand -hex 32)"
+      printf '%s' "$key" > "$out/key"
+      printf 'LLAMA_SWAP_API_KEY=%s\n' "$key" > "$out/env"
+    '';
+  };
+in
 {
   _class = "clan.service";
 
@@ -368,38 +404,11 @@
             # `:::8012` ("too many colons in address"), crash-looping the service.
             services.llama-swap.listenAddress = lib.mkIf effectiveLlamaFirewall (lib.mkForce "[::]");
 
-            # Single instance-shared `hello` token. share = true → clan
-            # generates the secret once and deploys it to every machine
-            # that declares this generator (every executor and every
-            # client of this instance). The client role declares an
-            # identical twin so the secret reaches both ends without
-            # manual coordination.
+            # Shared secrets for this instance — see the generator
+            # definitions in the top-level `let`.
             clan.core.vars.generators = {
-              "${instanceName}-pi-sessiond-token" = {
-                share = true;
-                files."token" = { };
-                runtimeInputs = [ pkgs.openssl ];
-                script = ''
-                  openssl rand -hex 32 > "$out/token"
-                '';
-              };
-              # Instance-shared llama-swap API key. Two files from one secret:
-              # `key` is the raw token (pi-sessiond LoadCredential + any member
-              # using the endpoint directly); `env` is an EnvironmentFile
-              # (`LLAMA_SWAP_API_KEY=<key>`) for llama-swap itself. share = true →
-              # generated once, deployed to every member; the client role declares
-              # an identical twin so client-only machines hold it too.
-              "${instanceName}-llama-swap-key" = {
-                share = true;
-                files."key" = { };
-                files."env" = { };
-                runtimeInputs = [ pkgs.openssl ];
-                script = ''
-                  key="sk-$(openssl rand -hex 32)"
-                  printf '%s' "$key" > "$out/key"
-                  printf 'LLAMA_SWAP_API_KEY=%s\n' "$key" > "$out/env"
-                '';
-              };
+              "${instanceName}-pi-sessiond-token" = piSessiondTokenGenerator pkgs;
+              "${instanceName}-llama-swap-key" = llamaSwapKeyGenerator pkgs;
             }
             # Auto-declared OpenRouter API-key prompt — used only when
             # the user hasn't supplied an explicit apiKeyFile path.
@@ -565,33 +574,12 @@
           {
             imports = [ flake-self.nixosModules.pi-chat ];
 
-            # Identical twin of the executor's generator — declaring it
-            # here makes clan deploy the shared token to client-only
-            # machines (no executor role) too. NixOS module merging
-            # collapses duplicate definitions on dual-role machines.
-            clan.core.vars.generators."${instanceName}-pi-sessiond-token" = {
-              share = true;
-              files."token" = { };
-              runtimeInputs = [ pkgs.openssl ];
-              script = ''
-                openssl rand -hex 32 > "$out/token"
-              '';
-            };
-
-            # Identical twin of the executor's llama-swap-key generator, so
-            # client-only members also hold the shared key — enough to use a
-            # remote executor's llama-swap directly. Merges with the executor's
-            # definition on dual-role machines.
-            clan.core.vars.generators."${instanceName}-llama-swap-key" = {
-              share = true;
-              files."key" = { };
-              files."env" = { };
-              runtimeInputs = [ pkgs.openssl ];
-              script = ''
-                key="sk-$(openssl rand -hex 32)"
-                printf '%s' "$key" > "$out/key"
-                printf 'LLAMA_SWAP_API_KEY=%s\n' "$key" > "$out/env"
-              '';
+            # Shared secrets, declared here too so clan deploys them to
+            # client-only machines (no executor role) as well — see the
+            # generator definitions in the top-level `let`.
+            clan.core.vars.generators = {
+              "${instanceName}-pi-sessiond-token" = piSessiondTokenGenerator pkgs;
+              "${instanceName}-llama-swap-key" = llamaSwapKeyGenerator pkgs;
             };
 
             services.pi-chat = {
