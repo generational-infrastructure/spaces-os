@@ -1,9 +1,11 @@
 """Mail (IMAP/SMTP) MCP integration server (spaces integration POC).
 
 Speaks NDJSON JSON-RPC 2.0 over a unix socket via the shared
-spaces_integration_mcp scaffold. Wraps the `himalaya` CLI: on every call it
-materializes a himalaya TOML config for the resolved profile in a throwaway
-tempdir, then execs `himalaya -c <cfg> <subcommand...>`.
+spaces_integration_mcp scaffold, which owns dispatch, profile resolution,
+required-field gating, and the hidden secret_fingerprint tool. Wraps the
+`himalaya` CLI: on every call it materializes a himalaya TOML config for the
+resolved profile in a throwaway tempdir, then execs
+`himalaya -c <cfg> <subcommand...>`.
 
 The mailbox password is NEVER written to the config file. himalaya fetches it
 at runtime via `backend.auth.cmd`, which points at the second console script
@@ -12,14 +14,13 @@ stdout for the named profile and nothing else.
 """
 
 import contextlib
-import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 
-from spaces_integration_mcp import resolve_profile, run, store_profile
+from spaces_integration_mcp import make_server, store_profile
 
 SERVER_NAME = "integration-mail"
 SERVER_VERSION = "0.1.0"
@@ -33,83 +34,12 @@ HIMALAYA = "himalaya"
 # resolvable command without the wheel's entry point being installed.
 AUTHCMD = "integration-mail-authcmd"
 
-# Store field schema (config = plain blob, secrets = sealed blob). Declared here
-# so the store contract is self-documenting; the manifest lowers the same shape
-# into the integration definition the broker provisions from.
-CONFIG_FIELDS = {
-    "email": {"description": "Email address of the account", "required": True},
-    "imap_host": {"description": "IMAP server hostname", "required": True},
-    "smtp_host": {"description": "SMTP server hostname", "required": True},
-    "imap_port": {"description": "IMAP server port (default 993)", "required": False},
-    "smtp_port": {"description": "SMTP server port (default 587)", "required": False},
-    "imap_login": {"description": "IMAP login (default: email)", "required": False},
-    "smtp_login": {"description": "SMTP login (default: email)", "required": False},
-    "imap_encryption": {
-        "description": "IMAP encryption: tls, start-tls or none (default: by port)",
-        "required": False,
-    },
-    "smtp_encryption": {
-        "description": "SMTP encryption: tls, start-tls or none (default: by port)",
-        "required": False,
-    },
-    "display_name": {"description": "Sender display name", "required": False},
-}
-
-SECRET_FIELDS = {
-    "password": {"description": "Mailbox password", "required": True},
-}
-
-_REQUIRED_CONFIG = tuple(k for k, v in CONFIG_FIELDS.items() if v["required"])
-
-_PROFILE_PROP = {
-    "type": "string",
-    "description": "account profile (default: the only one)",
-}
-
-TOOLS = [
-    {
-        "name": "envelope_list",
-        "description": "List envelopes (message headers) in a folder, as JSON",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "folder": {
-                    "type": "string",
-                    "description": "mailbox folder (default: INBOX)",
-                },
-                "profile": _PROFILE_PROP,
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "message_read",
-        "description": "Read a message by its envelope id",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "description": "envelope id"},
-                "profile": _PROFILE_PROP,
-            },
-            "required": ["id"],
-        },
-    },
-    {
-        "name": "message_send",
-        "description": "Send a raw RFC822 message (headers and body)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "raw RFC822 message, including headers and body",
-                },
-                "profile": _PROFILE_PROP,
-            },
-            "required": ["message"],
-        },
-    },
-]
+# Store fields every mail tool needs before himalaya can run. The full
+# config/secrets field schema (descriptions, required flags) lives in the
+# package's schema.json, which the host manifest single-sources; the scaffold
+# gates these fields per call. password first so a missing password is
+# reported ahead of missing config.
+_NEEDS = ("password", "email", "imap_host", "smtp_host")
 
 
 def _authcmd():
@@ -147,11 +77,9 @@ def _toml_escape(s):
 
 def _build_config(profile, vals):
     """Return (config_toml, None) for the profile, or (None, error_text) when a
-    required config field is missing or a port is not numeric. The password is
-    never emitted — himalaya fetches it via backend.auth.cmd."""
-    missing = [f for f in _REQUIRED_CONFIG if not vals.get(f)]
-    if missing:
-        return None, f"field '{missing[0]}' not set for profile '{profile}'"
+    port is not numeric. The required fields are gated by the scaffold before
+    any impl runs. The password is never emitted — himalaya fetches it via
+    backend.auth.cmd."""
 
     email = vals["email"]
     imap_host = vals["imap_host"]
@@ -268,38 +196,6 @@ def _tool_message_send(args, profile, vals):
         return _run_himalaya(cfg, ["message", "send", "-a", profile], stdin=message)
 
 
-def _tool_secret_fingerprint(args, profile, vals):
-    pw = vals.get("password", "")
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()[:16], False
-
-
-_TOOL_IMPLS = {
-    "envelope_list": _tool_envelope_list,
-    "message_read": _tool_message_read,
-    "message_send": _tool_message_send,
-    "secret_fingerprint": _tool_secret_fingerprint,
-}
-
-
-def call_tool(name, arguments):
-    """Dispatch a tools/call: resolve the target profile, ensure the mailbox
-    password is provisioned (himalaya needs it at runtime), then run the impl.
-    A missing credential or unknown profile is a tool error, never a crash."""
-    impl = _TOOL_IMPLS.get(name)
-    if impl is None:
-        return f"unknown tool: {name}", True
-    profile, err = resolve_profile(arguments)
-    if err:
-        return err, True
-    vals = store_profile(profile)
-    if not vals.get("password"):
-        return f"field 'password' not set for profile '{profile}'", True
-    try:
-        return impl(arguments, profile, vals)
-    except OSError as e:
-        return f"mail operation failed: {e.__class__.__name__}: {e}", True
-
-
 def authcmd():
     """Second console script (integration-mail-authcmd): himalaya's
     backend.auth.cmd. Prints the sealed-store password for the profile named in
@@ -307,8 +203,56 @@ def authcmd():
     print(store_profile(sys.argv[1])["password"])
 
 
-def main():
-    return run(SERVER_NAME, SERVER_VERSION, TOOLS, call_tool)
+TOOLS, call_tool, main = make_server(
+    SERVER_NAME,
+    SERVER_VERSION,
+    [
+        {
+            "name": "envelope_list",
+            "description": "List envelopes (message headers) in a folder, as JSON",
+            "schema": {
+                "properties": {
+                    "folder": {
+                        "type": "string",
+                        "description": "mailbox folder (default: INBOX)",
+                    },
+                },
+                "required": [],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tool_envelope_list,
+        },
+        {
+            "name": "message_read",
+            "description": "Read a message by its envelope id",
+            "schema": {
+                "properties": {
+                    "id": {"type": "string", "description": "envelope id"},
+                },
+                "required": ["id"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tool_message_read,
+        },
+        {
+            "name": "message_send",
+            "description": "Send a raw RFC822 message (headers and body)",
+            "schema": {
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "raw RFC822 message, including headers and body",
+                    },
+                },
+                "required": ["message"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tool_message_send,
+        },
+    ],
+    secret_field="password",
+    error_label="mail operation",
+)
 
 
 if __name__ == "__main__":

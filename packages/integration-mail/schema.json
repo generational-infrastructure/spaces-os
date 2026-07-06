@@ -1,0 +1,55 @@
+{
+  "config": {
+    "email": {
+      "description": "Email address of the account",
+      "required": true
+    },
+    "imap_host": {
+      "description": "IMAP server hostname",
+      "required": true
+    },
+    "smtp_host": {
+      "description": "SMTP server hostname",
+      "required": true
+    },
+    "imap_port": {
+      "description": "IMAP server port (default 993)",
+      "required": false
+    },
+    "smtp_port": {
+      "description": "SMTP server port (default 587)",
+      "required": false
+    },
+    "imap_login": {
+      "description": "IMAP login (default: email)",
+      "required": false
+    },
+    "smtp_login": {
+      "description": "SMTP login (default: email)",
+      "required": false
+    },
+    "imap_encryption": {
+      "description": "IMAP encryption: tls, start-tls or none (default: by port)",
+      "required": false
+    },
+    "smtp_encryption": {
+      "description": "SMTP encryption: tls, start-tls or none (default: by port)",
+      "required": false
+    },
+    "display_name": {
+      "description": "Sender display name",
+      "required": false
+    }
+  },
+  "secrets": {
+    "password": {
+      "description": "Mailbox password",
+      "required": true
+    }
+  },
+  "tools": [
+    "envelope_list",
+    "message_read",
+    "message_send"
+  ]
+}

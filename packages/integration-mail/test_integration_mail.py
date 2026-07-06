@@ -371,3 +371,18 @@ def test_authcmd_prints_stored_password(env, capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["integration-mail-authcmd", "work"])
     integration_mail.authcmd()
     assert capsys.readouterr().out.strip() == "pw-work-456"
+
+
+# --- schema.json: the package's exported store/tool contract ----------------
+
+
+def test_schema_json_matches_advertised_tools_and_needs():
+    """schema.json is what the host manifest and the schema-sync check consume;
+    it must track the module: same advertised tool names, and its required
+    config/secrets fields are exactly what every tool's gating needs."""
+    with open(os.path.join(os.path.dirname(__file__), "schema.json")) as f:
+        schema = json.load(f)
+    assert schema["tools"] == [t["name"] for t in integration_mail.TOOLS]
+    fields = {**schema["config"], **schema["secrets"]}
+    required = {k for k, v in fields.items() if v["required"]}
+    assert required == set(integration_mail._NEEDS)

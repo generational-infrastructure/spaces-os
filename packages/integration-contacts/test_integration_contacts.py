@@ -403,3 +403,18 @@ def test_unknown_method_is_jsonrpc_error(client):
     resp = client.rpc("frobnicate", id=9)
     assert resp["id"] == 9
     assert resp["error"]["code"] == -32601
+
+
+# --- schema.json: the package's exported store/tool contract ----------------
+
+
+def test_schema_json_matches_advertised_tools_and_needs():
+    """schema.json is what the host manifest and the schema-sync check consume;
+    it must track the module: same advertised tool names, and its required
+    config/secrets fields are exactly what every tool's gating needs."""
+    with open(os.path.join(os.path.dirname(__file__), "schema.json")) as f:
+        schema = json.load(f)
+    assert schema["tools"] == [t["name"] for t in integration_contacts.TOOLS]
+    fields = {**schema["config"], **schema["secrets"]}
+    required = {k for k, v in fields.items() if v["required"]}
+    assert required == set(integration_contacts._NEEDS)

@@ -1,12 +1,13 @@
 """GitHub MCP integration server (spaces integration POC).
 
 Speaks NDJSON JSON-RPC 2.0 over a unix socket via the shared
-spaces_integration_mcp scaffold. The PAT is read from
-$CREDENTIALS_DIRECTORY/token; file exchange uses the per-pair shared workspace
+spaces_integration_mcp scaffold, which owns dispatch, profile resolution,
+field gating, and the hidden secret_fingerprint tool. GitHub is single-account
+(multiProfile off), so every call targets the store's sole profile and its
+`token` secret (the PAT). File exchange uses the per-pair shared workspace
 ($SPACES_INTEGRATION_SHARED_DIR).
 """
 
-import hashlib
 import io
 import json
 import os
@@ -16,81 +17,12 @@ import tarfile
 import urllib.error
 import urllib.request
 
-from spaces_integration_mcp import run, shared_dir, store_profile
+from spaces_integration_mcp import make_server, shared_dir
 
 SERVER_NAME = "integration-github"
 SERVER_VERSION = "0.1.0"
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-
-TOOLS = [
-    {
-        "name": "get_repo",
-        "description": "Fetch repository metadata (stars, description, default branch)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "repo": {"type": "string", "description": "owner/name"},
-            },
-            "required": ["repo"],
-        },
-    },
-    {
-        "name": "create_issue",
-        "description": "Create an issue in a repository",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "repo": {"type": "string", "description": "owner/name"},
-                "title": {"type": "string"},
-                "body": {"type": "string"},
-            },
-            "required": ["repo", "title"],
-        },
-    },
-    {
-        "name": "clone_to_workspace",
-        "description": (
-            "Download a repository's tree into the shared workspace so the agent "
-            "can edit it with its native file tools"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "repo": {"type": "string", "description": "owner/name"},
-                "ref": {
-                    "type": "string",
-                    "description": "branch/tag/sha (default HEAD)",
-                },
-            },
-            "required": ["repo"],
-        },
-    },
-    {
-        "name": "open_pull_request",
-        "description": (
-            "Push the edited workspace and open a pull request "
-            "(the confirm-gated effect)"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "repo": {"type": "string", "description": "owner/name"},
-                "title": {"type": "string"},
-                "body": {"type": "string"},
-                "head": {
-                    "type": "string",
-                    "description": "source branch (default agent-changes)",
-                },
-                "base": {
-                    "type": "string",
-                    "description": "target branch (default main)",
-                },
-            },
-            "required": ["repo", "title"],
-        },
-    },
-]
 
 
 def _api_base():
@@ -151,10 +83,6 @@ def _tool_create_issue(args, token):
     if err:
         return err, True
     return f"created issue #{data.get('number')}: {data.get('html_url')}", False
-
-
-def _tool_secret_fingerprint(args, token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16], False
 
 
 def _workspace_for(repo):
@@ -281,31 +209,91 @@ def _tool_open_pull_request(args, token):
     )
 
 
-_TOOL_IMPLS = {
-    "get_repo": _tool_get_repo,
-    "create_issue": _tool_create_issue,
-    "secret_fingerprint": _tool_secret_fingerprint,
-    "clone_to_workspace": _tool_clone_to_workspace,
-    "open_pull_request": _tool_open_pull_request,
-}
+def _tok(impl):
+    """Adapt an (args, token)-style impl to the scaffold's record signature."""
+    return lambda args, profile, vals: impl(args, vals["token"])
 
 
-def call_tool(name, arguments):
-    """Dispatch a tools/call: read the PAT from the store's default profile, run
-    the impl, return (text, is_error). GitHub is single-account (multiProfile
-    off), so all tools use the implicit "default" profile. A missing credential
-    is a tool error, never a crash."""
-    impl = _TOOL_IMPLS.get(name)
-    if impl is None:
-        return f"unknown tool: {name}", True
-    token = store_profile("default").get("token")
-    if not token:
-        return "credential 'token' is not available", True
-    return impl(arguments, token)
+_NEEDS = ("token",)
 
-
-def main():
-    return run(SERVER_NAME, SERVER_VERSION, TOOLS, call_tool)
+TOOLS, call_tool, main = make_server(
+    SERVER_NAME,
+    SERVER_VERSION,
+    [
+        {
+            "name": "get_repo",
+            "description": "Fetch repository metadata (stars, description, default branch)",
+            "schema": {
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                },
+                "required": ["repo"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tok(_tool_get_repo),
+        },
+        {
+            "name": "create_issue",
+            "description": "Create an issue in a repository",
+            "schema": {
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["repo", "title"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tok(_tool_create_issue),
+        },
+        {
+            "name": "clone_to_workspace",
+            "description": (
+                "Download a repository's tree into the shared workspace so the agent "
+                "can edit it with its native file tools"
+            ),
+            "schema": {
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "ref": {
+                        "type": "string",
+                        "description": "branch/tag/sha (default HEAD)",
+                    },
+                },
+                "required": ["repo"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tok(_tool_clone_to_workspace),
+        },
+        {
+            "name": "open_pull_request",
+            "description": (
+                "Push the edited workspace and open a pull request "
+                "(the confirm-gated effect)"
+            ),
+            "schema": {
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "head": {
+                        "type": "string",
+                        "description": "source branch (default agent-changes)",
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "target branch (default main)",
+                    },
+                },
+                "required": ["repo", "title"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _tok(_tool_open_pull_request),
+        },
+    ],
+    secret_field="token",
+    multi_profile=False,
+)
 
 
 if __name__ == "__main__":

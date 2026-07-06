@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import socket
@@ -230,3 +231,130 @@ def test_resolve_profile_single_and_none(tmp_path, monkeypatch):
     # exactly one → used implicitly
     (creds / "secrets").write_text('[mail.only]\npassword = "p"\n')
     assert mcp.resolve_profile({}) == ("only", None)
+
+
+# --- make_server: declarative tool records ----------------------------------
+
+
+def _demo_records():
+    def hello_impl(args, profile, vals):
+        return f"hello {profile}:{vals['user']}:{args.get('text', '')}", False
+
+    def crash_impl(args, profile, vals):
+        raise OSError("disk gone")
+
+    return [
+        {
+            "name": "hello",
+            "description": "say hello",
+            "schema": {
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+            "needs_fields": ("user", "password"),
+            "impl": hello_impl,
+        },
+        {
+            "name": "crash",
+            "description": "raise from the impl",
+            "schema": {"properties": {}, "required": []},
+            "needs_fields": (),
+            "impl": crash_impl,
+        },
+    ]
+
+
+def _demo_server(**kwargs):
+    kwargs.setdefault("secret_field", "password")
+    return mcp.make_server("demo", "0.0.1", _demo_records(), **kwargs)
+
+
+def _provision(tmp_path, monkeypatch, secrets='[demo.work]\npassword = "pw-1"\n'):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text('[demo.work]\nuser = "alice"\n')
+    (creds / "secrets").write_text(secrets)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+
+def test_make_server_injects_profile_prop_when_multi_profile():
+    tools, _, _ = _demo_server(multi_profile=True)
+    assert [t["name"] for t in tools] == ["hello", "crash"]
+    for t in tools:
+        props = t["inputSchema"]["properties"]
+        assert props["profile"]["type"] == "string"
+        assert "profile" not in t["inputSchema"]["required"]
+    # the tool's own schema is intact
+    hello = tools[0]
+    assert hello["description"] == "say hello"
+    assert hello["inputSchema"]["type"] == "object"
+    assert hello["inputSchema"]["properties"]["text"] == {"type": "string"}
+    assert hello["inputSchema"]["required"] == ["text"]
+
+
+def test_make_server_single_profile_omits_profile_prop():
+    tools, _, _ = _demo_server(multi_profile=False)
+    for t in tools:
+        assert "profile" not in t["inputSchema"]["properties"]
+
+
+def test_make_server_never_advertises_secret_fingerprint():
+    tools, _, _ = _demo_server()
+    assert "secret_fingerprint" not in [t["name"] for t in tools]
+
+
+def test_make_server_unknown_tool_is_error(tmp_path, monkeypatch):
+    _provision(tmp_path, monkeypatch)
+    _, call_tool, _ = _demo_server()
+    assert call_tool("nope", {}) == ("unknown tool: nope", True)
+
+
+def test_make_server_dispatches_with_profile_and_vals(tmp_path, monkeypatch):
+    _provision(tmp_path, monkeypatch)
+    _, call_tool, _ = _demo_server()
+    assert call_tool("hello", {"text": "hi"}) == ("hello work:alice:hi", False)
+
+
+def test_make_server_gates_missing_required_field(tmp_path, monkeypatch):
+    _provision(tmp_path, monkeypatch, secrets='[demo.work]\nother = "x"\n')
+    _, call_tool, _ = _demo_server()
+    assert call_tool("hello", {}) == (
+        "field 'password' not set for profile 'work'",
+        True,
+    )
+
+
+def test_make_server_profile_resolution_error_passthrough(tmp_path, monkeypatch):
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path / "empty"))
+    _, call_tool, _ = _demo_server()
+    text, is_error = call_tool("hello", {})
+    assert is_error and "no profile" in text
+
+
+def test_make_server_secret_fingerprint_is_callable_and_stable(
+    tmp_path, monkeypatch
+):
+    _provision(tmp_path, monkeypatch)
+    _, call_tool, _ = _demo_server()
+    expected = hashlib.sha256(b"pw-1").hexdigest()[:16]
+    assert call_tool("secret_fingerprint", {}) == (expected, False)
+    # stable across calls
+    assert call_tool("secret_fingerprint", {}) == (expected, False)
+
+
+def test_make_server_fingerprint_gates_on_secret_field(tmp_path, monkeypatch):
+    _provision(tmp_path, monkeypatch, secrets='[demo.work]\nother = "x"\n')
+    _, call_tool, _ = _demo_server()
+    assert call_tool("secret_fingerprint", {}) == (
+        "field 'password' not set for profile 'work'",
+        True,
+    )
+
+
+def test_make_server_wraps_oserror(tmp_path, monkeypatch):
+    _provision(tmp_path, monkeypatch)
+    _, call_tool, _ = _demo_server(error_label="demo operation")
+    assert call_tool("crash", {}) == (
+        "demo operation failed: OSError: disk gone",
+        True,
+    )

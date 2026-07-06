@@ -1,0 +1,30 @@
+{
+  "config": {
+    "server": {
+      "description": "CardDAV addressbook collection URL",
+      "required": true
+    },
+    "user": {
+      "description": "CardDAV username",
+      "required": true
+    },
+    "book": {
+      "description": "Addressbook path (optional)",
+      "required": false
+    }
+  },
+  "secrets": {
+    "password": {
+      "description": "CardDAV password",
+      "required": true
+    }
+  },
+  "tools": [
+    "discover",
+    "search",
+    "get",
+    "new",
+    "edit",
+    "delete"
+  ]
+}

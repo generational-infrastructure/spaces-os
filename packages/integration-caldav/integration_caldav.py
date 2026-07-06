@@ -1,124 +1,25 @@
 """CalDAV MCP integration server (spaces integration POC).
 
 Speaks NDJSON JSON-RPC 2.0 over a unix socket via the shared
-spaces_integration_mcp scaffold. Re-implements the legacy caldav.sh skill in
-Python (urllib + HTTP Basic auth): calendar-query REPORTs, UID->resource
-resolution, and GET/PUT/DELETE against a CalDAV collection. Multi-profile: every
-tool takes an optional "profile"; credentials come from the store's per-profile
-config (url, user) and secrets (password) blobs.
+spaces_integration_mcp scaffold, which owns dispatch, profile resolution,
+required-field gating, and the hidden secret_fingerprint tool. Re-implements
+the legacy caldav.sh skill in Python (urllib + HTTP Basic auth):
+calendar-query REPORTs, UID->resource resolution, and GET/PUT/DELETE against a
+CalDAV collection. Multi-profile: every tool takes an optional "profile";
+credentials come from the store's per-profile config (url, user) and secrets
+(password) blobs.
 """
 
 import base64
-import hashlib
 import re
 import sys
 import urllib.error
 import urllib.request
 
-from spaces_integration_mcp import resolve_profile, run, store_profile
+from spaces_integration_mcp import make_server
 
 SERVER_NAME = "integration-caldav"
 SERVER_VERSION = "0.1.0"
-
-_PROFILE_PROP = {
-    "profile": {
-        "type": "string",
-        "description": "account profile (default: the only one)",
-    }
-}
-
-TOOLS = [
-    {
-        "name": "list",
-        "description": (
-            "List events in a time range via a calendar-query REPORT; returns the "
-            "raw multistatus body (with calendar-data)"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                **_PROFILE_PROP,
-                "start": {
-                    "type": "string",
-                    "description": "range start (YYYYMMDDTHHMMSSZ)",
-                },
-                "end": {
-                    "type": "string",
-                    "description": "range end (YYYYMMDDTHHMMSSZ)",
-                },
-            },
-            "required": ["start", "end"],
-        },
-    },
-    {
-        "name": "get",
-        "description": "Fetch one event as ICS by iCalendar UID or CalDAV resource name",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                **_PROFILE_PROP,
-                "id": {
-                    "type": "string",
-                    "description": "iCalendar UID or resource name",
-                },
-            },
-            "required": ["id"],
-        },
-    },
-    {
-        "name": "etag",
-        "description": "Fetch the current ETag value for one event (UID or resource name)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                **_PROFILE_PROP,
-                "id": {
-                    "type": "string",
-                    "description": "iCalendar UID or resource name",
-                },
-            },
-            "required": ["id"],
-        },
-    },
-    {
-        "name": "put",
-        "description": (
-            "Create or update an event. Without an etag, PUTs a new resource at "
-            "<base>/<id>.ics; with an etag, resolves the UID and guards with If-Match"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                **_PROFILE_PROP,
-                "id": {
-                    "type": "string",
-                    "description": "UID (new event) or UID/resource (edit)",
-                },
-                "ics": {"type": "string", "description": "the iCalendar body to store"},
-                "etag": {
-                    "type": "string",
-                    "description": "If-Match guard for an edit (optional)",
-                },
-            },
-            "required": ["id", "ics"],
-        },
-    },
-    {
-        "name": "delete",
-        "description": "Delete one event by iCalendar UID or CalDAV resource name",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                **_PROFILE_PROP,
-                "id": {
-                    "type": "string",
-                    "description": "iCalendar UID or resource name",
-                },
-            },
-            "required": ["id"],
-        },
-    },
-]
 
 # <d:href>...</d:href> text, tolerant of any namespace prefix (mirrors caldav.sh).
 _HREF_RE = re.compile(
@@ -160,26 +61,15 @@ def _list_xml(start, end):
     )
 
 
-def _profile_ctx(profile):
-    """Resolve one profile's required fields into a request context.
-
-    Returns (ctx, None) or (None, error-text). A missing required field is a
-    tool error, never a crash."""
-    vals = store_profile(profile)
-    for field in ("url", "user", "password"):
-        if not vals.get(field):
-            return None, f"field '{field}' not set for profile '{profile}'"
+def _ctx(vals):
+    """One profile's request context (base/origin URLs, Basic auth header)
+    from its store values; the scaffold has already gated the required fields."""
     base = vals["url"].rstrip("/")
     m = re.match(r"^(https?://[^/]+)", base)
     origin = m.group(1) if m else base
     userpass = f"{vals['user']}:{vals['password']}"
     auth = "Basic " + base64.b64encode(userpass.encode("utf-8")).decode("ascii")
-    return {
-        "base": base,
-        "origin": origin,
-        "auth": auth,
-        "password": vals["password"],
-    }, None
+    return {"base": base, "origin": origin, "auth": auth}
 
 
 def _http(ctx, url, method, body=None, headers=None):
@@ -299,37 +189,96 @@ def _tool_delete(args, ctx):
     return f"deleted event at {url}", False
 
 
-def _tool_secret_fingerprint(args, ctx):
-    return hashlib.sha256(ctx["password"].encode("utf-8")).hexdigest()[:16], False
+def _with_ctx(impl):
+    """Adapt an (args, ctx)-style impl to the scaffold's record signature."""
+    return lambda args, profile, vals: impl(args, _ctx(vals))
 
 
-_TOOL_IMPLS = {
-    "list": _tool_list,
-    "get": _tool_get,
-    "etag": _tool_etag,
-    "put": _tool_put,
-    "delete": _tool_delete,
-    "secret_fingerprint": _tool_secret_fingerprint,
+_NEEDS = ("url", "user", "password")
+
+_ID_PROP = {
+    "id": {
+        "type": "string",
+        "description": "iCalendar UID or resource name",
+    }
 }
 
-
-def call_tool(name, arguments):
-    """Dispatch a tools/call: pick the target profile, load its credentials, run
-    the impl, return (text, is_error). Never raises."""
-    impl = _TOOL_IMPLS.get(name)
-    if impl is None:
-        return f"unknown tool: {name}", True
-    profile, err = resolve_profile(arguments)
-    if err:
-        return err, True
-    ctx, err = _profile_ctx(profile)
-    if err:
-        return err, True
-    return impl(arguments, ctx)
-
-
-def main():
-    return run(SERVER_NAME, SERVER_VERSION, TOOLS, call_tool)
+TOOLS, call_tool, main = make_server(
+    SERVER_NAME,
+    SERVER_VERSION,
+    [
+        {
+            "name": "list",
+            "description": (
+                "List events in a time range via a calendar-query REPORT; returns the "
+                "raw multistatus body (with calendar-data)"
+            ),
+            "schema": {
+                "properties": {
+                    "start": {
+                        "type": "string",
+                        "description": "range start (YYYYMMDDTHHMMSSZ)",
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "range end (YYYYMMDDTHHMMSSZ)",
+                    },
+                },
+                "required": ["start", "end"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _with_ctx(_tool_list),
+        },
+        {
+            "name": "get",
+            "description": "Fetch one event as ICS by iCalendar UID or CalDAV resource name",
+            "schema": {"properties": dict(_ID_PROP), "required": ["id"]},
+            "needs_fields": _NEEDS,
+            "impl": _with_ctx(_tool_get),
+        },
+        {
+            "name": "etag",
+            "description": "Fetch the current ETag value for one event (UID or resource name)",
+            "schema": {"properties": dict(_ID_PROP), "required": ["id"]},
+            "needs_fields": _NEEDS,
+            "impl": _with_ctx(_tool_etag),
+        },
+        {
+            "name": "put",
+            "description": (
+                "Create or update an event. Without an etag, PUTs a new resource at "
+                "<base>/<id>.ics; with an etag, resolves the UID and guards with If-Match"
+            ),
+            "schema": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "UID (new event) or UID/resource (edit)",
+                    },
+                    "ics": {
+                        "type": "string",
+                        "description": "the iCalendar body to store",
+                    },
+                    "etag": {
+                        "type": "string",
+                        "description": "If-Match guard for an edit (optional)",
+                    },
+                },
+                "required": ["id", "ics"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _with_ctx(_tool_put),
+        },
+        {
+            "name": "delete",
+            "description": "Delete one event by iCalendar UID or CalDAV resource name",
+            "schema": {"properties": dict(_ID_PROP), "required": ["id"]},
+            "needs_fields": _NEEDS,
+            "impl": _with_ctx(_tool_delete),
+        },
+    ],
+    secret_field="password",
+)
 
 
 if __name__ == "__main__":

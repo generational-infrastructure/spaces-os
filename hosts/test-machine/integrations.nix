@@ -15,6 +15,10 @@
 # check carries it as a dormant unit and never touches the network. For an
 # offline *functional* test, point SPACES_GITHUB_API_URL at a mock instead (see
 # checks/integration-poc-machine for the pattern).
+#
+# Each integration's config/secrets field schema is single-sourced from the
+# schema.json its package ships next to the server module (pure eval, no
+# build); checks/spaces-integrations-schema-sync pins the manifest against it.
 {
   inputs,
   pkgs,
@@ -24,6 +28,10 @@
 let
   pkgsSelf = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
   exe = name: lib.getExe pkgsSelf.${name};
+  # The package's exported store contract: { config, secrets, tools }.
+  schemaOf =
+    name: builtins.fromJSON (builtins.readFile (../../packages + "/integration-${name}/schema.json"));
+  fieldsOf = name: { inherit (schemaOf name) config secrets; };
 in
 {
   services.spaces-integrations = {
@@ -34,7 +42,7 @@ in
         command = exe "integration-github";
         network = true;
         connectPorts = [ 443 ];
-        secrets.token.description = "GitHub personal access token (repo scope)";
+        inherit (fieldsOf "github") config secrets;
         autoRun = [ "get_repo" ];
       };
 
@@ -46,11 +54,7 @@ in
         network = true;
         connectPorts = [ 443 ];
         multiProfile = true;
-        config = {
-          url.description = "Full CalDAV collection URL";
-          user.description = "CalDAV username";
-        };
-        secrets.password.description = "CalDAV password";
+        inherit (fieldsOf "caldav") config secrets;
         autoRun = [
           "list"
           "get"
@@ -65,15 +69,7 @@ in
         network = true;
         connectPorts = [ 443 ];
         multiProfile = true;
-        config = {
-          server.description = "CardDAV addressbook collection URL";
-          user.description = "CardDAV username";
-          book = {
-            description = "Addressbook path (optional)";
-            required = false;
-          };
-        };
-        secrets.password.description = "CardDAV password";
+        inherit (fieldsOf "contacts") config secrets;
         autoRun = [
           "discover"
           "search"
@@ -94,40 +90,7 @@ in
           25
         ];
         multiProfile = true;
-        config = {
-          email.description = "Email address of the account";
-          imap_host.description = "IMAP server hostname";
-          smtp_host.description = "SMTP server hostname";
-          imap_port = {
-            description = "IMAP server port (default 993)";
-            required = false;
-          };
-          smtp_port = {
-            description = "SMTP server port (default 587)";
-            required = false;
-          };
-          imap_login = {
-            description = "IMAP login (default: email)";
-            required = false;
-          };
-          smtp_login = {
-            description = "SMTP login (default: email)";
-            required = false;
-          };
-          imap_encryption = {
-            description = "IMAP encryption: tls, start-tls or none (default: by port)";
-            required = false;
-          };
-          smtp_encryption = {
-            description = "SMTP encryption: tls, start-tls or none (default: by port)";
-            required = false;
-          };
-          display_name = {
-            description = "Sender display name";
-            required = false;
-          };
-        };
-        secrets.password.description = "Mailbox password";
+        inherit (fieldsOf "mail") config secrets;
         autoRun = [
           "envelope_list"
           "message_read"

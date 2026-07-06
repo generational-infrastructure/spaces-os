@@ -1,0 +1,15 @@
+{
+  "config": {},
+  "secrets": {
+    "token": {
+      "description": "GitHub personal access token (repo scope)",
+      "required": true
+    }
+  },
+  "tools": [
+    "get_repo",
+    "create_issue",
+    "clone_to_workspace",
+    "open_pull_request"
+  ]
+}

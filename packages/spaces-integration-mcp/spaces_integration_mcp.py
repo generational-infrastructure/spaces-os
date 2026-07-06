@@ -4,12 +4,15 @@ NDJSON JSON-RPC 2.0 over a unix socket. The listening socket arrives either as
 fd 3 (systemd socket activation, LISTEN_FDS) or is bound at
 SPACES_INTEGRATION_SOCKET (tests). Connections are served sequentially.
 
-An integration supplies its server identity, a static tool list (advertised via
-tools/list), and a `call_tool(name, arguments) -> (text, is_error)` dispatcher;
-this module owns the JSON-RPC protocol, NDJSON framing, and socket lifecycle so
-every integration server speaks exactly one wire dialect.
+An integration declares its tools as records ({name, description, schema,
+needs_fields, impl}) and assembles a server via `make_server`; this module owns
+the per-call pipeline (dispatch, profile resolution, required-field gating,
+error wrapping, the shared secret_fingerprint tool) plus the JSON-RPC protocol,
+NDJSON framing, and socket lifecycle so every integration server speaks exactly
+one wire dialect.
 """
 
+import hashlib
 import json
 import os
 import socket
@@ -97,6 +100,98 @@ def resolve_profile(arguments):
     if not profs:
         return None, "no profile provisioned; add one in the panel first"
     return None, f"multiple profiles ({', '.join(profs)}); pass a profile argument"
+
+
+_PROFILE_PROP = {
+    "profile": {
+        "type": "string",
+        "description": "account profile (default: the only one)",
+    }
+}
+
+FINGERPRINT_TOOL = "secret_fingerprint"
+
+
+def _advertised(records, multi_profile):
+    """The tools/list payload for the records: name/description/inputSchema,
+    with the profile property injected when the server is multi-profile."""
+    tools = []
+    for rec in records:
+        props = dict(rec["schema"].get("properties", {}))
+        if multi_profile:
+            props.update(_PROFILE_PROP)
+        tools.append(
+            {
+                "name": rec["name"],
+                "description": rec["description"],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": props,
+                    "required": rec["schema"].get("required", []),
+                },
+            }
+        )
+    return tools
+
+
+def make_server(
+    server_name,
+    server_version,
+    records,
+    *,
+    secret_field,
+    multi_profile=True,
+    error_label="tool",
+):
+    """Assemble an integration server from declarative tool records.
+
+    A record is {"name", "description", "schema", "needs_fields", "impl"}:
+    `schema` is the tool's inputSchema body ({"properties", "required"}) WITHOUT
+    the profile property (injected here when `multi_profile`); `needs_fields`
+    names the store fields that must be non-empty for the resolved profile
+    before the impl runs; `impl(arguments, profile, vals) -> (text, is_error)`
+    does the work with the profile's merged store values.
+
+    The scaffold owns the shared per-call pipeline: dispatch (unknown tool ->
+    error), profile resolution, required-field gating, OSError wrapping
+    ("<error_label> failed: ..."), and the hidden secret_fingerprint tool
+    (sha256 of `secret_field`, first 16 hex chars) that is callable but never
+    advertised. Every failure is a tool error, never a crash.
+
+    Returns (tools, call_tool, main): the advertised tools/list payload, the
+    dispatcher, and a ready process entry point.
+    """
+    by_name = {rec["name"]: rec for rec in records}
+    by_name[FINGERPRINT_TOOL] = {
+        "name": FINGERPRINT_TOOL,
+        "needs_fields": (secret_field,),
+        "impl": lambda args, profile, vals: (
+            hashlib.sha256(vals[secret_field].encode("utf-8")).hexdigest()[:16],
+            False,
+        ),
+    }
+    tools = _advertised(records, multi_profile)
+
+    def call_tool(name, arguments):
+        rec = by_name.get(name)
+        if rec is None:
+            return f"unknown tool: {name}", True
+        profile, err = resolve_profile(arguments)
+        if err:
+            return err, True
+        vals = store_profile(profile)
+        for field in rec["needs_fields"]:
+            if not vals.get(field):
+                return f"field '{field}' not set for profile '{profile}'", True
+        try:
+            return rec["impl"](arguments, profile, vals)
+        except OSError as e:
+            return f"{error_label} failed: {e.__class__.__name__}: {e}", True
+
+    def main():
+        return run(server_name, server_version, tools, call_tool)
+
+    return tools, call_tool, main
 
 
 def _handle_request(req, ctx):

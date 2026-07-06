@@ -1,0 +1,25 @@
+{
+  "config": {
+    "url": {
+      "description": "Full CalDAV collection URL",
+      "required": true
+    },
+    "user": {
+      "description": "CalDAV username",
+      "required": true
+    }
+  },
+  "secrets": {
+    "password": {
+      "description": "CalDAV password",
+      "required": true
+    }
+  },
+  "tools": [
+    "list",
+    "get",
+    "etag",
+    "put",
+    "delete"
+  ]
+}

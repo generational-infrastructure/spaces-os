@@ -1,15 +1,16 @@
 """Contacts (CardDAV) MCP integration server (spaces integration POC).
 
 Speaks NDJSON JSON-RPC 2.0 over a unix socket via the shared
-spaces_integration_mcp scaffold. Re-implements the core CardDAV surface of the
-legacy contacts-cli (packages/contacts-cli) directly over urllib with HTTP Basic
-auth. The `server` config value is the addressbook collection URL itself, so no
-principal / home-set discovery is needed. Every tool is multi-profile: the
-target account is resolved from arguments["profile"] (or the sole profile).
+spaces_integration_mcp scaffold, which owns dispatch, profile resolution,
+required-field gating, and the hidden secret_fingerprint tool. Re-implements
+the core CardDAV surface of the legacy contacts-cli (packages/contacts-cli)
+directly over urllib with HTTP Basic auth. The `server` config value is the
+addressbook collection URL itself, so no principal / home-set discovery is
+needed. Every tool is multi-profile: the target account is resolved from
+arguments["profile"] (or the sole profile).
 """
 
 import base64
-import hashlib
 import json
 import re
 import sys
@@ -20,98 +21,10 @@ import xml.etree.ElementTree as ET
 from urllib.parse import quote, urljoin, urlsplit
 from xml.sax.saxutils import escape as _xml_escape
 
-from spaces_integration_mcp import resolve_profile, run, store_profile
+from spaces_integration_mcp import make_server
 
 SERVER_NAME = "integration-contacts"
 SERVER_VERSION = "0.1.0"
-
-_PROFILE_PROP = {
-    "profile": {
-        "type": "string",
-        "description": "account profile (default: the only one)",
-    },
-}
-
-
-def _schema(properties, required):
-    props = dict(properties)
-    props.update(_PROFILE_PROP)
-    return {"type": "object", "properties": props, "required": required}
-
-
-TOOLS = [
-    {
-        "name": "discover",
-        "description": "List the vCard hrefs in the addressbook collection (PROPFIND Depth:1)",
-        "inputSchema": _schema({}, []),
-    },
-    {
-        "name": "search",
-        "description": (
-            "Server-side addressbook-query REPORT matching FN/EMAIL; "
-            "an empty query returns every contact"
-        ),
-        "inputSchema": _schema(
-            {"query": {"type": "string", "description": "text to match (empty = all)"}},
-            [],
-        ),
-    },
-    {
-        "name": "get",
-        "description": "Fetch one contact's vCard by its href/path",
-        "inputSchema": _schema(
-            {
-                "path": {
-                    "type": "string",
-                    "description": "contact href, path, or resource name",
-                }
-            },
-            ["path"],
-        ),
-    },
-    {
-        "name": "new",
-        "description": "Create a contact from a vCard (PUT); the resource name is derived from its UID",
-        "inputSchema": _schema(
-            {"vcard": {"type": "string", "description": "the vCard body to store"}},
-            ["vcard"],
-        ),
-    },
-    {
-        "name": "edit",
-        "description": "Replace an existing contact's vCard (PUT), optionally guarded by an If-Match ETag",
-        "inputSchema": _schema(
-            {
-                "path": {
-                    "type": "string",
-                    "description": "contact href, path, or resource name",
-                },
-                "vcard": {
-                    "type": "string",
-                    "description": "the replacement vCard body",
-                },
-                "etag": {
-                    "type": "string",
-                    "description": "ETag guard sent as If-Match (optional)",
-                },
-            },
-            ["path", "vcard"],
-        ),
-    },
-    {
-        "name": "delete",
-        "description": "Delete a contact by its href/path",
-        "inputSchema": _schema(
-            {
-                "path": {
-                    "type": "string",
-                    "description": "contact href, path, or resource name",
-                }
-            },
-            ["path"],
-        ),
-    },
-]
 
 
 def _collection(vals):
@@ -323,51 +236,113 @@ def _tool_delete(args, vals):
     return f"deleted {url}", False
 
 
-def _tool_secret_fingerprint(args, vals):
-    return hashlib.sha256(vals["password"].encode("utf-8")).hexdigest()[:16], False
+def _vals(impl):
+    """Adapt an (args, vals)-style impl to the scaffold's record signature."""
+    return lambda args, profile, vals: impl(args, vals)
 
 
-_TOOL_IMPLS = {
-    "discover": _tool_discover,
-    "search": _tool_search,
-    "get": _tool_get,
-    "new": _tool_new,
-    "edit": _tool_edit,
-    "delete": _tool_delete,
-    "secret_fingerprint": _tool_secret_fingerprint,
-}
+_NEEDS = ("server", "user", "password")
 
-# Fields each tool needs from the resolved profile store.
-_NEEDS = {
-    "discover": ("server", "user", "password"),
-    "search": ("server", "user", "password"),
-    "get": ("server", "user", "password"),
-    "new": ("server", "user", "password"),
-    "edit": ("server", "user", "password"),
-    "delete": ("server", "user", "password"),
-    "secret_fingerprint": ("password",),
-}
-
-
-def call_tool(name, arguments):
-    """Dispatch a tools/call: resolve the target profile, pull its CardDAV
-    credentials from the store, run the impl, return (text, is_error). A missing
-    required field is a tool error, never a crash."""
-    impl = _TOOL_IMPLS.get(name)
-    if impl is None:
-        return f"unknown tool: {name}", True
-    profile, err = resolve_profile(arguments)
-    if err:
-        return err, True
-    vals = store_profile(profile)
-    for field in _NEEDS.get(name, ()):
-        if not vals.get(field):
-            return f"field '{field}' not set for profile '{profile}'", True
-    return impl(arguments, vals)
-
-
-def main():
-    return run(SERVER_NAME, SERVER_VERSION, TOOLS, call_tool)
+TOOLS, call_tool, main = make_server(
+    SERVER_NAME,
+    SERVER_VERSION,
+    [
+        {
+            "name": "discover",
+            "description": "List the vCard hrefs in the addressbook collection (PROPFIND Depth:1)",
+            "schema": {"properties": {}, "required": []},
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_discover),
+        },
+        {
+            "name": "search",
+            "description": (
+                "Server-side addressbook-query REPORT matching FN/EMAIL; "
+                "an empty query returns every contact"
+            ),
+            "schema": {
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "text to match (empty = all)",
+                    }
+                },
+                "required": [],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_search),
+        },
+        {
+            "name": "get",
+            "description": "Fetch one contact's vCard by its href/path",
+            "schema": {
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "contact href, path, or resource name",
+                    }
+                },
+                "required": ["path"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_get),
+        },
+        {
+            "name": "new",
+            "description": "Create a contact from a vCard (PUT); the resource name is derived from its UID",
+            "schema": {
+                "properties": {
+                    "vcard": {
+                        "type": "string",
+                        "description": "the vCard body to store",
+                    }
+                },
+                "required": ["vcard"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_new),
+        },
+        {
+            "name": "edit",
+            "description": "Replace an existing contact's vCard (PUT), optionally guarded by an If-Match ETag",
+            "schema": {
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "contact href, path, or resource name",
+                    },
+                    "vcard": {
+                        "type": "string",
+                        "description": "the replacement vCard body",
+                    },
+                    "etag": {
+                        "type": "string",
+                        "description": "ETag guard sent as If-Match (optional)",
+                    },
+                },
+                "required": ["path", "vcard"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_edit),
+        },
+        {
+            "name": "delete",
+            "description": "Delete a contact by its href/path",
+            "schema": {
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "contact href, path, or resource name",
+                    }
+                },
+                "required": ["path"],
+            },
+            "needs_fields": _NEEDS,
+            "impl": _vals(_tool_delete),
+        },
+    ],
+    secret_field="password",
+)
 
 
 if __name__ == "__main__":
