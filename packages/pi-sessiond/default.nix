@@ -35,6 +35,7 @@ let
     cp ${./provider.ts} "$out/provider.ts"
     cp ${./staging.ts} "$out/staging.ts"
     cp ${./integrations.ts} "$out/integrations.ts"
+    cp ${./integration-wire.json} "$out/integration-wire.json"
     # Resolve @earendil-works/pi-coding-agent (and its deps) from the pinned pi.
     ln -s ${pi}/lib/node_modules "$out/node_modules"
   '';
@@ -63,5 +64,14 @@ in
   (old: {
     passthru = (old.passthru or { }) // {
       inherit pi landlockPolicy;
+      # Package-internal data files other flake outputs consume WITHOUT reaching
+      # into this directory by relative path:
+      #   - seccompDenylist: the syscall denylist shared between sandbox.ts and
+      #     the spaces-integrations module's unit hardening.
+      #   - integrationWire: the gateway↔child-extension sentinel contract;
+      #     packages/pi-chat-extensions substitutes its values into the bundled
+      #     spaces-integrations extension at build time.
+      seccompDenylist = ./seccomp-denylist.json;
+      integrationWire = ./integration-wire.json;
     };
   })

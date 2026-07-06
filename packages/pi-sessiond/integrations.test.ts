@@ -16,14 +16,32 @@ import {
   type DiscoveredTool,
   discoverTools,
   enabledMtimeMs,
+  INTEGRATION_CALL_TITLE,
   INTEGRATION_TOOL_SPEC_FILE,
   integrationNames,
+  mcpExchange,
   refreshRegistry,
   type Registry,
   sessionSharedDirs,
   toolSpec,
   writeSessionToolSpec,
 } from "./integrations";
+
+// ---- wire contract single source ---------------------------------------------
+
+// The gateway↔child-extension sentinel contract lives in integration-wire.json;
+// both this module and the materialised extension (packages/pi-chat-extensions)
+// are built from it. Guard that the exported constants really come from there.
+const WIRE = JSON.parse(
+  readFileSync(new URL("./integration-wire.json", import.meta.url), "utf8"),
+) as { callTitle: string; toolSpecFile: string };
+
+test("wire constants are sourced from integration-wire.json", () => {
+  expect(INTEGRATION_CALL_TITLE).toBe(WIRE.callTitle);
+  expect(INTEGRATION_TOOL_SPEC_FILE).toBe(WIRE.toolSpecFile);
+  expect(WIRE.callTitle).toBe("spaces.integration-call");
+  expect(WIRE.toolSpecFile).toBe("integration-tools.json");
+});
 
 const root = mkdtempSync(join(tmpdir(), "integrations-test-"));
 const servers: Server[] = [];
@@ -419,4 +437,43 @@ test("callIntegrationTool: abort signal resolves unavailable", async () => {
     text: "integration unavailable: aborted",
     isError: true,
   });
+});
+
+// ---- mcpExchange ------------------------------------------------------------
+
+test("mcpExchange runs the step chain and yields the final reply", async () => {
+  const sock = join(root, "exchange.sock");
+  await mcpServer(sock, { tools: GH_TOOLS });
+  const res = await mcpExchange(
+    sock,
+    [
+      {
+        send: [
+          { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+        ],
+        replyId: 1,
+      },
+      {
+        send: [
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "tools/list" },
+        ],
+        replyId: 2,
+      },
+    ],
+    { timeoutMs: 5000 },
+  );
+  if (!res.ok) throw new Error(`exchange failed: ${res.reason}`);
+  const result = res.reply.result as { tools: unknown[] };
+  expect(result.tools).toHaveLength(2);
+});
+
+test("mcpExchange resolves a failure result, never rejects", async () => {
+  const res = await mcpExchange(
+    join(root, "exchange-nope.sock"),
+    [{ send: [{ jsonrpc: "2.0", id: 1, method: "initialize" }], replyId: 1 }],
+    { timeoutMs: 200 },
+  );
+  expect(res.ok).toBe(false);
+  if (!res.ok) expect(res.reason.length).toBeGreaterThan(0);
 });

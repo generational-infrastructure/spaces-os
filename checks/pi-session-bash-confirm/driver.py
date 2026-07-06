@@ -14,7 +14,7 @@ Runs the same scenario twice:
 Usage: driver.py <pi_bin> <mock_llm_script> <ext_dir> <work_dir>
 
 `ext_dir` is the directory holding bash-confirm.ts and
-llama-swap-discover.ts (= modules/nixos/pi-chat/extensions/).
+llama-swap-discover.ts (= the built pi-chat-extensions package).
 """
 
 import json

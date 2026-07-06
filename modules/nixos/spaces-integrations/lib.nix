@@ -13,23 +13,24 @@
 #     ($STATE_DIRECTORY / $CREDENTIALS_DIRECTORY / a shared dir) are per-user and
 #     unknown at build time. The static half of that policy (the SPEC) is here.
 #   - systemd hardening on the unit: the seccomp denylist (single-sourced from
-#     packages/pi-sessiond/seccomp-denylist.json, closing same-uid kernel
-#     objects Landlock can't), RestrictAddressFamilies as the coarse network
-#     on/off gate, and the kernel-protection bouquet (mirrors sandbox.ts).
+#     the pi-sessiond package's `seccompDenylist` passthru — the same JSON
+#     sandbox.ts imports — closing same-uid kernel objects Landlock can't),
+#     RestrictAddressFamilies as the coarse network on/off gate, and the
+#     kernel-protection bouquet (mirrors sandbox.ts).
 {
   pkgs,
   lib,
+  # Path to the seccomp denylist JSON — pass the pi-sessiond package's
+  # `seccompDenylist` passthru so the per-session sandbox (sandbox.ts imports
+  # the same file) and the integration units subtract one identical set.
+  seccompDenylist,
 }:
 let
   jsonFormat = pkgs.formats.json { };
 
-  # The seccomp denylist, single-sourced with the per-session sandbox
-  # (packages/pi-sessiond/sandbox.ts imports the same JSON). @system-service is
-  # the allowlist baseline; this set is subtracted. Blocked calls fail EPERM not
-  # SIGSYS (libuv's io_uring probe), matching sandbox.ts.
-  denySyscalls = builtins.fromJSON (
-    builtins.readFile ../../../packages/pi-sessiond/seccomp-denylist.json
-  );
+  # @system-service is the allowlist baseline; this set is subtracted. Blocked
+  # calls fail EPERM not SIGSYS (libuv's io_uring probe), matching sandbox.ts.
+  denySyscalls = builtins.fromJSON (builtins.readFile seccompDenylist);
 in
 {
   inherit jsonFormat;

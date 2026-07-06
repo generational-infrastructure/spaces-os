@@ -49,12 +49,13 @@ let
   wikidataCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.wikidata-cli;
   sedimentPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sediment;
   desktopEntriesPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-desktop-entries;
+  piChatExtensionsPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions;
 
-  # Memory extension: nix derivation that substitutes the absolute
-  # sediment binary path into a single-file pi extension. Path-typed
-  # so the existing extensions-loading logic treats it like any other
-  # bundled extension.
-  memoryExtensionPkg = pkgs.callPackage ./extensions/memory { sediment = sedimentPkg; };
+  # Memory extension: derivation from the pi-chat-extensions package that
+  # substitutes the absolute sediment binary path into a single-file pi
+  # extension. Path-typed so the existing extensions-loading logic treats it
+  # like any other bundled extension.
+  memoryExtensionPkg = piChatExtensionsPkg.memory;
 
   shellDir = ../../../programs/pi-chat;
   shellName = "pi-chat";
@@ -147,8 +148,8 @@ let
   # Pi extensions: bool means "use the bundled .ts shipped here"; path
   # means use that file/dir verbatim.
   bundledExtensions = {
-    bash-confirm = ./extensions/bash-confirm.ts;
-    llama-swap-discover = ./extensions/llama-swap-discover.ts;
+    bash-confirm = piChatExtensionsPkg.extensions."bash-confirm";
+    llama-swap-discover = piChatExtensionsPkg.extensions."llama-swap-discover";
     memory = memoryExtensionPkg;
   };
   resolveExtension =

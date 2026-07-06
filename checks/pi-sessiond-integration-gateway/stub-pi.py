@@ -11,10 +11,13 @@ driver can read the gateway's verdict. argv is accepted and ignored.
 """
 
 import json
+import os
 import sys
 
-# MUST match packages/pi-sessiond/integrations.ts (INTEGRATION_CALL_TITLE).
-INTEGRATION_CALL_TITLE = "spaces.integration-call"
+# The integration-call sentinel, single-sourced from the pi-sessiond package's
+# integration-wire.json (the check exports SPACES_INTEGRATION_WIRE).
+with open(os.environ["SPACES_INTEGRATION_WIRE"], encoding="utf-8") as _wire:
+    INTEGRATION_CALL_TITLE = json.load(_wire)["callTitle"]
 
 
 def emit(obj):

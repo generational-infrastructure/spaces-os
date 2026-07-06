@@ -25,10 +25,8 @@ let
   # The per-session child agent dir no longer inherits the daemon's shared
   # provider auth/models, so the child registers `local` itself via the same
   # llama-swap-discover extension production loads (from LLAMA_SWAP_BASE_URL).
-  llamaSwapDiscover = builtins.path {
-    path = ../../modules/nixos/pi-chat/extensions/llama-swap-discover.ts;
-    name = "llama-swap-discover.ts";
-  };
+  llamaSwapDiscover =
+    inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions.extensions."llama-swap-discover";
 in
 pkgs.runCommand "pi-session-quick-launch-model-directive-test"
   {

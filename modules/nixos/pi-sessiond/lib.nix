@@ -6,13 +6,15 @@
 # executor); this builds the per-session pi child's extension list + the
 # settings.json it reads, and resolves the Landlock launcher.
 #
-#   - `materialize` copies each extension to its OWN tracked store path. A
-#     bare `toString` of a flake-relative path embeds the whole-flake
-#     `…-source` path, which nix's reference scanner does NOT capture as a
-#     runtime dependency of settings.json — so the file would be absent from
-#     the executor's store at runtime and pi would silently skip the extension
-#     (the `local` provider never registers). `builtins.path` copies just the
-#     one file to a standalone, tracked store path.
+#   - Bundled extensions (llama-swap-discover, spaces-integrations,
+#     openrouter-proxy) come from the pi-chat-extensions flake package, which
+#     owns the per-extension store-path materialisation.
+#   - `materialize` copies a USER-supplied extension path (the `extensions`
+#     option) to its own tracked store path — see
+#     packages/pi-chat-extensions/default.nix for why a bare `toString` of a
+#     flake-relative path would break nix's reference scan. Paths already in
+#     the store (the option's default, prebuilt extension derivations) pass
+#     through untouched.
 #   - `mkChild` composes the child's extension list (llama-swap-discover is
 #     always added so the child registers the `local` provider from
 #     LLAMA_SWAP_BASE_URL; openrouter-proxy only when enabled — it registers
@@ -27,22 +29,31 @@
 let
   jsonFormat = pkgs.formats.json { };
 
+  extensionsPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions;
+
   materialize =
     e:
-    builtins.path {
-      path = e;
-      name = baseNameOf (toString e);
-    };
+    if lib.isStorePath e then
+      e
+    else
+      builtins.path {
+        path = e;
+        name = baseNameOf (toString e);
+      };
 
-  llamaSwapDiscover = materialize ../pi-chat/extensions/llama-swap-discover.ts;
-  openrouterProxyExt = materialize ../pi-chat/extensions/openrouter-proxy.ts;
+  llamaSwapDiscover = extensionsPkg.extensions."llama-swap-discover";
+  openrouterProxyExt = extensionsPkg.extensions."openrouter-proxy";
   # The agent-facing half of the integrations gateway (design §9): registers a
   # forwarding tool per discovered integration tool from the per-session spec
   # the supervisor stages. Always loaded; inert when no spec / no integrations.
-  spacesIntegrationsExt = materialize ../pi-chat/extensions/spaces-integrations.ts;
+  spacesIntegrationsExt = extensionsPkg.extensions."spaces-integrations";
 in
 {
   inherit jsonFormat;
+
+  # The bundled-extensions flake package (also carries the memory extension as
+  # `piChatExtensions.memory`), so ./default.nix reuses the same instance.
+  piChatExtensions = extensionsPkg;
 
   # The per-session Landlock launcher (docs/landlock-sandbox-design.md §6): the
   # sole sandbox path. It self-applies the deny-by-default Landlock domain

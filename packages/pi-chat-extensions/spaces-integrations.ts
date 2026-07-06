@@ -14,14 +14,15 @@
 // sentinel and whose placeholder is JSON `{ integration, tool, args }`; the
 // supervisor replies extension_ui_response{ value: JSON `{ text, isError }` }.
 //
-// Wire contract — MUST match packages/pi-sessiond/integrations.ts
-// (INTEGRATION_CALL_TITLE, INTEGRATION_TOOL_SPEC_FILE, and the payload shapes).
+// Wire contract — the sentinels below are substituted at build time (see
+// ./default.nix) from packages/pi-sessiond/integration-wire.json, the single
+// source the supervisor gateway (integrations.ts) reads at runtime.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const INTEGRATION_CALL_TITLE = "spaces.integration-call";
-const INTEGRATION_TOOL_SPEC_FILE = "integration-tools.json";
+const INTEGRATION_CALL_TITLE = "@@INTEGRATION_CALL_TITLE@@";
+const INTEGRATION_TOOL_SPEC_FILE = "@@INTEGRATION_TOOL_SPEC_FILE@@";
 
 interface ToolSpecEntry {
   name: string;

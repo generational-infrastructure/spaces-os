@@ -15,13 +15,19 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import factory from "./spaces-integrations.ts";
 
-const TITLE = "spaces.integration-call";
+// The wire contract, single-sourced from packages/pi-sessiond
+// (integration-wire.json, copied next to this test by the package build) —
+// the same JSON the extension build substitutes its sentinels from.
+const WIRE = JSON.parse(
+  readFileSync(new URL("./integration-wire.json", import.meta.url), "utf8"),
+);
+const TITLE = WIRE.callTitle;
 
 const SPEC = [
   {
@@ -43,7 +49,7 @@ const SPEC = [
 function install(t, spec) {
   const dir = mkdtempSync(join(tmpdir(), "spaces-integrations-"));
   if (spec !== undefined) {
-    writeFileSync(join(dir, "integration-tools.json"), JSON.stringify(spec));
+    writeFileSync(join(dir, WIRE.toolSpecFile), JSON.stringify(spec));
   }
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;

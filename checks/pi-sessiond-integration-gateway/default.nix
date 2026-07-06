@@ -42,6 +42,9 @@ pkgs.runCommand "pi-sessiond-integration-gateway-test"
   }
   ''
     export HOME="$TMPDIR"
+    # The gateway↔extension sentinel contract; stub-pi.py and driver.py read
+    # the same JSON integrations.ts does instead of re-declaring the literals.
+    export SPACES_INTEGRATION_WIRE=${daemon.integrationWire}
     ${py}/bin/python3 ${./driver.py} \
       ${pkgs.lib.getExe daemon} \
       ${stubPi} \

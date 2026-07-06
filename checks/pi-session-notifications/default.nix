@@ -21,7 +21,7 @@ in
 pkgs.runCommand "pi-session-notifications-test"
   {
     nativeBuildInputs = [ pkgs.python3 ];
-    extDir = ../../modules/nixos/pi-chat/extensions;
+    extDir = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions;
     notificationsBin = pkgs.lib.getExe notificationsCli;
   }
   ''

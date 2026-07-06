@@ -26,7 +26,10 @@
 }:
 let
   cfg = config.services.spaces-integrations;
-  integLib = import ./lib.nix { inherit pkgs lib; };
+  integLib = import ./lib.nix {
+    inherit pkgs lib;
+    seccompDenylist = pkgsSelf.pi-sessiond.seccompDenylist;
+  };
 
   pkgsSelf = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
   # The policy generator rides as a passthru of the pi-sessiond package (it

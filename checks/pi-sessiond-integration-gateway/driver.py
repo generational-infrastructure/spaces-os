@@ -33,6 +33,11 @@ import websockets
 
 TOKEN = "gateway-secret"
 
+# The wire contract (integration-wire.json via the check's env export) — the
+# per-session spec filename the daemon stages, single-sourced with the gateway.
+with open(os.environ["SPACES_INTEGRATION_WIRE"], encoding="utf-8") as _wire:
+    TOOL_SPEC_FILE = json.load(_wire)["toolSpecFile"]
+
 
 def fail(msg):
     sys.stderr.write(f"FAIL: {msg}\n")
@@ -140,9 +145,7 @@ async def scenarios(state, calls_out, shared_base):
             fail(f"supervisor must create the shared dir: {shared}")
 
         # The daemon stages the discovered tools for the extension to register.
-        spec_path = os.path.join(
-            state, "sessions", sid, "agent", "integration-tools.json"
-        )
+        spec_path = os.path.join(state, "sessions", sid, "agent", TOOL_SPEC_FILE)
         with open(spec_path) as fh:
             spec = json.load(fh)
         names = sorted(e["name"] for e in spec)
@@ -217,9 +220,7 @@ async def scenario_no_integrations(state, shared_base):
     async with websockets.connect("ws://127.0.0.1:8784") as ws:
         await hello(ws)
         sid = await create_session(ws)
-        spec_path = os.path.join(
-            state, "sessions", sid, "agent", "integration-tools.json"
-        )
+        spec_path = os.path.join(state, "sessions", sid, "agent", TOOL_SPEC_FILE)
         with open(spec_path) as fh:
             spec = json.load(fh)
         if spec != []:

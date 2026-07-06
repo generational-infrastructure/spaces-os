@@ -18,16 +18,21 @@ import { createConnection } from "node:net";
 import { join } from "node:path";
 
 // ---- wire contract (shared with the bundled child extension + the panel) ----
-// The bundled extension (spaces-integrations.ts) is materialised into a separate
-// store path and cannot import this module, so it duplicates these literals —
-// keep the two in sync.
+// Single-sourced from ./integration-wire.json: the bundled extension
+// (packages/pi-chat-extensions/spaces-integrations.ts) is materialised into a
+// separate store path and cannot import this module, so its build substitutes
+// the same JSON's values into the extension source. Edit the JSON, not a
+// consumer.
 //
 // The child forwards a tool call as an extension_ui `input` request whose title
 // is this sentinel and whose placeholder is JSON `{ integration, tool, args }`;
 // the supervisor replies extension_ui_response{ value: JSON `{ text, isError }` }.
-export const INTEGRATION_CALL_TITLE = "spaces.integration-call";
+const wire = JSON.parse(
+  readFileSync(new URL("./integration-wire.json", import.meta.url), "utf8"),
+) as { callTitle: string; toolSpecFile: string };
+export const INTEGRATION_CALL_TITLE: string = wire.callTitle;
 // The per-session spec the child extension reads from its agent dir (HOME).
-export const INTEGRATION_TOOL_SPEC_FILE = "integration-tools.json";
+export const INTEGRATION_TOOL_SPEC_FILE: string = wire.toolSpecFile;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -111,53 +116,62 @@ export interface RegistryEntry {
 
 export type Registry = Map<string, RegistryEntry>; // keyed by piName
 
+// ---- MCP wire primitive -------------------------------------------------------
+
+// One step of an NDJSON JSON-RPC exchange: write `send`, then wait for the
+// reply whose id is `replyId` before the next step (or the final resolve).
+export interface McpStep {
+  send: unknown[];
+  replyId: number;
+}
+
+export type McpExchangeResult =
+  | { ok: true; reply: Record<string, unknown> }
+  | { ok: false; reason: string };
+
 /**
- * MCP discovery on a fresh connection: initialize → notifications/initialized →
- * tools/list, NDJSON JSON-RPC 2.0. Resolves the server's tool list (name +
- * description + inputSchema → parameters); NEVER rejects — any failure resolves
- * `[]`, so a down or broken integration simply contributes no tools.
+ * One MCP exchange on a fresh unix-socket connection (the "MCP wire"), NDJSON
+ * JSON-RPC 2.0: write step 0's messages on connect; each time the current
+ * step's `replyId` reply arrives, write the next step's messages; the LAST
+ * step's reply resolves the exchange. Replies with other ids are skipped.
+ * NEVER rejects — connect/timeout/abort/parse failures resolve
+ * `{ ok: false, reason }` — and the socket is always destroyed on settle.
  */
-export function discoverTools(
+export function mcpExchange(
   socketPath: string,
-  signal?: AbortSignal,
-  timeoutMs = 10000,
-): Promise<DiscoveredTool[]> {
-  const { promise, resolve } = Promise.withResolvers<DiscoveredTool[]>();
+  steps: McpStep[],
+  opts: { signal?: AbortSignal; timeoutMs: number },
+): Promise<McpExchangeResult> {
+  const { signal, timeoutMs } = opts;
+  const { promise, resolve } = Promise.withResolvers<McpExchangeResult>();
 
   const sock = createConnection(socketPath);
   let settled = false;
-  const finish = (tools: DiscoveredTool[]) => {
+  const finish = (result: McpExchangeResult) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
     sock.destroy();
-    resolve(tools);
+    resolve(result);
   };
+  const fail = (reason: string) => finish({ ok: false, reason });
 
-  const timer = setTimeout(() => finish([]), timeoutMs);
-  const onAbort = () => finish([]);
+  const timer = setTimeout(() => fail("timeout"), timeoutMs);
+  const onAbort = () => fail("aborted");
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) onAbort();
 
-  sock.on("error", () => finish([]));
-  sock.on("close", () => finish([]));
+  sock.on("error", (err) => fail(err.message));
+  sock.on("close", () => fail("connection closed"));
 
   const writeLine = (msg: unknown) => {
     sock.write(`${JSON.stringify(msg)}\n`);
   };
 
+  let step = 0;
   sock.on("connect", () => {
-    writeLine({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "pi-sessiond", version: "0" },
-      },
-    });
+    for (const msg of steps[step]?.send ?? []) writeLine(msg);
   });
 
   let buf = "";
@@ -172,35 +186,80 @@ export function discoverTools(
       try {
         msg = JSON.parse(line);
       } catch {
-        finish([]);
+        fail("bad reply (not JSON)");
         return;
       }
-      if (!isRecord(msg)) continue;
-      if (msg.id === 1) {
-        // initialize done → notify, then list.
-        writeLine({ jsonrpc: "2.0", method: "notifications/initialized" });
-        writeLine({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-      } else if (msg.id === 2) {
-        const result = isRecord(msg.result) ? msg.result : {};
-        const list = Array.isArray(result.tools) ? result.tools : [];
-        const tools: DiscoveredTool[] = [];
-        for (const t of list) {
-          if (!isRecord(t) || typeof t.name !== "string") continue;
-          tools.push({
-            name: t.name,
-            description: typeof t.description === "string" ? t.description : "",
-            parameters: isRecord(t.inputSchema)
-              ? t.inputSchema
-              : { type: "object", properties: {} },
-          });
-        }
-        finish(tools);
+      if (!isRecord(msg) || msg.id !== steps[step]?.replyId) continue;
+      step += 1;
+      if (step === steps.length) {
+        finish({ ok: true, reply: msg });
         return;
       }
+      for (const m of steps[step]!.send) writeLine(m);
     }
   });
 
   return promise;
+}
+
+// The fixed MCP handshake both discovery and tool calls perform: initialize
+// (id 1) → notifications/initialized + the caller's request (id 2).
+const handshake = (request: Record<string, unknown>): McpStep[] => [
+  {
+    send: [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "pi-sessiond", version: "0" },
+        },
+      },
+    ],
+    replyId: 1,
+  },
+  {
+    send: [
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 2, ...request },
+    ],
+    replyId: 2,
+  },
+];
+
+/**
+ * MCP discovery on a fresh connection: the handshake, then tools/list.
+ * Resolves the server's tool list (name + description + inputSchema →
+ * parameters); NEVER rejects — any failure resolves `[]`, so a down or broken
+ * integration simply contributes no tools.
+ */
+export async function discoverTools(
+  socketPath: string,
+  signal?: AbortSignal,
+  timeoutMs = 10000,
+): Promise<DiscoveredTool[]> {
+  const res = await mcpExchange(
+    socketPath,
+    handshake({ method: "tools/list" }),
+    { signal, timeoutMs },
+  );
+  if (!res.ok) return [];
+  const result = isRecord(res.reply.result) ? res.reply.result : {};
+  const list = Array.isArray(result.tools) ? result.tools : [];
+  const tools: DiscoveredTool[] = [];
+  for (const t of list) {
+    if (!isRecord(t) || typeof t.name !== "string") continue;
+    tools.push({
+      name: t.name,
+      description: typeof t.description === "string" ? t.description : "",
+      parameters: isRecord(t.inputSchema)
+        ? t.inputSchema
+        : { type: "object", properties: {} },
+    });
+  }
+  return tools;
 }
 
 /**
@@ -335,106 +394,38 @@ export function writeSessionToolSpec(
 }
 
 /**
- * One tool call = one fresh connection (the "MCP wire"): initialize →
- * notifications/initialized → tools/call, NDJSON JSON-RPC 2.0 over the unix
- * socket. Resolves with the concatenated text content; NEVER rejects —
+ * One tool call = one fresh connection: the handshake, then tools/call.
+ * Resolves with the concatenated text content; NEVER rejects —
  * connection/timeout/abort failures resolve `integration unavailable: <reason>`
  * with isError so the agent sees a failed tool result, not a crashed turn.
  */
-export function callIntegrationTool(
+export async function callIntegrationTool(
   socketPath: string,
   tool: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
   timeoutMs = 60000,
 ): Promise<{ text: string; isError: boolean }> {
-  const { promise, resolve } = Promise.withResolvers<{
-    text: string;
-    isError: boolean;
-  }>();
-
-  const sock = createConnection(socketPath);
-  let settled = false;
-  const finish = (result: { text: string; isError: boolean }) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
-    sock.destroy();
-    resolve(result);
-  };
-  const unavailable = (reason: string) =>
-    finish({ text: `integration unavailable: ${reason}`, isError: true });
-
-  const timer = setTimeout(() => unavailable("timeout"), timeoutMs);
-  const onAbort = () => unavailable("aborted");
-  signal?.addEventListener("abort", onAbort, { once: true });
-  if (signal?.aborted) onAbort();
-
-  sock.on("error", (err) => unavailable(err.message));
-  sock.on("close", () => unavailable("connection closed"));
-
-  const writeLine = (msg: unknown) => {
-    sock.write(`${JSON.stringify(msg)}\n`);
-  };
-
-  sock.on("connect", () => {
-    writeLine({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "pi-sessiond", version: "0" },
-      },
-    });
-  });
-
-  let buf = "";
-  sock.on("data", (chunk) => {
-    buf += chunk.toString("utf8");
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      let msg: unknown;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        unavailable("bad reply (not JSON)");
-        return;
-      }
-      if (!isRecord(msg)) continue;
-      if (msg.id === 1) {
-        // initialize done → fire the notification, then the actual call.
-        writeLine({ jsonrpc: "2.0", method: "notifications/initialized" });
-        writeLine({
-          jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: { name: tool, arguments: args },
-        });
-      } else if (msg.id === 2) {
-        if (isRecord(msg.error)) {
-          finish({ text: String(msg.error.message ?? "error"), isError: true });
-          return;
-        }
-        const result = isRecord(msg.result) ? msg.result : {};
-        const content = Array.isArray(result.content) ? result.content : [];
-        const text = content
-          .filter(
-            (c): c is { type: string; text: string } =>
-              isRecord(c) && c.type === "text" && typeof c.text === "string",
-          )
-          .map((c) => c.text)
-          .join("\n");
-        finish({ text, isError: result.isError === true });
-        return;
-      }
-    }
-  });
-
-  return promise;
+  const res = await mcpExchange(
+    socketPath,
+    handshake({ method: "tools/call", params: { name: tool, arguments: args } }),
+    { signal, timeoutMs },
+  );
+  if (!res.ok) {
+    return { text: `integration unavailable: ${res.reason}`, isError: true };
+  }
+  const msg = res.reply;
+  if (isRecord(msg.error)) {
+    return { text: String(msg.error.message ?? "error"), isError: true };
+  }
+  const result = isRecord(msg.result) ? msg.result : {};
+  const content = Array.isArray(result.content) ? result.content : [];
+  const text = content
+    .filter(
+      (c): c is { type: string; text: string } =>
+        isRecord(c) && c.type === "text" && typeof c.text === "string",
+    )
+    .map((c) => c.text)
+    .join("\n");
+  return { text, isError: result.isError === true };
 }

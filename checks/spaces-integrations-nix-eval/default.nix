@@ -94,7 +94,11 @@ let
 
   # Reuse lib.nix to obtain the SAME policy spec the unit's ExecStartPre feeds the
   # CLI, so the lowering test exercises the real artifact.
-  integLib = import ../../modules/nixos/spaces-integrations/lib.nix { inherit pkgs lib; };
+  integLib = import ../../modules/nixos/spaces-integrations/lib.nix {
+    inherit pkgs lib;
+    seccompDenylist =
+      inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond.seccompDenylist;
+  };
   ghInteg = integLib.mkIntegration {
     name = "github";
     manifest = enabledSystem.config.services.spaces-integrations.integrations.github;

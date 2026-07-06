@@ -31,12 +31,10 @@ let
   piBin = pkgs.lib.getExe' daemon.pi "pi";
   # The child registers the `local` provider itself via llama-swap-discover,
   # loaded from its settings.json (the supervisor no longer embeds pi, so it
-  # does no discovery for the child). Materialized as a stable-named file so
-  # the settings.json extension entry is a clean store path.
-  llamaSwapDiscover = builtins.path {
-    path = ../../modules/nixos/pi-chat/extensions/llama-swap-discover.ts;
-    name = "llama-swap-discover.ts";
-  };
+  # does no discovery for the child). The pi-chat-extensions package exposes it
+  # as a stable-named store file, so the settings.json entry is a clean path.
+  llamaSwapDiscover =
+    inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-chat-extensions.extensions."llama-swap-discover";
   # Passthrough launcher stubs (no systemd / no kernel Landlock in the build
   # sandbox); real Landlock enforcement is checks/pi-sessiond-landlock.
   stubs = import ../pi-sessiond-sidechannel/launcher-stubs.nix { inherit pkgs; };

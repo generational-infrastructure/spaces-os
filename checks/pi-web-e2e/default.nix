@@ -26,15 +26,9 @@ let
   #   - bash-confirm drives the confirm side-channel (gates every bash call);
   #   - llama-swap-discover registers provider "local" from the mock LLM at
   #     LLAMA_SWAP_BASE_URL, which the child inherits from the daemon.
-  extDir = ../../modules/nixos/pi-chat/extensions;
-  bashConfirm = builtins.path {
-    path = extDir + "/bash-confirm.ts";
-    name = "bash-confirm.ts";
-  };
-  llamaDiscover = builtins.path {
-    path = extDir + "/llama-swap-discover.ts";
-    name = "llama-swap-discover.ts";
-  };
+  extPkg = inputs.self.packages.${sys}.pi-chat-extensions;
+  bashConfirm = extPkg.extensions."bash-confirm";
+  llamaDiscover = extPkg.extensions."llama-swap-discover";
   piSettings = pkgs.writeText "pi-settings.json" (
     builtins.toJSON {
       extensions = [
