@@ -1,0 +1,101 @@
+# Single source of truth for ruff across the repo (treefmt's ruff-check and
+# ruff-format resolve this file; per-package pyprojects must NOT carry
+# [tool.ruff] sections or they would silently shadow it).
+# Everything is enabled; each ignore below carries its own reason.
+target-version = "py313"
+line-length = 88
+
+[lint]
+select = ["ALL"]
+ignore = [
+  "ANN401",  # any-type: Any is legitimate in dynamic glue (JSON, RPC payloads)
+  "C901",    # complex-structure: no cyclomatic-complexity ceiling enforced
+  "COM812",  # missing-trailing-comma: conflicts with ruff format
+  "D100",    # undocumented-public-module: no docstring-presence requirement
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D107",
+  "D203",    # incompatible with D211 (chosen convention)
+  "D213",    # incompatible with D212 (chosen convention)
+  "D401",    # non-imperative-mood: too pedantic
+  "D415",    # missing-terminal-punctuation: cosmetic
+  "E402",    # module-import-not-at-top: sys.path setup precedes imports
+  "E501",    # line-too-long: ruff format's 88-col wrapping governs code
+  "ERA001",  # commented-out-code
+  "FBT001",  # boolean-trap args: pervasive flag style, not worth the churn
+  "FBT002",
+  "FBT003",
+  "FIX",     # FIXME comments should not fail lint
+  "G004",    # f-strings in logging calls are the house style
+  "INP001",  # single-file CLI packages are intentionally namespace-less
+  "PLR0911", # complexity metrics not enforced
+  "PLR0912",
+  "PLR0913",
+  "PLR0915",
+  "S603",    # subprocess-without-shell-check: CLIs shell out constantly
+  "S607",    # PATH-relative process names are intentional (nix wrappers)
+  "T201",    # print is the user-facing output of these CLIs
+  "TD",      # TODO comment formatting
+  "D205",    # docstring summary reflow: cosmetic, large existing surface
+  "D400",    # docstring trailing period: cosmetic, same as D415
+  "TRY003",  # raise-vanilla-args: compliance forces custom exception classes;
+             # changing raised types is a semantic API change out of scope here
+  "S310",    # urlopen audit: our urllib CLIs build URLs from https:// string
+             # literals, so the scheme can't be attacker-controlled; same
+             # false-positive audit class as S603/S607 above
+]
+
+[lint.per-file-ignores]
+# Test suites:
+# - S101/S105/SLF001/PLR2004: asserts, dummy secrets, private-member access
+#   and literal expected values are what test code is made of
+# - PT009/PT027: suites are deliberately unittest.TestCase-based (run under
+#   pytest in the nix sandbox); rewriting ~540 assertions is pure churn
+# - ANN: no annotation requirement for test code
+# - RUF001: tests assert on real-world Unicode API payloads (wiki content)
+# - S106: dummy tokens passed as keyword args in fixtures, same class as S105
+# - S108: literal /tmp fixture paths asserted in built argv, never opened
+"{test_*,*_test,**/tests/*}.py" = [
+  "SLF001",
+  "S101",
+  "S105",
+  "S106",
+  "S108",
+  "PLR2004",
+  "PT009",
+  "PT027",
+  "ANN",
+  "RUF001",
+]
+# checks/ holds VM & headless-quickshell test harnesses: imperative driver
+# scripts only verifiable by booting the full check. They are this repo's
+# test files, so the test-suite ignores apply (S101/S105/PLR2004/SLF001/ANN),
+# plus harness idioms whose "fixes" are semantic rewrites we cannot cheaply
+# verify: broad except/pass/continue in poll-retry loops (BLE001/S110/S112),
+# long-lived open() handles for subprocess redirection (SIM115), timeout
+# parameters and blocking file reads in async ws drivers (ASYNC109/ASYNC230),
+# module-level state in mock daemons (PLW0603), 0o755 on scripts injected
+# into VMs (S103), fixed /tmp paths inside the sandboxed VM (S108), and ~500
+# os.path call sites (PTH) not worth converting in throwaway drivers.
+"checks/**" = [
+  "SLF001",
+  "S101",
+  "S105",
+  "PLR2004",
+  "ANN",
+  "PTH",
+  "BLE001",
+  "S110",
+  "S112",
+  "SIM115",
+  "ASYNC109",
+  "ASYNC230",
+  "PLW0603",
+  "S103",
+  "S108",
+]
+# Calamares loads this as a plugin: module-level job state is its API.
+"packages/calamares-spaces-extensions/files/main.py" = ["PLW0603"]

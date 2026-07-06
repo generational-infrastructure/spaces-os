@@ -12,10 +12,10 @@ _: {
   programs.shfmt.enable = true;
   programs.shellcheck.enable = true;
 
-  # Python
+  # Python: rule selection lives in the repo-root ruff.toml (single source
+  # of truth); ruff resolves it for every file treefmt hands it.
   programs.ruff-format.enable = true;
   programs.ruff-check.enable = true;
-  programs.ruff-check.extendSelect = [ "I" ];
 
   # JS/TS
   programs.prettier.enable = true;
