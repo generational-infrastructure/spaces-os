@@ -5,7 +5,7 @@
 //
 // Every bubble in a session's `messages` array is one flat record:
 //
-//   { id, from, text, ts, state, tries, ack, image, replyTo, type }
+//   { id, from, text, ts, state, image, replyTo, type }
 //
 //   from  ∈ "me" | "peer"
 //   state ∈ "sent" | "streaming"
@@ -13,12 +13,13 @@
 //         | "prompt" | "thinking" | "approval"
 //
 // plus per-kind extras (confirmTitle/confirmState, approval*,
-// prompt*) carried only by the matching type. The record shape is a
-// wire/persistence contract shared with the test probes and sibling
-// clients — constructors here are the ONLY place it is built, so a
-// forgotten field is a bug in one function instead of in whichever of
-// nine call sites drifted. Consumers discriminate through the
-// predicates below, never by poking `type` strings inline.
+// prompt*) carried only by the matching type. Records are panel-local
+// view state — never persisted or sent on the wire — and the shape is
+// frozen by checks/pi-chat-msg-schema. Production code builds records
+// only through these constructors, so a forgotten field is a bug in
+// one function instead of in whichever of nine call sites drifted.
+// Consumers discriminate through the predicates below, never by
+// poking `type` strings inline.
 
 // ── constructors (one per message kind) ──────────────────────────────
 
@@ -27,10 +28,8 @@ function _base(id, from, ts) {
     id: id,
     from: from,
     text: "",
-    ts: (ts === undefined || ts === null) ? Date.now() : ts,
+    ts: ts,
     state: "sent",
-    tries: 0,
-    ack: "",
     image: "",
     replyTo: "",
     type: "",
@@ -40,7 +39,7 @@ function _base(id, from, ts) {
 // Plain user text (optimistic local echo, remote mirror, history import).
 function user(id, text, ts, replyTo) {
   const m = _base(id, "me", ts);
-  m.text = text;
+  m.text = text || "";
   m.replyTo = replyTo || "";
   return m;
 }
@@ -57,7 +56,7 @@ function userImage(id, path, ts, replyTo) {
 // Completed assistant text (history import).
 function assistant(id, text, ts) {
   const m = _base(id, "peer", ts);
-  m.text = text;
+  m.text = text || "";
   return m;
 }
 
@@ -79,7 +78,7 @@ function thinking(id, ts) {
 // Centered system line (tool executions, retry notices, extension notify).
 function notification(id, text, ts) {
   const m = _base(id, "peer", ts);
-  m.text = text;
+  m.text = text || "";
   m.type = "notification";
   return m;
 }
@@ -88,7 +87,7 @@ function notification(id, text, ts) {
 // confirmState ∈ pending | allowed | denied | resolved.
 function confirm(id, text, ts, title) {
   const m = _base(id, "peer", ts);
-  m.text = text;
+  m.text = text || "";
   m.type = "confirm";
   m.confirmTitle = title || "Run shell command?";
   m.confirmState = "pending";
@@ -116,7 +115,7 @@ function approval(id, ts, meta) {
 function prompt(id, text, ts, meta) {
   meta = meta || {};
   const m = _base(id, "peer", ts);
-  m.text = text;
+  m.text = text || "";
   m.type = "prompt";
   m.promptInstance = meta.instance || "";
   m.promptSkill = meta.skill || "";
@@ -151,8 +150,7 @@ function isPlainAssistant(m) { return !!m && m.from === "peer" && _type(m) === "
 // A prompt card still awaiting the user (absent promptState = pending);
 // the retract sweeps in PiChatBackend gate on this.
 function isPendingPrompt(m) {
-  return isPrompt(m) && ((m.promptState === undefined || m.promptState === null)
-    ? "pending" : m.promptState) === "pending";
+  return isPrompt(m) && (m.promptState ?? "pending") === "pending";
 }
 
 // Slice of `messages` the history view renders given the "hide

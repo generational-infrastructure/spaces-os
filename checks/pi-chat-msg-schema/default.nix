@@ -1,8 +1,8 @@
 # Message-entry schema contract test.
 #
 # Exercises the pure message module (programs/pi-chat/Msg.js): every
-# constructor must yield the full 10-field record ({id, from, text, ts,
-# state, tries, ack, image, replyTo, type}), the predicates must
+# constructor must yield the full 8-field record ({id, from, text, ts,
+# state, image, replyTo, type}), the predicates must
 # discriminate the stringly type tags (incl. the empty-type
 # plain-assistant case and legacy records with no `type` key at all),
 # and the streaming patch helpers must be pure array-in/array-out with

@@ -19,8 +19,9 @@ the schema on both sides, so producer drift fails this build.)
 Asserted contract, matching Main.qml's current behavior:
 
   1. no file yet                     → blank ([], "")      (onLoadFailed)
-  2. empty sessions feed             → blank ([], "")
-  3. working+waiting mix + active id → rows + highlight verbatim
+  2. working+waiting mix + active id → rows + highlight verbatim
+  3. empty sessions feed (all chats
+     closed)                         → blanks the populated bar
   4. unknown extra fields            → tolerated (parse still applies)
   5. version bump (version: 2)       → tolerated; consumer never reads
                                        `version`, feed still applies
@@ -177,13 +178,7 @@ def main():
         # onLoadFailed → blank bar.
         expect("", "", "step1 no-file")
 
-        # (2) Producer up, zero chats: the exact empty feed
-        # _writeActivity emits on an empty sessionsList.
-        write_feed({"version": 1, "activeSessionId": "", "sessions": []})
-        time.sleep(1.0)
-        expect("", "", "step2 empty feed")
-
-        # (3) Two chats, one mid-turn, focus on the working one. Literal
+        # (2) Two chats, one mid-turn, focus on the working one. Literal
         # producer output shape (see module docstring).
         write_feed(
             {
@@ -198,8 +193,16 @@ def main():
         expect(
             "sess-a|Chat A|working;sess-b|Chat B|waiting",
             "sess-a",
-            "step3 working+waiting mix + active highlight",
+            "step2 working+waiting mix + active highlight",
         )
+
+        # (3) Producer up, zero chats: the exact empty feed
+        # _writeActivity emits on an empty sessionsList must blank the
+        # populated bar. Ordered after step 2 on purpose — asserting
+        # blank from an already-blank bar would pass even if the feed
+        # were never applied.
+        write_feed({"version": 1, "activeSessionId": "", "sessions": []})
+        expect("", "", "step3 populated → empty feed blanks")
 
         # (4) A future producer adding fields must not break the bar:
         # unknown top-level and per-session keys are carried, the three

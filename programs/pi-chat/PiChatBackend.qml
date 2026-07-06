@@ -943,12 +943,12 @@ Item {
     const id = req.request_id;
     if (session.messages.some(m => m.id === id)) return;
     const arr = session.messages.slice();
-    arr.push(Msg.prompt(id, req.description || "", Date.now(), {
-      instance: instance || "",
-      skill: req.skill || "",
-      profile: req.profile || "",
-      field: req.field || "",
-      secret: !!req.secret,
+    arr.push(Msg.prompt(id, req.description, Date.now(), {
+      instance: instance,
+      skill: req.skill,
+      profile: req.profile,
+      field: req.field,
+      secret: req.secret,
     }));
     session.messages = arr;
     session.incomingNotification((req.skill || "") + " · " + (req.field || ""));

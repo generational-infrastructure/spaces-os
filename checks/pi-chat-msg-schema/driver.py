@@ -5,8 +5,8 @@ Stages the real programs/pi-chat/Msg.js next to a tiny shell.qml, runs
 quickshell offscreen, and drives the pure module over IPC
 (`test:msg call <fn> <argsJson>`). Asserts:
 
-  * every constructor yields the full 10-field record
-    ({id, from, text, ts, state, tries, ack, image, replyTo, type}),
+  * every constructor yields the full 8-field record
+    ({id, from, text, ts, state, image, replyTo, type}),
   * the predicates discriminate the stringly type tags — including the
     empty-type plain-assistant case and legacy records with no `type`
     key at all,
@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 
-FIELDS = {"id", "from", "text", "ts", "state", "tries", "ack", "image", "replyTo", "type"}
+FIELDS = {"id", "from", "text", "ts", "state", "image", "replyTo", "type"}
 
 
 def fail(msg: str) -> None:
@@ -153,13 +153,12 @@ def main() -> None:
         if not wait_until(ipc_ready, timeout_s=30):
             die("quickshell never bound the test:msg IPC target")
 
-        # ── constructors: full 10-field record, kind-correct values ──
+        # ── constructors: full 8-field record, kind-correct values ──
 
         user = call("user", "u1", "hi there", 123, "r9")
         check_record("user", user, {
             "id": "u1", "from": "me", "text": "hi there", "ts": 123,
-            "state": "sent", "tries": 0, "ack": "", "image": "",
-            "replyTo": "r9", "type": "",
+            "state": "sent", "image": "", "replyTo": "r9", "type": "",
         })
 
         img = call("userImage", "u2", "/tmp/shot.png", 124, "")
@@ -230,10 +229,11 @@ def main() -> None:
             "promptField": "", "promptSecret": False, "promptState": "pending",
         })
 
-        # ts omitted → constructor stamps a real clock.
-        stamped = call("notification", "n2", "x")
-        check("default ts is number", isinstance(stamped.get("ts"), (int, float)), True)
-        check("default ts positive", stamped.get("ts", 0) > 0, True)
+        # text omitted → the constructor owns the "" default (call sites
+        # pass raw event values). ts has no default: every production
+        # caller stamps its own clock.
+        blank = call("notification", "n2", None, 132)
+        check("null text defaults empty", blank.get("text"), "")
 
         # ── predicates ──
 

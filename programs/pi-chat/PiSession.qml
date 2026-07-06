@@ -676,12 +676,12 @@ QtObject {
   function _handleExtensionRequest(ev) {
     if (ev.method === "confirm") {
       _pendingExtensionUI[ev.id] = true;
-      _appendMessage(Msg.confirm(ev.id, ev.message || "", _now(), ev.title));
+      _appendMessage(Msg.confirm(ev.id, ev.message, _now(), ev.title));
       incomingNotification(ev.title || "confirm");
       return;
     }
     if (ev.method === "notify") {
-      _appendNoticeBubble(ev.message || "");
+      _appendNoticeBubble(ev.message);
       return;
     }
     if (ev.method === "select" || ev.method === "input" || ev.method === "editor") {
@@ -699,7 +699,7 @@ QtObject {
   function _handleApprovalRequest(ev) {
     _pendingApprovals[ev.id] = true;
     _appendMessage(Msg.approval(ev.id, _now(), {
-      integration: ev.integration || "",
+      integration: ev.integration,
       tool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
       args: JSON.stringify(ev.args || {}, null, 2),
     }));

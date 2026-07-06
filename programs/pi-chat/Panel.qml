@@ -551,7 +551,7 @@ Item {
         if (count === 0) return;
         if (count <= _lastCount) { _lastCount = count; return; }
         _lastCount = count;
-        if (Msg.isMine(model[0] ?? null)) { _follow = true; positionViewAtBeginning(); }
+        if (Msg.isMine(model[0])) { _follow = true; positionViewAtBeginning(); }
         else if (!_follow) unseen++;
       }
     }

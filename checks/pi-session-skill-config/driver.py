@@ -42,7 +42,7 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2):
 
 
 def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
-    """Copy shell.qml + PiSession.qml + Commons/ into work_dir/shell."""
+    """Copy shell.qml + PiSession.qml + Msg.js + Commons/ into work_dir/shell."""
     shell_root = os.path.join(work_dir, "shell")
     os.makedirs(shell_root, exist_ok=True)
     shutil.copy2(

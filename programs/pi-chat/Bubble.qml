@@ -230,26 +230,12 @@ Item {
           pointSize: Style.fontSizeM
           color: Color.mOnSurfaceVariant
         }
-        // Delivery ladder: 🕓 pending → ✓ sent → ✓✓/emoji read.
-        // ⚠ when retries pile up — tap to force, long-press to cancel.
+        // Delivery ladder: 🕓 pending → ✓ sent.
         NText {
           visible: row.mine
-          text: {
-            if ((row.msg.tries ?? 0) > 0) return "⚠";
-            if (row.msg.state === row.pendingState) return "🕓";
-            const a = row.msg.ack ?? "";
-            if (a === "") return "✓";
-            return (a === "+" || a === "✓") ? "✓✓" : a;
-          }
+          text: row.msg.state === row.pendingState ? "🕓" : "✓"
           pointSize: Style.fontSizeL
-          color: (row.msg.tries ?? 0) > 0
-            ? Color.mError
-            : Qt.alpha(Color.mOnPrimary, 0.8)
-          TapHandler {
-            enabled: (row.msg.tries ?? 0) > 0
-            onTapped: row.retryRequested()
-            onLongPressed: row.cancelRequested()
-          }
+          color: Qt.alpha(Color.mOnPrimary, 0.8)
         }
       }
     }
@@ -470,7 +456,7 @@ Item {
       if (s === "retracted") return Color.mOutline;
       return Color.mPrimary;
     }
-    readonly property bool pending: (row.msg.promptState ?? "pending") === "pending"
+    readonly property bool pending: Msg.isPendingPrompt(row.msg)
     ColumnLayout {
       id: promptCol
       anchors.fill: parent

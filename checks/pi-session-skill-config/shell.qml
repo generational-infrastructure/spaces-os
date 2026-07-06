@@ -7,6 +7,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "Msg.js" as Msg
 
 Item {
   id: root
@@ -86,7 +87,7 @@ Item {
     Qt.callLater(() => c.destroy(2000));
   }
 
-  // ── event handling (straight from PiChatBackend) ───────────────
+  // ── event handling (mirrors PiChatBackend; records via Msg.js) ─
 
   function _recv(raw) {
     let ev;
@@ -111,23 +112,13 @@ Item {
     if (!req || !req.request_id) return;
     const id = req.request_id;
     if (session.messages.some(m => m.id === id)) return;
-    const entry = {
-      id: id,
-      text: req.description || "",
-      ts: Date.now(),
-      ack: "", image: "", replyTo: "",
-      state: "sent", tries: 0,
-      from: "peer",
-      type: "prompt",
-      promptInstance: "",
-      promptSkill: req.skill || "",
-      promptProfile: req.profile || "",
-      promptField: req.field || "",
-      promptSecret: !!req.secret,
-      promptState: "pending",
-    };
     const arr = session.messages.slice();
-    arr.push(entry);
+    arr.push(Msg.prompt(id, req.description, Date.now(), {
+      skill: req.skill,
+      profile: req.profile,
+      field: req.field,
+      secret: req.secret,
+    }));
     session.messages = arr;
   }
 
@@ -135,9 +126,7 @@ Item {
     const msgs = session.messages || [];
     const i = msgs.findIndex(m => m.id === rid);
     if (i < 0) return;
-    const m = msgs[i];
-    if (m.type !== "prompt") return;
-    if ((m.promptState ?? "pending") !== "pending") return;
+    if (!Msg.isPendingPrompt(msgs[i])) return;
     session.patch(rid, { promptState: "retracted" });
   }
 
@@ -147,11 +136,9 @@ Item {
     const arr = (session.messages || []).slice();
     let changed = false;
     for (let i = 0; i < arr.length; i++) {
-      const m = arr[i];
-      if (m.type !== "prompt") continue;
-      if ((m.promptState ?? "pending") !== "pending") continue;
-      if (!live[m.id]) {
-        arr[i] = Object.assign({}, m, { promptState: "retracted" });
+      if (!Msg.isPendingPrompt(arr[i])) continue;
+      if (!live[arr[i].id]) {
+        arr[i] = Object.assign({}, arr[i], { promptState: "retracted" });
         changed = true;
       }
     }
