@@ -30,11 +30,11 @@ const skillAPIVersion = 1
 
 // skillRequest is one request over the skill-config api seam.
 type skillRequest struct {
-	V       int    `json:"v"`
-	Op      string `json:"op"`
-	Skill   string `json:"skill"`
-	Profile string `json:"profile,omitempty"`
-	Field   string `json:"field,omitempty"`
+	V       int     `json:"v"`
+	Op      string  `json:"op"`
+	Skill   string  `json:"skill"`
+	Profile string  `json:"profile,omitempty"`
+	Field   string  `json:"field,omitempty"`
 	Value   *string `json:"value,omitempty"`
 }
 
@@ -117,9 +117,9 @@ func (s *Server) callSkillConfig(env []string, req skillRequest, result any) err
 		return fmt.Errorf("skill-config api: %s", msg)
 	}
 	var envl struct {
-		V     int             `json:"v"`
-		OK    bool            `json:"ok"`
-		Error string          `json:"error"`
+		V      int             `json:"v"`
+		OK     bool            `json:"ok"`
+		Error  string          `json:"error"`
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &envl); err != nil {

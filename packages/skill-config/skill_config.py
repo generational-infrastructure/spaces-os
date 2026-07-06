@@ -31,10 +31,6 @@ from skill_store import (
     Paths,
     SkillStore,
     SkillStoreError,
-    load_toml,
-    save_toml,
-    section_get,
-    section_set,
     skill_md_schema,
 )
 
@@ -64,8 +60,6 @@ def cmd_get(args, store: SkillStore) -> None:
 
 def cmd_list(args, store: SkillStore) -> None:
     paths = store.paths
-    config_doc = load_toml(paths.config_toml)
-    secrets_doc = load_toml(paths.secrets_toml)
 
     if getattr(args, "json", False):
         if not args.target:
@@ -77,26 +71,28 @@ def cmd_list(args, store: SkillStore) -> None:
     if args.target:
         parts = args.target.split(".")
         skill = store.resolve_skill(parts[0])
+        # The snapshot carries per-profile config values and secret
+        # set-status; the schema supplies the names of unset fields.
         cfg_fields, sec_fields = store.load_schema(skill)
+        snapshot = store.profiles_snapshot(skill)["profiles"]
 
         if len(parts) == 2:
             profiles = [parts[1]]
         else:
-            profiles = store.profile_names(skill)
+            profiles = sorted(snapshot)
             if not profiles:
                 print(f"{skill}: no profiles configured")
                 return
 
         for profile in profiles:
+            state = snapshot.get(profile, {"config": {}, "secrets": {}})
             print(f"[{skill}.{profile}]")
-            cfg_section = section_get(config_doc, skill, profile)
-            sec_section = section_get(secrets_doc, skill, profile)
             for name in cfg_fields:
-                val = cfg_section.get(name)
+                val = state["config"].get(name)
                 rendered = repr(val) if val is not None else "[unset]"
                 print(f"  {name} = {rendered}")
             for name in sec_fields:
-                tag = "[set]" if sec_section.get(name) is not None else "[unset]"
+                tag = "[set]" if state["secrets"].get(name) else "[unset]"
                 print(f"  {name} = {tag}")
             print()
         return
@@ -204,12 +200,7 @@ def cmd_request_input(args, store: SkillStore) -> None:
         value = terminal.get("value", "")
         if not isinstance(value, str):
             sys.exit("error: daemon returned non-string value")
-        # Route to the right TOML based on schema.
-        doc = load_toml(route.path)
-        section = section_get(doc, skill, profile)
-        section[field] = value
-        section_set(doc, skill, profile, section)
-        save_toml(route.path, doc, route.mode)
+        store.set(skill, profile, field, value)
         # Print a confirmation so the agent has a visible signal that
         # the user submitted (small LLMs treat empty stdout as "nothing
         # happened" even when the exit code is 0).

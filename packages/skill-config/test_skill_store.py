@@ -168,3 +168,19 @@ def test_resolve_instance_ambiguous_raises(tmp_path, monkeypatch):
     assert "a, b" in str(ei.value)
     # A flag or a single candidate resolves fine.
     assert skill_store.resolve_instance("x", var_lib=var_lib) == "x"
+
+
+def test_unreadable_store_file_raises_store_io_error(tmp_path, monkeypatch):
+    paths = make_paths(tmp_path, monkeypatch, env_schema=MAIL_SCHEMA)
+    store = skill_store.SkillStore(paths)
+    store.set("mail", "work", "imap_host", "imap.corp.com")
+    (tmp_path / "config.toml").chmod(0o000)
+    try:
+        with pytest.raises(skill_store.StoreIOError) as ei:
+            store.get("mail", "work", "imap_host")
+        # StoreIOError is a SkillStoreError, so every front end already
+        # maps it to its error channel instead of a traceback.
+        assert isinstance(ei.value, skill_store.SkillStoreError)
+        assert "config.toml" in str(ei.value)
+    finally:
+        (tmp_path / "config.toml").chmod(0o644)

@@ -190,3 +190,15 @@ def test_garbage_stdin_rejected_in_envelope(tmp_path):
     doc = json.loads(proc.stdout)
     assert doc["ok"] is False
     assert "malformed" in doc["error"]
+
+
+def test_store_io_failure_travels_in_envelope(tmp_path):
+    cfg, _sec, env = _env_schema(tmp_path)
+    envelope(set_req("mail", "work", "imap_host", "imap.corp.com"), env, tmp_path)
+    cfg.chmod(0o000)
+    try:
+        doc = envelope({"v": 1, "op": "profiles", "skill": "mail"}, env, tmp_path)
+    finally:
+        cfg.chmod(0o644)
+    assert doc["ok"] is False
+    assert "config.toml" in doc["error"]

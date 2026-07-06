@@ -67,6 +67,10 @@ class SchemaError(SkillStoreError):
     pass
 
 
+class StoreIOError(SkillStoreError):
+    """A store file could not be read or written (permissions, disk full)."""
+
+
 class UnknownFieldError(SkillStoreError):
     def __init__(self, field: str, skill: str):
         super().__init__(f"unknown field '{field}' for skill '{skill}'")
@@ -143,17 +147,23 @@ def skill_md_schema(skill_dir: Path) -> tuple[dict, dict]:
 
 
 def load_toml(path: Path) -> tomlkit.TOMLDocument:
-    if not path.exists():
-        return tomlkit.document()
-    return tomlkit.parse(path.read_text())
+    try:
+        if not path.exists():
+            return tomlkit.document()
+        return tomlkit.parse(path.read_text())
+    except OSError as e:
+        raise StoreIOError(f"cannot read {path}: {e}") from e
 
 
 def save_toml(path: Path, doc: tomlkit.TOMLDocument, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(tomlkit.dumps(doc))
-    tmp.chmod(mode)
-    tmp.rename(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(tomlkit.dumps(doc))
+        tmp.chmod(mode)
+        tmp.rename(path)
+    except OSError as e:
+        raise StoreIOError(f"cannot write {path}: {e}") from e
 
 
 def section_get(doc: tomlkit.TOMLDocument, skill: str, profile: str) -> dict:
