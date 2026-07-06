@@ -19,6 +19,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import "Msg.js" as Msg
 
 
 PanelWindow {
@@ -150,7 +151,7 @@ PanelWindow {
       if (!obj || !Array.isArray(obj.messages)) return "";
       for (let i = obj.messages.length - 1; i >= 0; i--) {
         const m = obj.messages[i];
-        if (m && m.from === "peer" && (m.type || "") === "" && m.text) return m.text;
+        if (m && Msg.isPlainAssistant(m) && m.text) return m.text;
       }
       return "";
     }

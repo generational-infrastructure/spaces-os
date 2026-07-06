@@ -6,6 +6,7 @@ import Quickshell
 import qs.Commons
 import qs.Widgets
 import "MsgText.js" as Txt
+import "Msg.js" as Msg
 
 // One chat row: hover-reveal reply button + the bubble itself.
 // Panel owns all state; this takes data in and emits intent out so the
@@ -16,7 +17,7 @@ Item {
   // ── in ───────────────────────────────────────────────────────────
   // modelData because that's what ListView injects into delegate
   // roots; aliased to msg for readability.
-  required property var modelData // {id, from, text, ts, ack, image, replyTo, state, tries}
+  required property var modelData // message-entry record — see Msg.js
   readonly property var msg: modelData
   property string pendingState: "pending"
   property string searchQuery: ""
@@ -44,12 +45,12 @@ Item {
   // Panel forwards to chat.approvalRespond.
   signal approvalRequested(string decision)
 
-  readonly property bool mine: row.msg.from === "me"
-  readonly property bool isNotification: (row.msg.type ?? "") === "notification"
-  readonly property bool isConfirm: (row.msg.type ?? "") === "confirm"
-  readonly property bool isPrompt: (row.msg.type ?? "") === "prompt"
-  readonly property bool isThinking: (row.msg.type ?? "") === "thinking"
-  readonly property bool isApproval: (row.msg.type ?? "") === "approval"
+  readonly property bool mine: Msg.isMine(row.msg)
+  readonly property bool isNotification: Msg.isNotification(row.msg)
+  readonly property bool isConfirm: Msg.isConfirm(row.msg)
+  readonly property bool isPrompt: Msg.isPrompt(row.msg)
+  readonly property bool isThinking: Msg.isThinking(row.msg)
+  readonly property bool isApproval: Msg.isApproval(row.msg)
   // Match locally — O(1) and can't drift from Panel's hit list since
   // it's the same predicate.
   readonly property bool searchHit:

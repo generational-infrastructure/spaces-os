@@ -31,6 +31,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import "Msg.js" as Msg
 
 QtObject {
   id: session
@@ -132,11 +133,7 @@ QtObject {
   }
 
   function patch(id, props) {
-    const arr = messages.slice();
-    const i = arr.findIndex(x => x.id === id);
-    if (i < 0) return;
-    arr[i] = Object.assign({}, arr[i], props);
-    messages = arr;
+    messages = Msg.patch(messages, id, props);
   }
 
   // ── pi command surface — these are what Panel.qml/Bubble.qml call ──
@@ -145,18 +142,7 @@ QtObject {
     if (!text || !text.trim()) return;
     spawn();
     const id = _localId();
-    _appendMessage({
-      id: id,
-      from: "me",
-      text: text,
-      ts: _now(),
-      state: "sent",
-      tries: 0,
-      ack: "",
-      image: "",
-      replyTo: replyTarget ? replyTarget.id : "",
-      type: "",
-    });
+    _appendMessage(Msg.user(id, text, _now(), replyTarget ? replyTarget.id : ""));
     replyTarget = null;
     typing = true;
     busy = true;
@@ -602,18 +588,7 @@ QtObject {
     if (!me) return;
     if (me.type === "text_start") {
       _streamingId = "stream-" + _now().toString(36);
-      _appendMessage({
-        id: _streamingId,
-        from: "peer",
-        text: "",
-        ts: _now(),
-        state: "streaming",
-        tries: 0,
-        ack: "",
-        image: "",
-        replyTo: "",
-        type: "",
-      });
+      _appendMessage(Msg.assistantStream(_streamingId, _now()));
       typing = false;
       // First text bubble of this assistant message starts the wall
       // clock for the tps calculation; the last text bubble wins as
@@ -622,55 +597,24 @@ QtObject {
       _assistantLastTextBubbleId = _streamingId;
     } else if (me.type === "text_delta") {
       if (!_streamingId) _handleMessageUpdate({ assistantMessageEvent: { type: "text_start" } });
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _streamingId);
-      if (i >= 0) {
-        arr[i] = Object.assign({}, arr[i], { text: arr[i].text + (me.delta || "") });
-        messages = arr;
-      }
+      messages = Msg.appendDelta(messages, _streamingId, me.delta);
     } else if (me.type === "text_end") {
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _streamingId);
-      if (i >= 0) {
-        arr[i] = Object.assign({}, arr[i], { state: "sent", text: me.content || arr[i].text });
-        messages = arr;
-      }
+      messages = Msg.finalizeStream(messages, _streamingId, me.content);
       _streamingId = "";
     } else if (me.type === "thinking_start") {
       _thinkingId = "thinking-" + _now().toString(36);
-      _appendMessage({
-        id: _thinkingId,
-        from: "peer",
-        text: "",
-        ts: _now(),
-        state: "streaming",
-        tries: 0,
-        ack: "",
-        image: "",
-        replyTo: "",
-        type: "thinking",
-      });
+      _appendMessage(Msg.thinking(_thinkingId, _now()));
     } else if (me.type === "thinking_delta") {
       if (!_thinkingId) return;
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _thinkingId);
-      if (i >= 0) {
-        arr[i] = Object.assign({}, arr[i], { text: arr[i].text + (me.delta || "") });
-        messages = arr;
-      }
+      messages = Msg.appendDelta(messages, _thinkingId, me.delta);
     } else if (me.type === "thinking_end") {
       if (!_thinkingId) return;
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _thinkingId);
-      if (i >= 0) {
-        const finalText = me.content || arr[i].text;
-        if (!finalText) {
-          // Empty thinking block (omitted/summarized) — remove it.
-          arr.splice(i, 1);
-        } else {
-          arr[i] = Object.assign({}, arr[i], { state: "sent", text: finalText });
-        }
-        messages = arr;
+      const cur = messages.find(x => x.id === _thinkingId);
+      if (cur) {
+        const finalText = me.content || cur.text;
+        // Empty thinking block (omitted/summarized) — remove it.
+        if (!finalText) messages = Msg.remove(messages, _thinkingId);
+        else messages = Msg.finalizeStream(messages, _thinkingId, finalText);
       }
       _thinkingId = "";
     }
@@ -678,21 +622,11 @@ QtObject {
 
   function _finalizeStreaming() {
     if (_streamingId) {
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _streamingId);
-      if (i >= 0) {
-        arr[i] = Object.assign({}, arr[i], { state: "sent" });
-        messages = arr;
-      }
+      messages = Msg.patch(messages, _streamingId, { state: "sent" });
       _streamingId = "";
     }
     if (_thinkingId) {
-      const arr = messages.slice();
-      const i = arr.findIndex(x => x.id === _thinkingId);
-      if (i >= 0) {
-        arr[i] = Object.assign({}, arr[i], { state: "sent" });
-        messages = arr;
-      }
+      messages = Msg.patch(messages, _thinkingId, { state: "sent" });
       _thinkingId = "";
     }
   }
@@ -723,18 +657,7 @@ QtObject {
   function _appendToolBubble(ev) {
     const summary = _summarizeTool(ev.toolName, ev.args);
     if (!summary) return;
-    _appendMessage({
-      id: "tool-" + (ev.toolCallId || _now().toString(36)),
-      from: "peer",
-      text: summary,
-      ts: _now(),
-      state: "sent",
-      tries: 0,
-      ack: "",
-      image: "",
-      replyTo: "",
-      type: "notification",
-    });
+    _appendMessage(Msg.notification("tool-" + (ev.toolCallId || _now().toString(36)), summary, _now()));
   }
 
   function _summarizeTool(name, args) {
@@ -747,29 +670,13 @@ QtObject {
   }
 
   function _appendNoticeBubble(text) {
-    _appendMessage({
-      id: "notice-" + _now().toString(36),
-      from: "peer", text: text, ts: _now(),
-      state: "sent", tries: 0, ack: "", image: "", replyTo: "",
-      type: "notification",
-    });
+    _appendMessage(Msg.notification("notice-" + _now().toString(36), text, _now()));
   }
 
   function _handleExtensionRequest(ev) {
     if (ev.method === "confirm") {
       _pendingExtensionUI[ev.id] = true;
-      _appendMessage({
-        id: ev.id,
-        from: "peer",
-        text: ev.message || "",
-        ts: _now(),
-        state: "sent",
-        tries: 0,
-        ack: "", image: "", replyTo: "",
-        type: "confirm",
-        confirmTitle: ev.title || "Run shell command?",
-        confirmState: "pending",
-      });
+      _appendMessage(Msg.confirm(ev.id, ev.message || "", _now(), ev.title));
       incomingNotification(ev.title || "confirm");
       return;
     }
@@ -791,20 +698,11 @@ QtObject {
   // the user is consenting to; {once, session, deny} reply over the ws.
   function _handleApprovalRequest(ev) {
     _pendingApprovals[ev.id] = true;
-    _appendMessage({
-      id: ev.id,
-      from: "peer",
-      text: "",
-      ts: _now(),
-      state: "sent",
-      tries: 0,
-      ack: "", image: "", replyTo: "",
-      type: "approval",
-      approvalIntegration: ev.integration || "",
-      approvalTool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
-      approvalArgs: JSON.stringify(ev.args || {}, null, 2),
-      approvalState: "pending",
-    });
+    _appendMessage(Msg.approval(ev.id, _now(), {
+      integration: ev.integration || "",
+      tool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
+      args: JSON.stringify(ev.args || {}, null, 2),
+    }));
     incomingNotification(ev.toolName || "approval");
   }
 
@@ -863,18 +761,9 @@ QtObject {
         .join("\n")
         .trim();
       if (!text) continue;
-      out.push({
-        id: "hist-" + out.length + "-" + _now().toString(36),
-        from: m.role === "user" ? "me" : "peer",
-        text: text,
-        ts: m.timestamp || _now(),
-        state: "sent",
-        tries: 0,
-        ack: "",
-        image: "",
-        replyTo: "",
-        type: "",
-      });
+      const id = "hist-" + out.length + "-" + _now().toString(36);
+      const ts = m.timestamp || _now();
+      out.push(m.role === "user" ? Msg.user(id, text, ts, "") : Msg.assistant(id, text, ts));
     }
     if (out.length > 0) {
       messages = out.concat(messages);
@@ -894,20 +783,11 @@ QtObject {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (!m || (m.ts || 0) < cutoff) break;
-      if (m.from === "me" && m.text === text) return; // own echo
+      if (Msg.isMine(m) && m.text === text) return; // own echo
     }
-    _appendMessage({
-      id: "user-" + _now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36),
-      from: "me",
-      text: text,
-      ts: message.timestamp || _now(),
-      state: "sent",
-      tries: 0,
-      ack: "",
-      image: "",
-      replyTo: "",
-      type: "",
-    });
+    _appendMessage(Msg.user(
+      "user-" + _now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36),
+      text, message.timestamp || _now(), ""));
   }
 
   function _extractUserMessageText(message) {
@@ -929,18 +809,7 @@ QtObject {
     // visual feedback the moment the picker closes. The base64 encoding
     // runs asynchronously; the prompt is sent to pi on completion.
     const id = _localId();
-    _appendMessage({
-      id: id,
-      from: "me",
-      text: "",
-      ts: _now(),
-      state: "sent",
-      tries: 0,
-      ack: "",
-      image: path,
-      replyTo: replyTarget ? replyTarget.id : "",
-      type: "",
-    });
+    _appendMessage(Msg.userImage(id, path, _now(), replyTarget ? replyTarget.id : ""));
     replyTarget = null;
     needsPersist();
     const reader = _imageReaderComponent.createObject(session);

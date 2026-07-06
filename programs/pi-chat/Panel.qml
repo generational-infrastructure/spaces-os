@@ -8,7 +8,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Widgets
 import "MsgText.js" as Txt
-import "MsgFilter.js" as MsgFilter
+import "Msg.js" as Msg
 
 Item {
   id: root
@@ -458,7 +458,7 @@ Item {
       // bottom" is Qt's atYEnd, and scrolling up drives contentY toward
       // originY.
       verticalLayoutDirection: ListView.BottomToTop
-      model: MsgFilter.visible(root.chat?.messages ?? [], root.showThinking).slice().reverse()
+      model: Msg.visible(root.chat?.messages ?? [], root.showThinking).slice().reverse()
       clip: true
       // atYEnd is the only honest "pinned to the newest message" signal
       // here — a `contentY < N` test reads true everywhere. Drives the
@@ -551,7 +551,7 @@ Item {
         if (count === 0) return;
         if (count <= _lastCount) { _lastCount = count; return; }
         _lastCount = count;
-        if (model[0]?.from === "me") { _follow = true; positionViewAtBeginning(); }
+        if (Msg.isMine(model[0] ?? null)) { _follow = true; positionViewAtBeginning(); }
         else if (!_follow) unseen++;
       }
     }

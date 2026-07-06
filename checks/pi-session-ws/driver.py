@@ -64,7 +64,7 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     os.makedirs(root, exist_ok=True)
     shutil.copy2(os.path.join(test_dir, "shell.qml"), os.path.join(root, "shell.qml"))
     # The real transport components under test, plus the Commons they import.
-    for f in ("PiExecutor.qml", "PiSession.qml"):
+    for f in ("PiExecutor.qml", "PiSession.qml", "Msg.js"):
         shutil.copy2(os.path.join(plugin_dir, f), os.path.join(root, f))
     shutil.copytree(
         os.path.join(plugin_dir, "Commons"),

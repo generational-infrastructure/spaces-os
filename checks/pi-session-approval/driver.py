@@ -62,7 +62,7 @@ def stage_shell(test_dir: str, plugin_dir: str, work_dir: str) -> str:
     root = os.path.join(work_dir, "shell")
     os.makedirs(root, exist_ok=True)
     shutil.copy2(os.path.join(test_dir, "shell.qml"), os.path.join(root, "shell.qml"))
-    for f in ("PiExecutor.qml", "PiSession.qml"):
+    for f in ("PiExecutor.qml", "PiSession.qml", "Msg.js"):
         shutil.copy2(os.path.join(plugin_dir, f), os.path.join(root, f))
     shutil.copytree(
         os.path.join(plugin_dir, "Commons"),

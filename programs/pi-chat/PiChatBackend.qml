@@ -15,6 +15,7 @@ import QtQml
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import "Msg.js" as Msg
 
 Item {
   id: root
@@ -941,23 +942,14 @@ Item {
     if (!session) return;
     const id = req.request_id;
     if (session.messages.some(m => m.id === id)) return;
-    const entry = {
-      id: id,
-      text: req.description || "",
-      ts: Date.now(),
-      ack: "", image: "", replyTo: "",
-      state: "sent", tries: 0,
-      from: "peer",
-      type: "prompt",
-      promptInstance: instance || "",
-      promptSkill: req.skill || "",
-      promptProfile: req.profile || "",
-      promptField: req.field || "",
-      promptSecret: !!req.secret,
-      promptState: "pending",
-    };
     const arr = session.messages.slice();
-    arr.push(entry);
+    arr.push(Msg.prompt(id, req.description || "", Date.now(), {
+      instance: instance || "",
+      skill: req.skill || "",
+      profile: req.profile || "",
+      field: req.field || "",
+      secret: !!req.secret,
+    }));
     session.messages = arr;
     session.incomingNotification((req.skill || "") + " · " + (req.field || ""));
   }
@@ -967,9 +959,7 @@ Item {
       const s = _sessionObjs[id];
       const i = (s.messages || []).findIndex(m => m.id === rid);
       if (i < 0) continue;
-      const m = s.messages[i];
-      if (m.type !== "prompt") continue;
-      if ((m.promptState ?? "pending") !== "pending") continue;
+      if (!Msg.isPendingPrompt(s.messages[i])) continue;
       s.patch(rid, { promptState: "retracted" });
     }
   }
@@ -981,7 +971,7 @@ Item {
       let changed = false;
       for (let i = 0; i < arr.length; i++) {
         const m = arr[i];
-        if (m.type === "prompt" && (m.promptState ?? "pending") === "pending") {
+        if (Msg.isPendingPrompt(m)) {
           arr[i] = Object.assign({}, m, { promptState: "retracted" });
           changed = true;
         }
@@ -999,8 +989,7 @@ Item {
       let changed = false;
       for (let i = 0; i < arr.length; i++) {
         const m = arr[i];
-        if (m.type !== "prompt") continue;
-        if ((m.promptState ?? "pending") !== "pending") continue;
+        if (!Msg.isPendingPrompt(m)) continue;
         if (!live[m.id]) {
           arr[i] = Object.assign({}, m, { promptState: "retracted" });
           changed = true;

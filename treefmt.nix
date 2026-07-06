@@ -28,7 +28,7 @@ _: {
   # QML's JavaScript dialect (.pragma library) is not valid ES.
   programs.prettier.excludes = [
     "programs/pi-chat/MsgText.js"
-    "programs/pi-chat/MsgFilter.js"
+    "programs/pi-chat/Msg.js"
     "programs/pi-chat/BarParse.js"
     # Qt Linguist translation source: a .ts file, but XML, not TypeScript.
     "packages/calamares-spaces-extensions/files/branding/spaces-os/lang/calamares-spaces-os_en.ts"
