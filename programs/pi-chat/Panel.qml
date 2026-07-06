@@ -47,8 +47,8 @@ Item {
 
 
   // No implicitWidth/implicitHeight on purpose. shell.qml's
-  // PanelWindow requests the wayland-surface size via its own
-  // `implicitWidth: 480`, and QQuickWindow uses its contentItem's
+  // FloatingWindow requests its initial size via its own
+  // `implicitWidth`, and QQuickWindow uses its contentItem's
   // implicit size as the window's implicit. Anything we advertise
   // here would propagate up and replace the shell's value, sizing
   // the surface to whatever we put (the noctalia SmartPanel host
@@ -796,10 +796,10 @@ Item {
     }
   }
 
-  // Focus the compose box when the panel surface gains keyboard focus.
-  // The shell requests Exclusive keyboard focus while visible, so the
-  // layer-shell `active` flag flips true as soon as the panel opens —
-  // no click needed. `active` is the moment Qt can actually take focus;
+  // Focus the compose box when the window gains keyboard focus.
+  // For a normal toplevel the compositor focuses the window as it
+  // maps, so `active` flips true as soon as the panel opens — no
+  // click needed. `active` is the moment Qt can actually take focus;
   // doing it earlier (e.g. on Component.onCompleted) races the grab.
   Connections {
     target: root.Window.window

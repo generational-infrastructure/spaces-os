@@ -1,11 +1,11 @@
 // pi-chat standalone shell entry point.
 //
-// One PanelWindow anchored to the right edge of the focused screen,
-// hidden by default. Toggled via `quickshell ipc call -c pi-chat
-// pi-chat toggle` — wire to a compositor keybind for summon-on-demand
-// UX. Layer-shell surface, so the panel never appears in alt-tab or
-// the task switcher (that's the design point — see PI_CHAT_STANDALONE_PLAN
-// for the "not visible to alt-tab" requirement that drove the choice).
+// One normal toplevel window (FloatingWindow), hidden by default.
+// Toggled via `quickshell ipc call -c pi-chat pi-chat toggle` — wire
+// to a compositor keybind for summon-on-demand UX. As a regular
+// xdg-toplevel it appears in the window list / alt-tab and is
+// tiled or floated by the compositor like any other application
+// (this replaces the original layer-shell overlay design).
 //
 // The IpcHandler block exposes the verbs the test harnesses + the
 // `pi-chat-toggle` CLI drive: `send`, `sendFile`, `newSession`,
@@ -17,37 +17,18 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
 import qs.Commons
 
-PanelWindow {
+FloatingWindow {
   id: shell
 
-  // Anchored right edge, full height. exclusiveZone:0 means the
-  // panel overlays whatever is below it instead of pushing content
-  // aside — chat is transient, not a permanent bar.
-  anchors {
-    top: true
-    right: true
-    bottom: true
-  }
-  // Width follows the screen: the golden-ratio minor portion (1/phi^2 =
-  // 0.382), so the app left visible behind the panel gets the major 61.8%.
-  // screen.width is logical (post-HiDPI) pixels, so the proportion already
-  // adapts across resolutions; the clamp keeps it usable on small laptops
-  // and from sprawling on ultrawides.
-  implicitWidth: Math.round(Math.min(900, Math.max(440, screen.width * 0.382)))
-  exclusiveZone: 0
-  // Layer-shell layer choice: Top is enough for "above normal
-  // windows, below screen-edge OSDs/lockscreens". Overlay would
-  // hover over the bar too aggressively.
-  WlrLayershell.layer: WlrLayer.Top
-  // Grab keyboard focus while the panel is shown so the compose box is
-  // focused the instant it opens — summoning the chat means you want to
-  // type. Drop to None when hidden so we never hold the keyboard away
-  // from the underlying app once the panel is dismissed. The visibility
-  // flip flips `active`, which fires the focus handler in Panel.qml.
-  WlrLayershell.keyboardFocus: shell.visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+  title: "pi-chat"
+
+  // Initial size request only — once mapped, the compositor sizes the
+  // window like any other toplevel (niri tiles it into a column).
+  implicitWidth: 560
+  implicitHeight: 800
+  minimumSize: Qt.size(440, 480)
 
   color: Color.mSurface
   visible: false
@@ -65,7 +46,7 @@ PanelWindow {
     onSettingsRequested: shell.openSettings()
   }
 
-  // Second layer-shell surface in this same process: the bottom-center
+  // The only layer-shell surface in this process: the bottom-center
   // quick-launch bar (Mod+/). Shares the one backend so a session it
   // fires lands in the same index the chat panel reads.
   QuickBar {
@@ -73,9 +54,8 @@ PanelWindow {
     backend: backend
   }
 
-  // Persistent settings window. Lives outside the layer-shell
-  // surface (FloatingWindow) so it has a normal title bar, focus,
-  // and dismissal — what users expect of a settings dialog.
+  // Persistent settings window — its own toplevel (FloatingWindow)
+  // so it gets independent focus and dismissal, like any app dialog.
   property var _settingsWindow: null
   function openSettings() {
     if (!_settingsWindow) {

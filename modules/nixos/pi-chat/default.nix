@@ -7,12 +7,12 @@
 # executors come in via `executors`/`wsUrl`. The panel itself never
 # spawns pi.
 #
-# The panel is a wlr-layer-shell surface anchored to the right edge,
+# The panel is a normal toplevel window (Quickshell FloatingWindow),
 # hidden by default, summoned via
 #   quickshell ipc -c pi-chat call pi-chat toggle
-# (wire to a compositor keybind for a global summon hotkey). Layer-
-# shell means the panel never appears in alt-tab — that's the design
-# point that ruled GNOME (no wlr-layer-shell) out of v1 scope.
+# (wire to a compositor keybind for a global summon hotkey). The
+# quick-launch bar is still a wlr-layer-shell surface, so a layer-shell
+# compositor remains required.
 #
 # Files this module owns:
 #   ~/.config/quickshell/pi-chat/              (materialized shell config, fresh mtimes for Qt qmlcache)
