@@ -1,0 +1,402 @@
+// Theme: design tokens for this repo's Slint UIs (the repo Slint styleguide).
+//
+// Copy this file next to your app's .slint sources and
+//   import { Theme, SLButton, SLCard, SLListRow } from "theme.slint";
+// Values are normative: change them here (see "Amending this styleguide" in
+// the slint-style skill), never ad hoc in components. Rationale + contrast
+// validation: references/styleguide.md in the same skill.
+//
+// Kept Slint 1.16-compatible so both the repo pin (1.17.0b2) and the nixpkgs
+// slint-viewer (1.16.x) accept it.
+
+export global Theme {
+    // Single scheme switch. Wire it to Palette.color-scheme or a host
+    // property. Every token below derives from it.
+    in-out property <bool> dark: false;
+
+    // Surfaces: the teal-slate ladder. Light: content is the brightest surface
+    // (white wells on a pale-teal window, chrome cooler still). Dark: a deep,
+    // cool teal-slate ground with the content cards lifted one step ABOVE it
+    // (conventional elevation, not the old content-darkest inversion), and the
+    // chrome/controls stepping up further. The dark ramp was cooled toward
+    // slate (hue ~197, sat ~17) to drop a murky green cast and lift card/ground
+    // separation. One ramp, flipped by `dark`.
+    out property <color> content-bg: dark ? #222c30 : #ffffff;
+    out property <color> window-bg: dark ? #151b1e : #f7f9fa;
+    out property <color> toolbar-bg: dark ? #2f3c42 : #e7f2f4;
+    out property <color> sidebar-bg: dark ? #2f3c42 : #e7f2f4;
+    out property <color> alt-row-bg: dark ? #1c2427 : #eef4f5;
+
+    // Text hierarchy. Disabled text/controls: full opacity colors, element
+    // opacity 40% (WCAG exempts disabled elements).
+    out property <color> text-primary: dark ? #ffffff : #0d1416;
+    out property <color> text-secondary: dark ? #afc6ca : #415e63;
+    // Decorative / placeholder only, never load-bearing copy: below AA on some
+    // surfaces on purpose, so it must not carry meaning on its own.
+    out property <color> text-faint: dark ? #6f8f86 : #90b2b7;
+
+    // Accent = the deep-teal ink. `accent` is a FILL. Always pair with
+    // on-accent. For accent-colored TEXT on a surface use accent-text.
+    // Accent INVERTS by scheme: deep-teal ink in light, off-white in dark, so
+    // on-accent inverts the opposite way and stays >= AA on the fill in both.
+    out property <color> accent: dark ? #ffffff : #162324;
+    out property <color> accent-hover: dark ? #e7f2f4 : #0d1416;
+    out property <color> accent-pressed: dark ? #d8e8eb : #0a0f10;
+    out property <color> on-accent: dark ? #162324 : #ffffff;
+    out property <color> accent-text: dark ? #afc6ca : #2c4347;
+
+    // Semantic. Never encode meaning by hue alone (red/green converge under
+    // CVD). Pair with wording or an icon.
+    out property <color> destructive-text: dark ? #e58bb5 : #a82e67;
+    out property <color> destructive-fill: #c43e81;
+    out property <color> success-text: dark ? #7fe0a0 : #0f7a2e;
+    out property <color> warning-text: dark ? #e0a72f : #8f5a00;
+
+    // Semantic FILLS plus their quiet tint wells. success-fill and
+    // destructive-fill are mode-invariant shapes (toggle track, danger pill):
+    // each is paired with a hairline or the fixed on-danger foreground, so the
+    // meaning never rides the low-contrast hue alone. The -100 wells back the
+    // read-only status chips, tinted per scheme so words stay legible on them.
+    out property <color> success-fill: #17b239;
+    out property <color> success-100: dark ? rgba(23, 178, 57, 0.14) : #f2f9f4;
+    out property <color> danger-100: dark ? rgba(196, 62, 129, 0.16) : #f9eaf4;
+    // Fixed white foreground for the mode-invariant destructive-fill: white on
+    // #c43e81 is 4.82:1 in both schemes, where the inverting on-accent would
+    // drop to 3.35:1 in dark. Copied verbatim from the slint-style reference.
+    out property <color> on-danger: #ffffff;
+
+    // Mint hairline and dot for the result pills (the transcript RTF readout,
+    // the ready model-status chip). The reference authored their border as a
+    // malformed 5-digit hex that renders borderless, so this restores the
+    // intended mint sibling of its Do-card border. The dot brightens in dark to
+    // hold against the deep ground where the flat success-fill reads muddy.
+    out property <color> success-200: dark ? rgba(23, 178, 57, 0.35) : #cdedd6;
+    out property <color> success-dot: dark ? #3fd06a : #17b239;
+
+    // Take-waveform tail. The played/recent bars reuse text-secondary (fg-3 in
+    // light, the lighter slate in dark), and the unplayed/far bars step down to
+    // this quieter stroke, so the row reads loud-left to quiet-right.
+    out property <color> waveform-tail: dark ? #4f747a : #afc6ca;
+
+    // Lines. focus-ring is the ONLY place blue appears, and only as a
+    // non-text indicator (darkened from raw Spaces info to clear AA on chrome).
+    // border-strong is a resting non-text outline, so it must clear 3:1. The
+    // old light #afc6ca was only 1.79:1 on content-bg. The light #64888e is
+    // 3.85:1 on content-bg, 3.64 on window-bg, 3.37 on control-bg. Dark lifts
+    // to #617e89 (3.28:1 on the lightened content-bg, 4.05 on window-bg): the
+    // old #4f747a cleared 3.17 only against the old, deeper content-bg and
+    // drops to 2.51 on the new one, so it tracked the surface up. border-soft
+    // and divider likewise tracked up so the card/chip hairlines keep their
+    // weight on the lifted cards.
+    out property <color> border-strong: dark ? #617e89 : #64888e;
+    out property <color> border-soft: dark ? #465a62 : #d8e8eb;
+    out property <color> divider: dark ? #37474e : #e7f2f4;
+    out property <color> focus-ring: dark ? #3fb5e8 : #0d7ba8;
+    // Decorative, contrast-exempt drop-shadow color for card / thumb / knob
+    // elevation: softer in light, deeper in dark. One color plus a varying
+    // drop-shadow-blur covers both the small card shadow and any larger popup.
+    // Copied verbatim from the slint-style reference theme.
+    out property <color> shadow: dark ? #00000066 : #1223241a;
+
+    // State overlays for FLAT interactive surfaces (toolbar buttons, list
+    // rows): stack a Rectangle with this color over the resting surface.
+    out property <color> hover-overlay: dark ? #FFFFFF12 : #0000000F;
+    out property <color> pressed-overlay: dark ? #FFFFFF24 : #0000001F;
+
+    // Selection fills. The ink pill pairs with the inverted on-accent.
+    // Inactive = window focus elsewhere: keep text-primary on it, not on-accent.
+    out property <color> selection: dark ? #ffffff : #162324;
+    out property <color> selection-inactive: dark ? #37474e : #d8e8eb;
+
+    // RAISED control fills (push buttons, steppers). Secondary = pale-teal fill.
+    // Dark: a raised step ABOVE the content card so a control reads lifted on it.
+    out property <color> control-bg: dark ? #2f3c42 : #e7f2f4;
+    out property <color> control-hover: dark ? #37474e : #d8e8eb;
+    out property <color> control-pressed: dark ? #3f525a : #cfe0e4;
+
+    // Spacing: 4px grid, six named steps. Use these, never bare lengths.
+    out property <length> space-xs: 4px; // icon<->label, checkbox<->label
+    out property <length> space-s: 8px; // label<->control, related siblings
+    out property <length> space-m: 12px; // between control groups, around dividers
+    out property <length> space-l: 16px; // card/group internal padding
+    out property <length> space-xl: 20px; // window content margins
+    out property <length> space-xxl: 24px; // between major sections
+
+    // Fixed metrics
+    out property <length> control-height: 28px;
+    out property <length> control-height-s: 22px;
+    out property <length> row-height: 28px; // single-line list row (44px for two-line)
+    out property <length> toolbar-height: 44px;
+    out property <length> statusbar-height: 28px;
+    out property <length> sidebar-width: 200px;
+    // In-app chrome bands for the Spaces worked-example screen: a titlebar that
+    // carries the app identity and a bottom action bar for the config verbs.
+    out property <length> titlebar-h: 56px;
+    out property <length> bottombar-h: 60px;
+
+    // Spaces component-kit metrics: full-pill controls and their knobs.
+    out property <length> pill-height: 40px; // pill buttons
+    out property <length> chip-height: 30px; // chips, status chips
+    out property <length> segmented-height: 40px; // segmented track
+    out property <length> toggle-w: 44px;
+    out property <length> toggle-h: 26px;
+    out property <length> knob: 20px; // toggle knob
+
+    // Radii. Push buttons are pills: radius = height / 2 (the Aqua lozenge,
+    // rendered flat).
+    out property <length> radius-s: 7px; // checkboxes, small tags
+    out property <length> radius-m: 10px; // inputs, combos, selection pills, flat buttons, segmented thumb
+    out property <length> radius-l: 16px; // cards, group boxes
+    out property <length> radius-field: 12px; // segmented tracks, fields
+    out property <length> radius-key: 9px; // keycaps
+
+    // Type scale. Embed Inter in the app (import "fonts/InterVariable.ttf";
+    // + Window.default-font-family). Unknown families silently fall back to
+    // the fontconfig sans (DejaVu here), which is acceptable but generic.
+    out property <string> font-family: "Inter";
+    // Mono face for machine output (the transcript well, timing readouts, field
+    // captions). Proven to load (DM Mono ships with the app), wired across the
+    // screen in the Phase 3 restyle.
+    out property <string> font-mono: "DM Mono";
+    // Spaces type scale (16/14/12, title 18). Phase 1 held the old 13/11 sizes
+    // to avoid reflow before the screen was rebuilt; the Phase 3 layout owns the
+    // whole chain now, so the scale moves to Spaces and every fixed width was
+    // re-tuned against it.
+    out property <length> font-body: 16px;
+    out property <length> font-body-s: 14px; // dense body / secondary reading size
+    out property <length> font-caption: 12px;
+    out property <length> font-action: 14px; // SemiBold action / label size
+    out property <length> font-title: 18px;
+    out property <length> font-display: 20px;
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
+
+    // Motion
+    out property <duration> anim-fast: 140ms; // pressed-state entry
+    out property <duration> anim-base: 180ms; // hover, color transitions
+    out property <duration> anim-enter: 220ms; // element/panel entry (later phase)
+    out property <duration> anim-theme: 150ms; // scheme flip (later phase)
+}
+
+// Push button: flat Aqua lozenge. Neutral by default. Set `primary: true` for
+// the single accent-filled default action per view, or `destructive: true` for
+// irreversible actions.
+export component SLButton {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    property <bool> filled: primary || destructive;
+    property <color> rest-fill: primary ? Theme.accent
+        : destructive ? Theme.destructive-fill : Theme.control-bg;
+
+    height: Theme.control-height;
+    min-width: 64px;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    // Focus ring: 2px solid, 1px gap outside the control.
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.height / 2;
+        background: root.rest-fill;
+        border-width: root.filled ? 0px : 1px;
+        border-color: Theme.border-strong;
+
+        HorizontalLayout {
+            padding-left: Theme.space-l;
+            padding-right: Theme.space-l;
+            label := Text {
+                text: root.text;
+                color: root.filled ? Theme.on-accent : Theme.text-primary;
+                font-size: Theme.font-body;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.clicked();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+        pressed when ta.pressed: {
+            body.background: root.primary ? Theme.accent-pressed
+                : root.destructive ? Theme.destructive-text : Theme.control-pressed;
+            in {
+                animate body.background { duration: Theme.anim-fast; }
+            }
+        }
+        hover when ta.has-hover: {
+            body.background: root.primary ? Theme.accent-hover
+                : root.destructive ? Theme.destructive-fill : Theme.control-hover;
+            in {
+                animate body.background { duration: Theme.anim-base; }
+            }
+            out {
+                animate body.background { duration: Theme.anim-base; }
+            }
+        }
+    ]
+}
+
+// Card / group box: heading outside, white well with soft border. Body
+// content goes into @children with the standard internal padding.
+export component SLCard {
+    in property <string> title;
+
+    VerticalLayout {
+        spacing: Theme.space-s;
+
+        if root.title != "": Text {
+            text: root.title;
+            color: Theme.text-primary;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-semibold;
+        }
+
+        Rectangle {
+            background: Theme.content-bg;
+            border-radius: Theme.radius-l;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-s;
+                @children
+            }
+        }
+    }
+}
+
+// Indeterminate busy indicator: a quiet 270° arc sweeping one turn every
+// 1.2s. Deliberately achromatic (text-secondary, never accent). Busy is
+// status, not a call to action. Defaults to a 12px (space-m) footprint so it
+// sits inline with caption text. Scale by setting width/height together.
+// Driven by animation-tick(), so it costs nothing while not instantiated.
+// The arc endpoints rotate via trig because Path has no rotation-angle.
+export component SLSpinner {
+    width: Theme.space-m;
+    height: Theme.space-m;
+
+    private property <angle> phase: (animation-tick() / 1.2s) * 360deg;
+
+    accessible-role: progress-indicator;
+    accessible-label: "busy";
+
+    arc := Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        stroke: Theme.text-secondary;
+        stroke-width: 2px;
+        fill: transparent;
+
+        MoveTo {
+            x: 6 + 5 * cos(root.phase);
+            y: 6 + 5 * sin(root.phase);
+        }
+
+        ArcTo {
+            x: 6 + 5 * cos(root.phase + 270deg);
+            y: 6 + 5 * sin(root.phase + 270deg);
+            radius-x: 5;
+            radius-y: 5;
+            large-arc: true;
+            sweep: true;
+        }
+    }
+}
+
+// Source-list / list row: full-width hit area, inset selection pill.
+// `active: false` renders the graphite (window-unfocused) selection.
+export component SLListRow {
+    in property <string> text;
+    in property <string> detail; // right-aligned count/badge, optional
+    in property <bool> selected: false;
+    in property <bool> active: true;
+    callback activated;
+
+    height: Theme.row-height;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.activated(); }
+
+    pill := Rectangle {
+        x: Theme.space-xs;
+        width: parent.width - 2 * Theme.space-xs;
+        border-radius: Theme.radius-m;
+        background: root.selected
+            ? (root.active ? Theme.selection : Theme.selection-inactive)
+            : ta.pressed ? Theme.pressed-overlay
+            : ta.has-hover ? Theme.hover-overlay : transparent;
+        animate background { duration: Theme.anim-base; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-s;
+            padding-right: Theme.space-s;
+            spacing: Theme.space-s;
+
+            Text {
+                text: root.text;
+                color: root.selected && root.active ? Theme.on-accent : Theme.text-primary;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            if root.detail != "": Text {
+                text: root.detail;
+                color: root.selected && root.active
+                    ? Theme.on-accent : Theme.text-secondary;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.activated(); }
+    }
+}

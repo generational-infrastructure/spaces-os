@@ -1,0 +1,115 @@
+// Spaces kit demo. Instantiates every component in the kit so the compiler
+// generates code for all of them (a standalone theme compile skips unused
+// exports) and so both color schemes can be rendered and eyeballed headless.
+// Not shipped in the app. It is the verification gate for the kit.
+
+import { Theme, SLSpinner } from "theme.slint";
+import { Icon } from "icons.slint";
+import {
+    Pill, Segmented, Toggle, Chip, StatusChip, Card, DiscreteSlider
+} from "spaces-kit.slint";
+
+// Re-export the Theme global so the headless render harness can flip
+// Theme.dark from Python (globals are only exposed on the instance when the
+// loaded file exports them).
+export { Theme }
+
+export component KitDemo inherits Window {
+    title: "Spaces kit";
+    preferred-width: 660px;
+    background: Theme.window-bg;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-body;
+
+    VerticalLayout {
+        padding: Theme.space-xl;
+        spacing: Theme.space-l;
+
+        Card {
+            title: "Pills";
+            HorizontalLayout {
+                spacing: Theme.space-m;
+                alignment: start;
+                Pill { text: "Primary"; kind: "primary"; }
+                Pill { text: "Secondary"; kind: "secondary"; }
+                Pill { text: "Delete"; kind: "danger"; }
+                Pill { text: "Disabled"; kind: "secondary"; enabled: false; }
+            }
+        }
+
+        Card {
+            title: "Segmented and slider";
+            Segmented {
+                options: ["Auto", "Manual", "Off"];
+                current: 1;
+            }
+            DiscreteSlider {
+                labels: ["0.2s", "0.4s", "0.6s", "0.8s", "1.0s", "1.2s"];
+                current: 2;
+            }
+        }
+
+        Card {
+            title: "Toggles and chips";
+            HorizontalLayout {
+                spacing: Theme.space-l;
+                alignment: start;
+                VerticalLayout {
+                    spacing: Theme.space-s;
+                    alignment: center;
+                    Toggle { checked: true; label: "VAD on"; }
+                    Toggle { checked: false; label: "VAD off"; }
+                    Toggle { checked: true; enabled: false; label: "locked"; }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: start;
+                    Chip { text: "English"; selected: true; }
+                    Chip { text: "German"; }
+                    Chip { text: "French"; }
+                }
+            }
+        }
+
+        Card {
+            title: "Status";
+            HorizontalLayout {
+                spacing: Theme.space-m;
+                alignment: start;
+                StatusChip { text: "ready"; tone: "ready"; }
+                StatusChip { text: "downloading 42%"; tone: "downloading"; progress: 0.42; }
+                StatusChip { text: "not installed"; tone: "absent"; }
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: start;
+                    SLSpinner {}
+                    Text {
+                        text: "working";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-caption;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Card {
+            title: "Icons";
+            HorizontalLayout {
+                spacing: Theme.space-m;
+                alignment: start;
+                Icon { glyph: "mic"; }
+                Icon { glyph: "play"; }
+                Icon { glyph: "stop"; }
+                Icon { glyph: "record"; }
+                Icon { glyph: "copy"; }
+                Icon { glyph: "chevron-down"; }
+                Icon { glyph: "check"; tint: Theme.success-text; }
+                Icon { glyph: "close"; }
+                Icon { glyph: "download"; }
+                Icon { glyph: "arrow-right"; }
+                Icon { glyph: "info"; tint: Theme.focus-ring; }
+            }
+        }
+    }
+}

@@ -1,0 +1,677 @@
+// Spaces component kit for voxtype-tuner. Reusable controls built strictly on
+// the Theme tokens (theme.slint) and the Icon set (icons.slint), so a later
+// phase can rebuild the screen against them. Mirrors the slint-style skill's
+// reference components, ported to this app's existing token names.
+//
+// Rules honoured here: tokens only (no raw hex), dark mode via tokens (never a
+// `dark` branch inside a component), and every interactive control ships all
+// five states (hover, pressed, a 2px focus ring with a 1px gap, disabled at
+// opacity 0.4) plus an accessible role and label.
+//
+// Kept Slint 1.16-compatible (see theme.slint header).
+
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+
+// Pill button: a full-height pill at pill-height. `kind` picks the role.
+// primary is the single ink action per view (accent fill, on-accent label),
+// secondary is a quiet control-bg pill with a border-strong hairline, danger
+// is the one pink control (destructive-fill with the fixed white on-danger).
+export component Pill {
+    in property <string> text;
+    in property <string> kind: "secondary"; // "primary" | "secondary" | "danger"
+    in property <bool> enabled: true;
+    callback clicked;
+
+    property <bool> is-primary: root.kind == "primary";
+    property <bool> is-danger: root.kind == "danger";
+    property <bool> filled: root.is-primary || root.is-danger;
+    property <color> rest-fill: root.is-primary ? Theme.accent
+        : root.is-danger ? Theme.destructive-fill
+        : Theme.control-bg;
+    property <color> label-color: root.is-primary ? Theme.on-accent
+        : root.is-danger ? Theme.on-danger
+        : Theme.text-primary;
+
+    height: Theme.pill-height;
+    min-width: 88px;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { root.clicked(); }
+
+    // Focus ring: 2px stroke with a 1px gap (offset 3px = 1px gap + 2px ring).
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.height / 2;
+        background: root.rest-fill;
+        border-width: root.filled ? 0px : 1px;
+        border-color: Theme.border-strong;
+        animate background { duration: Theme.anim-fast; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: 22px;
+            padding-right: 22px;
+
+            Text {
+                text: root.text;
+                color: root.label-color;
+                font-family: Theme.font-family;
+                font-size: Theme.font-action;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.clicked();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+        // Danger darkens the fill in place: darkening only raises white
+        // contrast and is scheme-invariant (destructive-fill is one value),
+        // so there is no light-in-dark trap and no extra token.
+        pressed when ta.pressed: {
+            body.background: root.is-primary ? Theme.accent-pressed
+                : root.is-danger ? Theme.destructive-fill.darker(0.12)
+                : Theme.control-pressed;
+        }
+        hover when ta.has-hover: {
+            body.background: root.is-primary ? Theme.accent-hover
+                : root.is-danger ? Theme.destructive-fill.darker(0.06)
+                : Theme.control-hover;
+        }
+    ]
+}
+
+// Segmented control: one choice from a small set. The track is
+// selection-inactive, and a single content-bg thumb glides under the labels
+// carrying a soft shadow. Arrow keys move the selection when focused.
+export component Segmented {
+    in property <[string]> options;
+    in-out property <int> current: 0;
+    in property <bool> enabled: true;
+    callback changed(int);
+
+    property <int> count: max(root.options.length, 1);
+
+    height: Theme.segmented-height;
+    min-width: 120px;
+
+    accessible-role: tab-list;
+    accessible-enabled: root.enabled;
+
+    // The left edge of cell `i` inside the track, snapped to a whole device
+    // pixel. The thumb AND the label cells both derive their geometry from this
+    // one metric, so the thumb is always exactly the selected cell. The earlier
+    // layout let the labels size to their text (so "System" widened its cell)
+    // while the thumb stayed an even fraction, and the mismatch made the thumb
+    // overhang a segment. Equal, integer-snapped cells match the styleguide's
+    // segmented look and leave every label centered in its slot.
+    function edge(i: int) -> length {
+        track.pad + round(track.inner / 1px * i / root.count) * 1px
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: Theme.radius-field + 3px;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    // Declared BEFORE the track so the per-tab seg-ta TouchAreas render on top
+    // of it (later siblings win the z-order). A FocusScope grabs the pointer on
+    // click, so left on top it would swallow the first press for focus and only
+    // the second click would reach a tab (the two-click bug). Kept below the
+    // tabs, the tab acts on the first click and calls scope.focus() itself, so
+    // keyboard focus still lands. This mirrors Pill/Toggle/Chip.
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.RightArrow && root.current < root.options.length - 1) {
+                root.current += 1;
+                root.changed(root.current);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow && root.current > 0) {
+                root.current -= 1;
+                root.changed(root.current);
+                return accept;
+            }
+            reject
+        }
+    }
+
+    track := Rectangle {
+        background: Theme.selection-inactive;
+        border-radius: Theme.radius-field;
+        property <length> pad: 3px;
+        // The inner region the cells divide (the track minus its padding).
+        property <length> inner: self.width - 2 * self.pad;
+
+        // Thumb first, cells after, so the label text renders over the thumb.
+        // Both take their x/width from root.edge, so the thumb is exactly the
+        // selected cell at every position and can never overhang.
+        thumb := Rectangle {
+            y: track.pad;
+            height: parent.height - 2 * track.pad;
+            x: root.edge(root.current);
+            width: root.edge(root.current + 1) - root.edge(root.current);
+            background: Theme.content-bg;
+            border-radius: Theme.radius-m;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-offset-y: 1px;
+            animate x, width { duration: Theme.anim-base; easing: ease-in-out; }
+        }
+
+        // Equal, integer-snapped cells positioned by hand (not a stretch layout,
+        // whose per-label preferred width would have re-widened them). Each cell
+        // spans the full track height so the whole segment is clickable, with
+        // the label centered in its slot.
+        for opt[i] in root.options: Rectangle {
+            x: root.edge(i);
+            width: root.edge(i + 1) - root.edge(i);
+            y: 0;
+            height: parent.height;
+            accessible-role: tab;
+            accessible-label: opt;
+
+            Text {
+                width: 100%;
+                height: 100%;
+                text: opt;
+                color: i == root.current ? Theme.text-primary : Theme.text-secondary;
+                font-family: Theme.font-family;
+                font-size: Theme.font-action;
+                font-weight: i == root.current ? Theme.weight-semibold : Theme.weight-medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            seg-ta := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.current = i;
+                    root.changed(i);
+                    scope.focus();
+                }
+            }
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}
+
+// Toggle: a 44x26 track. On is success-fill with a border-strong hairline. The
+// low-contrast green never carries the on-state alone, the hairline and the
+// knob position do. The knob glides ease-in-out and stretches while pressed.
+export component Toggle {
+    in-out property <bool> checked: false;
+    in property <bool> enabled: true;
+    in property <string> label: "toggle";
+    callback toggled(bool);
+
+    width: Theme.toggle-w;
+    height: Theme.toggle-h;
+
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { root.flip(); }
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    track := Rectangle {
+        border-radius: self.height / 2;
+        background: root.checked ? Theme.success-fill : Theme.selection-inactive;
+        border-width: 1px;
+        border-color: root.checked ? Theme.border-strong : Theme.border-soft;
+        animate background, border-color { duration: Theme.anim-base; easing: ease-in-out; }
+
+        knob := Rectangle {
+            width: Theme.knob;
+            height: Theme.knob;
+            y: (parent.height - self.height) / 2;
+            x: root.checked ? parent.width - self.width - 3px : 3px;
+            border-radius: self.height / 2;
+            background: Theme.content-bg;
+            drop-shadow-blur: 4px;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-offset-y: 1px;
+            animate x, width { duration: Theme.anim-base; easing: ease-in-out; }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.flip();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.flip();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+        pressed when ta.pressed: {
+            knob.width: Theme.knob + 4px;
+        }
+        hover when ta.has-hover: {
+            track.border-color: Theme.border-strong;
+        }
+    ]
+}
+
+// Chip: a selectable h30 pill. Selected fills accent with a leading check and
+// on-accent text. Unselected is a content-bg pill with a border-soft hairline.
+export component Chip {
+    in property <string> text;
+    in-out property <bool> selected: false;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    height: Theme.chip-height;
+    min-width: 56px;
+
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { root.flip(); }
+
+    function flip() {
+        root.selected = !root.selected;
+        root.toggled(root.selected);
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.height / 2;
+        background: root.selected
+            ? (ta.pressed ? Theme.accent-pressed
+                : ta.has-hover ? Theme.accent-hover
+                : Theme.accent)
+            : (ta.pressed ? Theme.control-hover
+                : ta.has-hover ? Theme.control-bg
+                : Theme.content-bg);
+        border-width: root.selected ? 0px : 1px;
+        border-color: Theme.border-soft;
+        animate background { duration: Theme.anim-fast; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-m;
+            padding-right: Theme.space-m;
+            spacing: Theme.space-xs;
+            alignment: center;
+
+            // Vertically center the fixed-size check against the caption. A bare
+            // Icon in a HorizontalLayout clings to a row edge.
+            if root.selected: VerticalLayout {
+                alignment: center;
+                Icon {
+                    glyph: "check";
+                    size: 16px;
+                    tint: Theme.on-accent;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.selected ? Theme.on-accent : Theme.text-secondary;
+                font-family: Theme.font-family;
+                font-size: Theme.font-action;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.flip();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.flip();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}
+
+// StatusChip: a read-only state pill, a colored dot plus a mono caption. The
+// state is named by the word and the dot together, never by hue alone. ready
+// is success-text on the success-100 well, downloading is focus-ring with a
+// thin progress bar, absent is a neutral dot on control-bg. Not interactive.
+export component StatusChip {
+    in property <string> text;
+    in property <string> tone: "absent"; // "ready" | "downloading" | "absent"
+    in property <float> progress: 0.4; // 0..1, drawn only while downloading
+
+    property <bool> is-ready: root.tone == "ready";
+    property <bool> is-downloading: root.tone == "downloading";
+    // ready uses the dedicated success dot (bright green in light, brightened in
+    // dark so it holds against the deep ground), not the dark success-text,
+    // which read muddy as a dot next to the caption.
+    property <color> dot-color: root.is-ready ? Theme.success-dot
+        : root.is-downloading ? Theme.focus-ring
+        : Theme.text-secondary;
+    property <color> well: root.is-ready ? Theme.success-100 : Theme.control-bg;
+    // The ready pill takes a mint hairline (the reference's intended result-pill
+    // border), every other tone the neutral card hairline.
+    property <color> hairline: root.is-ready ? Theme.success-200 : Theme.border-soft;
+
+    height: Theme.chip-height;
+    min-width: 72px;
+
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+
+    Rectangle {
+        background: root.well;
+        border-radius: self.height / 2;
+        border-width: 1px;
+        border-color: root.hairline;
+
+        HorizontalLayout {
+            padding-left: Theme.space-m;
+            padding-right: Theme.space-m;
+            spacing: Theme.space-s;
+            alignment: center;
+
+            // A fixed-size dot is not auto-centered on a HorizontalLayout's
+            // cross axis (it clings to an edge). Wrap it so it sits centered
+            // beside the caption, like the bottom-bar modified dot.
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: root.dot-color;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.is-ready ? Theme.success-text : Theme.text-secondary;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.is-downloading: Rectangle {
+            x: Theme.space-s;
+            y: parent.height - self.height - 4px;
+            height: 3px;
+            width: (parent.width - 2 * Theme.space-s) * clamp(root.progress, 0.0, 1.0);
+            border-radius: 1.5px;
+            background: Theme.focus-ring;
+        }
+    }
+}
+
+// Card: a content-bg panel floating on the window, with a soft border and a
+// shadow. Optional SemiBold title, then @children in a padded column.
+export component Card {
+    in property <string> title;
+
+    Rectangle {
+        background: Theme.content-bg;
+        border-radius: Theme.radius-l;
+        border-width: 1px;
+        border-color: Theme.border-soft;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 6px;
+
+        VerticalLayout {
+            padding: Theme.space-l;
+            spacing: Theme.space-s;
+
+            if root.title != "": Text {
+                text: root.title;
+                color: Theme.text-primary;
+                font-family: Theme.font-family;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+            }
+
+            @children
+        }
+    }
+}
+
+// DiscreteSlider: an index-based slider that snaps to N positions. The track
+// is selection-inactive, the fill is accent, the knob is a content-bg disc
+// with a border-strong ring. A mono readout shows the current label. Arrow
+// keys step, and a click or drag jumps to the nearest index.
+export component DiscreteSlider {
+    in property <[string]> labels;
+    in-out property <int> current: 0;
+    in property <bool> enabled: true;
+    callback changed(int);
+
+    property <int> max-index: max(root.labels.length - 1, 1);
+
+    height: 40px;
+    min-width: 220px;
+
+    accessible-role: slider;
+    accessible-label: root.labels.length > 0 ? root.labels[root.current] : "slider";
+    accessible-enabled: root.enabled;
+
+    function commit(f: float) {
+        root.current = clamp(round(f), 0.0, root.max-index);
+        root.changed(root.current);
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.RightArrow && root.current < root.max-index) {
+                root.current += 1;
+                root.changed(root.current);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow && root.current > 0) {
+                root.current -= 1;
+                root.changed(root.current);
+                return accept;
+            }
+            reject
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-m;
+
+        rail-area := Rectangle {
+            horizontal-stretch: 1;
+            property <length> knob-d: 18px;
+            property <length> usable: self.width - self.knob-d;
+            property <float> frac: root.current / (root.max-index * 1.0);
+
+            focus-marker := Rectangle {
+                x: -3px;
+                y: -3px;
+                width: parent.width + 6px;
+                height: parent.height + 6px;
+                border-radius: self.height / 2;
+                border-width: 2px;
+                border-color: Theme.focus-ring;
+                visible: scope.has-focus;
+            }
+
+            rail := Rectangle {
+                x: parent.knob-d / 2;
+                width: parent.usable;
+                height: 4px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 2px;
+                background: Theme.selection-inactive;
+            }
+
+            fill := Rectangle {
+                x: rail.x;
+                y: rail.y;
+                height: rail.height;
+                width: parent.frac * parent.usable;
+                border-radius: 2px;
+                background: Theme.accent;
+            }
+
+            knob := Rectangle {
+                width: parent.knob-d;
+                height: parent.knob-d;
+                x: parent.frac * parent.usable;
+                y: (parent.height - self.height) / 2;
+                border-radius: self.width / 2;
+                background: Theme.content-bg;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                drop-shadow-blur: 4px;
+                drop-shadow-color: Theme.shadow;
+                drop-shadow-offset-y: 1px;
+                animate x, width, height { duration: Theme.anim-base; easing: ease-in-out; }
+            }
+
+            ta := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    scope.focus();
+                    root.commit((self.mouse-x - parent.knob-d / 2) / parent.usable * root.max-index);
+                }
+                moved => {
+                    if (self.pressed) {
+                        root.commit((self.mouse-x - parent.knob-d / 2) / parent.usable * root.max-index);
+                    }
+                }
+            }
+
+            states [
+                pressed when ta.pressed: {
+                    knob.width: rail-area.knob-d + 4px;
+                    knob.height: rail-area.knob-d + 4px;
+                }
+                hover when ta.has-hover: {
+                    knob.border-color: Theme.accent;
+                }
+            ]
+        }
+
+        Text {
+            text: root.labels.length > 0 ? root.labels[root.current] : "";
+            color: Theme.text-primary;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 56px;
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}

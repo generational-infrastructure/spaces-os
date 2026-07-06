@@ -1,0 +1,2476 @@
+// Voice Tuner: MCP-inspectable desktop UI for tuning voxtype STT.
+//
+// Every control carries a literal id so the Slint MCP server resolves it as
+// MainWindow::<id> (take-record, take-play, take-transcribe, language-pill…).
+// Those ids are the test/verification lookup surface.
+//
+// This is the "Voice Tuner, dressed in Spaces" worked-example layout (the
+// slint-style skill, section 09): an in-app titlebar, a two-column body (left
+// take + transcript, right parameters), and a bottom action bar. Styling is
+// strictly on Theme tokens (theme.slint) and the Spaces component kit
+// (spaces-kit.slint) + Icon set (icons.slint): every color is a token (no raw
+// hex), every length a token or a fixed metric, and the kit owns the control
+// shapes. Std-widgets are compiled with SLINT_STYLE=cupertino (scripts/env.sh
+// and the nix wrapper both set it). Kept Slint 1.16-compatible (see the
+// theme.slint header).
+import { Palette } from "std-widgets.slint";
+import { Theme, SLSpinner } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Card, Pill, Segmented, Toggle, StatusChip, DiscreteSlider } from "spaces-kit.slint";
+
+// Re-exported so the host can read/force the scheme: Palette.color-scheme is
+// the dark-mode source of truth (winit feeds it from the OS, headless
+// verification sets it from Python), and Theme must be reachable to restyle
+// host-side if ever needed. Slint only exposes globals exported from the same
+// file as the main component.
+export { Theme }
+export { Palette }
+
+// Modified-vs-system-default marker. Its PRESENCE (not hue) encodes "differs
+// from the seeded default". The Spaces amber (warning-text) is the marker tone
+// and the glyph always occupies its slot, so toggling never reflows the row.
+// Not `inherits Text`: a wrapped child keeps the instance id visible to the MCP
+// element tree (a Text-inheriting component is inlined and its debug id dropped).
+component ModifiedDot {
+    in property <bool> modified: false;
+    // Fixed slot width (an invisible Text reports a different preferred
+    // width, which would nudge the whole row on every toggle).
+    width: Theme.space-m;
+
+    dot := Text {
+        width: 100%;
+        height: 100%;
+        text: "●";
+        visible: root.modified;
+        color: Theme.warning-text;
+        font-size: Theme.font-caption;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: text;
+        accessible-label: root.modified ? "modified from system default" : "";
+    }
+}
+
+// Tooltip surface: a neutral styleguide card (content well, soft border,
+// caption-size secondary text), never accent: help text is status, not a call
+// to action. Sizes to its content (capped so a long sentence wraps instead of
+// stretching off-screen). Used two ways: as the built-in Tooltip's custom
+// content on every control (the real hover surface), and by the
+// verification-only debug overlay in MainWindow. The MCP wire cannot dispatch
+// a hover event, so that overlay force-renders this same card for the headless
+// screenshot, showing exactly what a real hover draws.
+component TipCard inherits Rectangle {
+    in property <string> text;
+
+    // Size to the content, not to the parent. A Rectangle fills its parent by
+    // default. As the built-in Tooltip's content the lowering reads these
+    // explicit dimensions, and as the debug overlay's Window child they keep
+    // the card from stretching across the whole window.
+    width: inner.preferred-width;
+    height: inner.preferred-height;
+
+    background: Theme.content-bg;
+    border-radius: Theme.radius-s;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+
+    inner := HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        padding-top: Theme.space-xs;
+        padding-bottom: Theme.space-xs;
+
+        Text {
+            text: root.text;
+            color: Theme.text-secondary;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+            // Cap the width so a two-sentence tooltip wraps to a few lines
+            // rather than stretching across the window.
+            max-width: 280px;
+        }
+    }
+}
+
+// One language choice, chip-styled (mirrors the kit Chip visuals) but STATELESS:
+// its `selected` is bound one-way from Python's language-checked model and it
+// never self-flips, so Python stays the single owner of the language invariants
+// (checking leaves auto, nemotron single-select clears the others, unchecking
+// the last snaps back to auto). A self-flipping kit Chip would break that model
+// binding on first click. Selected is the accent pill with a leading check (or
+// a radio dot for a single-select engine), unselected a content-bg pill with a
+// soft hairline.
+component LangChip {
+    in property <string> text;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    // Single-select engines (nemotron) show a radio dot instead of the check so
+    // the chips read as pick-one. Purely visual: Python still owns the
+    // single-vs-multi invariants, this only changes the selected glyph.
+    in property <bool> radio: false;
+    callback toggled;
+
+    height: Theme.chip-height;
+    min-width: 56px;
+
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.height / 2;
+        background: root.selected
+            ? (ta.pressed ? Theme.accent-pressed
+                : ta.has-hover ? Theme.accent-hover
+                : Theme.accent)
+            : (ta.pressed ? Theme.control-hover
+                : ta.has-hover ? Theme.control-bg
+                : Theme.content-bg);
+        border-width: root.selected ? 0px : 1px;
+        border-color: Theme.border-soft;
+        animate background { duration: Theme.anim-fast; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-m;
+            padding-right: Theme.space-m;
+            spacing: Theme.space-xs;
+            alignment: center;
+
+            // Vertically center the fixed-size glyph against the caption. A bare
+            // Icon/dot in a HorizontalLayout clings to a row edge (mirrors kit
+            // Chip). A single-select engine shows a radio dot, otherwise a check.
+            if root.selected: VerticalLayout {
+                alignment: center;
+                if root.radio: Rectangle {
+                    width: 9px;
+                    height: 9px;
+                    border-radius: 4.5px;
+                    background: Theme.on-accent;
+                }
+                if !root.radio: Icon {
+                    glyph: "check";
+                    size: 16px;
+                    tint: Theme.on-accent;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.selected ? Theme.on-accent : Theme.text-secondary;
+                font-family: Theme.font-family;
+                font-size: Theme.font-action;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.toggled();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.toggled();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}
+
+// Combo-styled single-select trigger. It looks like a combo (control fill, soft
+// border, left-aligned eliding value, a chevron) but is custom for one reason:
+// the std ComboBox exposes no "opened" callback, and the device picker must
+// re-enumerate its list the moment it opens (a mic plugged in after launch has
+// to appear). So this fires `opened` on click, Space/Return, or the
+// accessibility expand action, and the caller shows the popup. Colors are all
+// Theme tokens: text-primary on the control fills stays well past AA, the
+// chevron is the secondary tone. The popup rows carry their own contrast.
+component ComboTrigger {
+    in property <string> value;
+    in property <bool> enabled: true;
+    callback opened;
+
+    height: Theme.control-height;
+    min-width: 64px;
+
+    accessible-role: combobox;
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-action-expand => {
+        root.opened();
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: Theme.radius-m + 3px;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: Theme.radius-m;
+        background: ta.pressed ? Theme.control-pressed
+            : ta.has-hover ? Theme.control-hover : Theme.control-bg;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        animate background { duration: Theme.anim-base; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-m;
+            padding-right: Theme.space-s;
+            spacing: Theme.space-xs;
+
+            Text {
+                text: root.value;
+                color: Theme.text-primary;
+                font-size: Theme.font-body-s;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    glyph: "chevron-down";
+                    size: 16px;
+                    tint: Theme.text-secondary;
+                }
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.opened();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.opened();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}
+
+// One selectable device row in the picker popup (mirrors the kit list-row
+// selection pill on the content well). Selected is the ink pill with inverted
+// text. Hover and pressed are the flat overlays.
+component DeviceRow {
+    in property <string> text;
+    in property <bool> selected: false;
+    callback activated;
+
+    height: Theme.row-height;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    pill := Rectangle {
+        x: Theme.space-xs;
+        width: parent.width - 2 * Theme.space-xs;
+        border-radius: Theme.radius-m;
+        background: root.selected ? Theme.selection
+            : ta.pressed ? Theme.pressed-overlay
+            : ta.has-hover ? Theme.hover-overlay : transparent;
+        animate background { duration: Theme.anim-base; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-s;
+            padding-right: Theme.space-s;
+
+            Text {
+                text: root.text;
+                color: root.selected ? Theme.on-accent : Theme.text-primary;
+                font-size: Theme.font-body-s;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// A 40x40 round transport button for the take card (Record, Play). A single
+// centred Icon on a filled disc, all five states, an accessible role and label.
+// `fill` is the disc colour and `icon-tint` the glyph, so one component covers
+// the white bordered Record and the ink Play. Record swaps its glyph in place
+// (mic <-> filled stop) at this fixed footprint, so the relabel never reflows.
+component RoundButton {
+    in property <string> glyph;
+    in property <bool> glyph-filled: false;
+    in property <length> glyph-size: 16px;
+    in property <color> fill;
+    in property <color> icon-tint;
+    in property <bool> bordered: false;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback clicked;
+
+    width: 40px;
+    height: 40px;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.width / 2;
+        background: root.fill;
+        border-width: root.bordered ? 1px : 0px;
+        border-color: Theme.border-soft;
+        animate background { duration: Theme.anim-fast; easing: ease-out; }
+
+        Icon {
+            glyph: root.glyph;
+            filled: root.glyph-filled;
+            size: root.glyph-size;
+            tint: root.icon-tint;
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.clicked();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+        pressed when ta.pressed: {
+            body.background: root.fill.darker(0.08);
+        }
+        hover when ta.has-hover: {
+            body.background: root.fill.darker(0.04);
+        }
+    ]
+}
+
+// The take card's waveform strip. It renders the recorded take as a fixed row
+// of 36 vertical bars, heights read from `bins` (peak-per-bin, 0..1), two-tone
+// so the near/played bars are the strong stroke and the far/tail bars step down
+// to the quieter `waveform-tail`. Fixed height, so the array changing (a new
+// take, a reset) never reflows the card.
+//
+// It also stands in for the old live input meter, reconciled with the idle-only
+// metering the single-owner device policy allows (see the app comment):
+// - `capturing` (record or a stream session owns the mic, so no real level
+//   flows): the bars animate off the animation tick, an honest active-capture
+//   motion rather than a fabricated level.
+// - `monitoring` (idle, no take yet, a mic present): the bars track the live
+//   input `level` Python pushes, a mic check before the first take.
+// - otherwise: the static recorded waveform.
+// A mic-less host with no take dims to a calm empty row, never a live signal.
+component TakeWaveform {
+    in property <[float]> bins;
+    in property <float> level;
+    in property <bool> capturing;
+    in property <bool> monitoring;
+    in property <bool> available: true;
+    // Real playback position [0, 1] from the audio clock. Shades the already-
+    // played leading bars while a take plays back. Only meaningful at rest: a
+    // capturing/monitoring waveform never fills.
+    in property <float> progress;
+    // Emitted on click and during a press-drag with the pointer fraction
+    // [0, 1] over the bars, so playback can seek/scrub. Fires only while the
+    // strip shows a resting take (see `seekable`), never over the live
+    // capture/monitor animation.
+    callback seeked(float);
+
+    property <bool> has-bins: root.bins.length > 0;
+    // A mic-less host with nothing recorded dims the empty row so it reads as
+    // disabled, but a real take (even with no mic) shows at full strength.
+    opacity: (root.available || root.has-bins) ? 1.0 : 0.5;
+
+    height: 58px;
+
+    accessible-role: progress-indicator;
+    accessible-label: "take waveform";
+
+    // Advances only while capturing, so the animation costs nothing at rest
+    // (the styleguide's no-constant-CPU rule for the animation tick).
+    property <float> tick: root.capturing ? animation-tick() / 1s : 0;
+
+    // Bar geometry as one source, so the seek TouchArea maps pointer x over the
+    // exact bar extent (36 bars + 35 gaps) without drifting from the rendered
+    // width. Values unchanged (3px bar, 2px gap): the strip geometry is
+    // identical, only now derived once instead of repeated.
+    property <length> bar-width: 3px;
+    property <length> bar-gap: 2px;
+    property <length> bars-width: 36 * root.bar-width + 35 * root.bar-gap;
+    // Seekable only at rest: a capturing/monitoring strip is the live animation,
+    // not a playable take, so scrubbing is inert there.
+    property <bool> seekable: !root.capturing && !root.monitoring;
+
+    HorizontalLayout {
+        alignment: start;
+        spacing: root.bar-gap;
+
+        for i in 36: Rectangle {
+            property <float> frac: root.capturing
+                ? clamp(0.16 + 0.74 * (0.5 + 0.5 * sin((root.tick * 190 + i * 44) * 1deg)), 0.06, 1.0)
+                : root.monitoring
+                    ? clamp(root.level * (0.45 + 0.55 * abs(sin((i * 52) * 1deg))), 0.06, 1.0)
+                    : root.bins[i];
+            // A resting bar is "played" once the playback clock has swept past
+            // its right edge. Only at rest: a capturing/monitoring waveform is
+            // the live animation, never a progress fill.
+            property <bool> played: !root.capturing && !root.monitoring
+                && (i + 1) / 36 <= root.progress;
+            // The boundary bar is the last played bar (the next one is unplayed):
+            // the fill boundary IS the position indicator, so a hover or scrub
+            // brightens only this bar to the strongest neutral ink, no playhead.
+            property <bool> boundary: self.played && (i + 2) / 36 > root.progress;
+
+            width: root.bar-width;
+            height: self.frac * 48px;
+            border-radius: 2px;
+            background: root.capturing || root.monitoring
+                ? Theme.text-secondary
+                : self.played
+                    ? (self.boundary && (seek-area.has-hover || seek-area.pressed)
+                        ? Theme.text-primary
+                        : Theme.text-secondary)
+                    : Theme.waveform-tail;
+            animate background { duration: Theme.anim-fast; easing: ease-out; }
+            animate height { duration: Theme.anim-fast; }
+        }
+    }
+
+    // Click-to-seek / press-to-scrub. Sized to the exact bar extent so mouse-x
+    // maps straight onto the strip (a drag past either end clamps). It only
+    // emits `seeked` (which drives playback-progress), so there is zero layout
+    // shift and no playhead/handle chrome. Inert unless the strip is a resting
+    // take. Pointer cursor marks it as interactive.
+    seek-area := TouchArea {
+        x: 0;
+        width: root.bars-width;
+        height: 100%;
+        enabled: root.seekable;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down
+                && event.button == PointerEventButton.left) {
+                root.seeked(clamp(self.mouse-x / root.bars-width, 0.0, 1.0));
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.seeked(clamp(self.mouse-x / root.bars-width, 0.0, 1.0));
+            }
+        }
+    }
+}
+
+// Tier-2 action pill for the row between the take and transcript cards. A tall
+// (44px) full-pill with a leading icon and a SemiBold label. `primary` is the
+// filled-ink Transcribe (the view's primary here), the default is a neutral
+// control-fill pill (the streamable Stream), and `gated` renders the disabled
+// "present but unavailable" look (bg-2 fill, muted text/icon, a resting
+// hairline) for a selection that cannot stream yet. The label and glyph swap in
+// place (Transcribe/Stream <-> Stop), and Transcribe fills the row while Stream
+// holds a fixed width, so neither relabel reflows the row.
+component ActionButton {
+    in property <string> text;
+    in property <string> glyph;
+    in property <bool> glyph-filled: false;
+    in property <length> glyph-size: 16px;
+    in property <bool> primary: false;
+    in property <bool> gated: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    property <color> rest-fill: root.primary ? Theme.accent
+        : root.gated ? Theme.window-bg
+        : Theme.control-bg;
+    property <color> label-color: root.primary ? Theme.on-accent
+        : root.gated ? Theme.text-faint
+        : Theme.text-primary;
+
+    height: 44px;
+    min-width: 44px;
+
+    // A gated pill is disabled but must stay legible (the reference keeps it at
+    // ~0.85), a plain disabled control takes the styleguide's 0.4.
+    opacity: root.enabled ? 1.0 : (root.gated ? 0.9 : 0.4);
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus-marker := Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 25px;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    body := Rectangle {
+        border-radius: self.height / 2;
+        background: root.rest-fill;
+        border-width: root.primary ? 0px : 1px;
+        border-color: Theme.border-strong;
+        animate background { duration: Theme.anim-fast; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            spacing: 9px;
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    glyph: root.glyph;
+                    filled: root.glyph-filled;
+                    size: root.glyph-size;
+                    tint: root.label-color;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.label-color;
+                font-family: Theme.font-family;
+                font-size: Theme.font-action;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            scope.focus();
+            root.clicked();
+        }
+    }
+
+    states [
+        pressed when ta.pressed: {
+            body.background: root.primary ? Theme.accent-pressed : Theme.control-pressed;
+        }
+        hover when ta.has-hover: {
+            body.background: root.primary ? Theme.accent-hover : Theme.control-hover;
+        }
+    ]
+}
+
+// A quiet text-link action for the transcript header (Copy, Clear): a small
+// stroked icon plus a medium-weight label in the muted tone, NO background,
+// border, or radius, so it reads as a link rather than a button. Hover lifts to
+// the primary tone. `label-min` fixes the label slot so a transient relabel
+// (the Copy confirmation) never shifts its neighbour.
+component LinkButton {
+    in property <string> text;
+    in property <string> glyph;
+    in property <length> label-min: 0px;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    property <color> tone: !root.enabled ? Theme.text-faint
+        : ta.has-hover ? Theme.text-primary
+        : Theme.text-faint;
+
+    height: Theme.chip-height;
+    horizontal-stretch: 0;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus-marker := Rectangle {
+        x: -4px;
+        y: -2px;
+        width: parent.width + 8px;
+        height: parent.height + 4px;
+        border-radius: Theme.radius-s;
+        border-width: 2px;
+        border-color: Theme.focus-ring;
+        visible: scope.has-focus;
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-xs + 2px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                glyph: root.glyph;
+                size: 15px;
+                tint: root.tone;
+            }
+        }
+
+        Text {
+            text: root.text;
+            color: root.tone;
+            font-family: Theme.font-family;
+            font-size: 11.5px;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            min-width: root.label-min;
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            scope.focus();
+            root.clicked();
+        }
+    }
+
+    states [
+        disabled when !root.enabled: {
+            root.opacity: 0.4;
+        }
+    ]
+}
+
+export component MainWindow inherits Window {
+    title: "Voice Tuner";
+    // Sized for the two-column worked-example layout at the Spaces type scale:
+    // a 360px left column plus the flexible parameter column, tall enough that
+    // the whole parameter card and the streaming gate fit without a scroll or
+    // an elide. Verified against the live render in both schemes.
+    preferred-width: 980px;
+    preferred-height: 740px;
+    min-width: 900px;
+    min-height: 680px;
+    background: Theme.window-bg;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-body;
+
+    // Scheme resolution. The custom kit reads Theme.dark, the std-widgets read
+    // Palette.color-scheme, and both must agree in every mode. Palette.color-
+    // scheme is a ONE-WAY override in Slint: assigning it pins the value, with
+    // no way to read the OS scheme back or revert to OS-follow. So once a Light
+    // or Dark pick has pinned Palette, a bare read can no longer recover the OS
+    // value. `os-dark` latches the OS scheme only while the app is actually
+    // following it (System mode, Palette left OS-driven), so returning to
+    // System resolves to the real OS value rather than the last manual pick.
+    private property <bool> palette-dark: Palette.color-scheme == ColorScheme.dark;
+    private property <bool> os-dark;
+    // Titlebar scheme mode: 0 = Light, 1 = Dark, 2 = System. System is the
+    // default so the tuner follows the OS scheme out of the box (the pre-toggle
+    // behavior). in-out so the Segmented's two-way binding drives it (and the
+    // headless scheme regression can set it directly, exactly as a click would).
+    in-out property <int> theme-mode: 2;
+    // The resolved scheme: System reads the latched OS value, Light/Dark are
+    // fixed overrides that ignore Palette entirely (so they stick even if the
+    // OS scheme flips underneath).
+    private property <bool> resolved-dark:
+        root.theme-mode == 2 ? root.os-dark : root.theme-mode == 1;
+    init => {
+        // Seed the latch from the OS-provided scheme before any override pins
+        // Palette, then apply. changed theme-mode below never fires at startup,
+        // so Palette stays OS-driven here and System follows the OS out of box.
+        root.os-dark = root.palette-dark;
+        Theme.dark = root.resolved-dark;
+    }
+    // Trust Palette as the OS truth only while System-following. In Light/Dark
+    // the app moved Palette itself, so a change is our own override, not the OS.
+    // Skip the `unknown` we write on entering System (it carries no scheme):
+    // hold the last real OS value until winit repaints a concrete one.
+    changed palette-dark => {
+        if (root.theme-mode == 2 && Palette.color-scheme != ColorScheme.unknown) {
+            root.os-dark = root.palette-dark;
+        }
+    }
+    changed resolved-dark => {
+        Theme.dark = root.resolved-dark;
+    }
+    // All mode side effects in one handler, so a Segmented click (via the two-
+    // way binding) and a direct set behave identically. Light/Dark pin Palette
+    // so the std-widgets flip and stick. System hands Palette back to the OS
+    // with `unknown`, so the std-widgets resume the OS scheme and winit can
+    // repaint it live, while resolved-dark reads the latched os-dark.
+    changed theme-mode => {
+        if (root.theme-mode == 0) {
+            Palette.color-scheme = ColorScheme.light;
+        } else if (root.theme-mode == 1) {
+            Palette.color-scheme = ColorScheme.dark;
+        } else {
+            Palette.color-scheme = ColorScheme.unknown;
+        }
+    }
+
+    // The single-take workflow, wired from Python: record toggles capture,
+    // play replays the take, transcribe runs voxtype on it.
+    callback record();
+    callback play();
+    // Fired by the take waveform when the pointer seeks/scrubs playback: the
+    // fraction [0, 1] under the pointer. Python moves the playback clock and
+    // sets playback-progress immediately so the fill boundary tracks the pointer.
+    callback seeked(float);
+    callback transcribe();
+    // Fired when the engine changes so Python repopulates the model list.
+    callback engine-changed(string);
+    // Fired by the Download/Stop button. Python reads sel-engine/sel-model
+    // and toggles on `downloading` (the Record↔Stop pattern): idle starts a
+    // fetch, running requests its cancel.
+    callback download-model();
+    // Fired when the model selection changes so Python refreshes model-status.
+    callback model-changed(string);
+    // Fired when the device picker OPENS (device-combo below), so Python
+    // re-enumerates the input devices (a mic plugged in after launch then
+    // shows up). device-selected(index) is fired when a row is picked. Python
+    // owns device-index/device-list, so a re-enumeration or an unresolvable
+    // selection can never leave the picker in an invalid state.
+    callback device-opened();
+    callback device-selected(int);
+    // Fired by the Rescan control (and shared with device-opened). Python
+    // re-initialises PortAudio, which caches its device list at init time, so a
+    // microphone plugged in after launch only appears after this rescan.
+    callback rescan();
+    // Fired by the Clear button. Python blanks the transcription/source/timing
+    // back to the pre-transcribe state.
+    callback clear-transcription();
+    // Fired by the Copy button. Python writes the transcript to the system
+    // clipboard through wl-copy off the UI thread and marshals copy-feedback
+    // back for the transient confirmation.
+    callback copy-transcription();
+    // Transient Copy confirmation, set from Python and returned to "" by the
+    // copy-feedback-timer below so the relabel never sticks. "ok" after a
+    // successful copy, "fail" when wl-copy could not run. A worded state (not a
+    // hue) so the confirmation reads under CVD and needs no extra chrome.
+    in-out property <string> copy-feedback: "";
+    // Fired by every param control without a dedicated callback (VAD,
+    // threshold, max duration, prompt) so Python recomputes the
+    // modified-vs-system-default flags live.
+    callback param-edited();
+    // Language chip edits. Python owns the invariants (checking leaves auto,
+    // unchecking the last language snaps back to auto, nemotron is single
+    // target) and writes the resulting language-auto/language-checked/
+    // language-summary back, so the selection can never go invalid.
+    callback language-toggled(int);
+    callback language-auto-selected();
+    // Fired by the Reset button. Python restores the seeded system defaults.
+    callback reset-defaults();
+
+    // Dropdown catalogs, filled from params.py at startup so the UI can never
+    // drift from the argv builder's source of truth. The threshold/max-duration
+    // catalogs carry a non-empty, number-like default so sel-vad-threshold /
+    // sel-max-duration are well-formed the instant Python reads them (before
+    // seed_controls runs): an empty string here would crash build_params'
+    // float()/int() at startup.
+    in-out property <[string]> engine-list;
+    in-out property <[string]> model-list;
+    in-out property <[string]> vad-threshold-list: ["0.20", "0.40", "0.60", "0.80"];
+    in-out property <[string]> maxdur-list: ["15", "30", "60", "120"];
+    // The recording-device rows (labels), rebuilt by Python on every picker
+    // open. device-index is the selected row. Always carries at least a
+    // synthetic "System default" row, so the list is never empty. Python maps
+    // the selected row to BOTH the PortAudio capture index (Record) and the
+    // voxtype [audio] device string (Apply + a live Stream session).
+    in-out property <[string]> device-list;
+    in-out property <int> device-index;
+    // The language chips (codes) and their states. Auto is a mode, not a chip
+    // row: it is on exactly when nothing is checked. The summary is computed in
+    // Python (string-joining is host logic).
+    in-out property <[string]> language-list;
+    in-out property <[bool]> language-checked;
+    in-out property <bool> language-auto: true;
+    in-out property <string> language-summary: "Auto";
+    // Reset from Python on engine change to keep the model combo in range.
+    in-out property <int> model-index;
+    // Seeded from Python (system defaults) and restored by Reset. Two-way
+    // bound to the controls so user edits read back through sel-*. The
+    // defaults here keep a Python-less preview on today's values.
+    in-out property <int> engine-index;
+    in-out property <int> vad-threshold-index: 1;
+    in-out property <int> maxdur-index: 2;
+    in-out property <bool> vad-checked: true;
+    // The engine's streaming config toggle (`parakeet.streaming` /
+    // `nemotron.streaming`, distinct from the live `streaming` scratch session
+    // below). Python owns its never-invalid invariant: on only for a
+    // streaming-capable selection (a capable Parakeet model, or the Nemotron
+    // engine), snapped off (with `stream-note` explaining) on any switch away
+    // from one.
+    in-out property <bool> param-streaming: false;
+    in-out property <string> prompt-text;
+    // Per-param modified-vs-system-default flags, computed in Python from one
+    // diff so the dots and the Reset button can never disagree.
+    in-out property <bool> mod-engine;
+    in-out property <bool> mod-model;
+    in-out property <bool> mod-language;
+    in-out property <bool> mod-prompt;
+    in-out property <bool> mod-vad;
+    in-out property <bool> mod-vad-threshold;
+    in-out property <bool> mod-max-duration;
+    in-out property <bool> mod-streaming;
+    in-out property <bool> mod-device;
+    in-out property <bool> any-modified;
+    // Bottom-bar count of the modified params, derived from the same flags so
+    // it can never disagree with the dots or the Reset button.
+    private property <int> modified-count:
+        (root.mod-engine ? 1 : 0)
+        + (root.mod-model ? 1 : 0)
+        + (root.mod-language ? 1 : 0)
+        + (root.mod-prompt ? 1 : 0)
+        + (root.mod-vad ? 1 : 0)
+        + (root.mod-vad-threshold ? 1 : 0)
+        + (root.mod-max-duration ? 1 : 0)
+        + (root.mod-streaming ? 1 : 0)
+        + (root.mod-device ? 1 : 0);
+    // Status-bar note: where the system defaults came from (loaded path /
+    // not found / unreadable), set once from Python.
+    in-out property <string> defaults-status;
+    // Caption for the SELECTED model's availability. Set from Python
+    // ("ready (user download) ✓" / "ready (system) ✓" / "not downloaded",
+    // plus transient downloading/failed states).
+    in-out property <string> model-status;
+    // The availability state behind that caption: "user" (in the user models
+    // dir), "system" (config-provided absolute path, e.g. the module's store
+    // path), "absent" (neither). Set from Python by the same probe as the
+    // caption. Drives the Download button so the flashy fetch action can
+    // never be offered for a model that is already available.
+    in-out property <string> model-state: "absent";
+    // True when model-status carries a download failure. The wording ("failed:
+    // …") carries the meaning. Kept wired for Python and read by the caption.
+    in-out property <bool> model-status-error;
+    // True while a download runs. Set from Python. Relabels the Download
+    // button to its Stop action so a second fetch can't start while one is in
+    // flight (voxtype's downloader has no lock, so concurrent fetches into
+    // one model dir corrupt each other). A click then cancels instead.
+    in-out property <bool> downloading;
+    // True while a transcribe subprocess runs. Set from Python on the UI
+    // thread, cleared in the marshalled completion. Gates the Transcribe
+    // button (functional double-fire guard) and drives the busy caption.
+    in-out property <bool> transcribing;
+    // True while audio capture is live. Follows the recorder's actual device
+    // state, so the Record button relabels to Stop only once capture runs.
+    in-out property <bool> recording;
+    // Record/playback errors (no input device, broken WAV…). Set from Python.
+    in-out property <string> take-status;
+    // Live input level [0, 1] from the SELECTED recording device, pushed from
+    // Python off the PortAudio callback while idle. Drives the InputMeter bar
+    // in the take card. Idle-only: Record and a Stream session own the mic, so
+    // Python flattens this to 0 then. A plain scalar the meter block reads.
+    in-out property <float> input-level: 0.0;
+    // Whether the host has a usable recording input, pushed from Python at
+    // startup and on every rescan. False dims the meter to an explicit
+    // "No microphone" state, disables Record, and collapses the device picker
+    // to a single placeholder, so a mic-less host reads as such instead of a
+    // dead flat bar. Defaults true so a host with a mic is unaffected.
+    in-out property <bool> input-available: true;
+    // The recorded take rendered as 36 bar heights [0, 1], recomputed by Python
+    // whenever the take changes (record finishes, the sample seeds, a reset).
+    // Empty clears the waveform to a calm blank row. The take card's static
+    // waveform reads directly from this.
+    in-out property <[float]> waveform-bins;
+    // The take's length ("0:04") and format ("16 kHz · mono") for the take
+    // card's trailing meta, computed from the WAV header alongside the bins.
+    // Empty when there is no readable take.
+    in-out property <string> take-duration;
+    in-out property <string> take-meta;
+    // True while the take is actively playing back (not paused, not idle). Set
+    // from Python. Swaps the take-play button between Play and Pause and its
+    // tooltip/label. Paused reads false so the button offers Play (resume).
+    in-out property <bool> playing;
+    // Real playback position [0, 1] from the audio clock, sampled by Python's
+    // on-loop progress timer. Shades the played portion of the take waveform.
+    // Frozen on pause, reset to 0 on stop/finish.
+    in-out property <float> playback-progress: 0.0;
+
+    // Read by Python to build TranscribeParams from the live control state.
+    // Derived from the index/checked/text properties, NOT the controls'
+    // current-value: a ComboBox only rewrites current-value on user selection,
+    // so after a programmatic seed/reset (which moves current-index)
+    // current-value reads stale and Python would transcribe and diff against
+    // values the UI no longer shows.
+    out property <string> sel-engine: root.engine-list[root.engine-index];
+    out property <string> sel-model: root.model-list[root.model-index];
+    out property <bool> sel-vad: root.vad-checked;
+    // Guarded so the derived string is ALWAYS a well-formed number even before
+    // Python seeds the real catalogs (an out-of-range or empty read would reach
+    // build_params as "" and crash float()/int()). The seeded lists above make
+    // the common path a real value. This fallback covers the pre-seed instant.
+    out property <string> sel-vad-threshold:
+        root.vad-threshold-index >= 0 && root.vad-threshold-index < root.vad-threshold-list.length
+            ? root.vad-threshold-list[root.vad-threshold-index]
+            : "0.40";
+    out property <string> sel-max-duration:
+        root.maxdur-index >= 0 && root.maxdur-index < root.maxdur-list.length
+            ? root.maxdur-list[root.maxdur-index]
+            : "60";
+    out property <string> sel-prompt: root.prompt-text;
+    out property <bool> sel-streaming: root.param-streaming;
+
+    // --- Hover help ---
+    // One out-property per interactive control is the single source of truth
+    // for its explanatory tooltip. Each control binds BOTH its
+    // accessible-description (so the text is MCP-inspectable and reaches
+    // assistive tech) and a built-in Tooltip's TipCard content to the matching
+    // tt-* property, so the two can never disagree. State-dependent controls
+    // (the Record/Download/Transcribe/Stream relabels, the whisper-only /
+    // streaming-capability gates) carry reactive text that explains the
+    // current state, including WHY a disabled control is disabled. Wording is
+    // derived from modules/nixos/voxtype.nix's option descriptions and the
+    // voxtype source. Kept to one or two plain sentences.
+    out property <string> tt-engine: "The transcription engine. Whisper (whisper.cpp, batch) is the default. Parakeet (ONNX) can also stream live. Nemotron is a fork build with its model baked in.";
+    out property <string> tt-model: "The model this engine loads. Larger models are generally more accurate but slower and bigger to download.";
+    out property <string> tt-model-status: "Where the selected model is: “ready (user download)” is in your local models folder, “ready (system)” is provided by the system config at a fixed path, and “not downloaded” means nothing is on disk yet.";
+    out property <string> tt-download: root.downloading
+        ? "Stop the download and delete the partial files."
+        : root.model-list.length == 0
+            ? "This engine bakes in its model. There is nothing to download."
+        : root.model-state == "absent"
+            ? "Download the selected model into your local voxtype models folder."
+        : "This model is already available, nothing to download.";
+    out property <string> tt-vad: "Voice Activity Detection. When on, a take with no detected speech (silence, an accidental tap, a too-quiet mic) is dropped before the engine sees it, so it can't hallucinate text from silence. Off transcribes everything captured.";
+    out property <string> tt-vad-threshold: "How loud speech must be for VAD to keep a take (0.0–1.0). Higher rejects more aggressively (needs louder, clearer speech). Lower is more permissive. Used only when VAD is on.";
+    out property <string> tt-maxdur: "Caps a live recording in seconds. The real daemon (the push-to-talk hotkey, or a Stream session here) auto-stops and transcribes what it captured. It does not limit this tuner's own Record or Transcribe of a saved take.";
+    out property <string> tt-language: root.sel-engine == "whisper"
+        ? "Whisper: Auto lets it detect the spoken language. Checking one or more languages constrains detection to just those."
+        : root.sel-engine == "nemotron"
+            ? "Nemotron: pick a single target language, or Auto to let the multilingual model detect it. Nemotron transcribes one language at a time, so this picker is single-select."
+        : "Language selection is ignored by Parakeet, so it is disabled here.";
+    out property <string> tt-prompt: "Whisper only: primes the decoder with hint words (names, jargon) to bias transcription. Keep it short: the prompt budget is small and over-stuffing hurts accuracy. Ignored by Parakeet.";
+    out property <string> tt-streaming: root.streaming-available
+        ? "When Applied, the daemon types live partial text while you hold the hotkey and finalizes on release, instead of one transcript after you stop. Parakeet (streaming-capable models) and Nemotron can stream."
+        : "Streaming needs a streaming-capable Parakeet model (parakeet-unified-en-0.6b) or the Nemotron engine. It is off for the current selection.";
+    out property <string> tt-record: !root.input-available
+        ? "No input device detected. Connect a microphone and press Rescan to record a take."
+        : root.recording
+            ? "Stop recording and save the take."
+            : "Record a scratch take from your microphone to test settings on. Disabled during a Stream session, which owns the mic.";
+    out property <string> tt-device: "The microphone to record from. “System default” follows your desktop's default input. Picking a specific device also writes it to your voxtype config on Apply, so the daemon and a live Stream session capture from the same mic.";
+    out property <string> tt-play: root.playing
+        ? "Pause playback, keeping your place in the take. Play resumes from here."
+        : "Play the current take back through your speakers or headphones.";
+    out property <string> tt-transcribe: root.transcribing
+        ? "Stop the running transcription."
+        : "Run voxtype on the recorded take with the current settings and show the transcript below.";
+    out property <string> tt-stream: root.streaming
+        ? "Stop the streaming session and finalize the transcript."
+        : "Start a live session: a scratch streaming daemon types text into the field below as you speak. Parakeet (streaming-capable models) and Nemotron can stream.";
+    out property <string> tt-clear: "Clear the transcript text and its source and timing labels. Your recording and settings are untouched.";
+    out property <string> tt-copy: "Copy the transcript text to the system clipboard.";
+    out property <string> tt-reset: "Reset every parameter to the system's seeded defaults (not your last-applied config). It does not write anything or restart the daemon.";
+    out property <string> tt-apply: root.apply-available
+        ? "Write these settings to your voxtype config override (~/.config/voxtype/config.toml) and restart the daemon so they take effect. A confirmation shows exactly what changes."
+        : "Nothing to apply. These settings already match the config the daemon is running.";
+    out property <string> tt-revert: "Delete your config override so the daemon returns to the system config, then restart it.";
+
+    // Verification-only hook (empty in normal use): the MCP wire has no
+    // synthetic hover event, so headless tooltip screenshots are taken by
+    // pushing a tt-* value and a control's absolute position in here from the
+    // MCP run, which force-renders the TipCard overlay at the bottom of this
+    // window. Never set in production. The overlay is absent when empty.
+    in property <string> debug-tip-text: "";
+    in property <length> debug-tip-x: 0px;
+    in property <length> debug-tip-y: 0px;
+
+    // Streaming affordance gating, recomputed by Python on every selection
+    // change alongside model-state. The Stream control exists for the engines
+    // voxtype can stream (parakeet and nemotron are stream-visible, whisper has
+    // none, so the control would be dead chrome) and is usable only for a
+    // selection the engine can stream (streaming-available: parakeet's one
+    // allowlisted model, or the nemotron engine). A non-capable parakeet model
+    // shows the gate row naming the unlocking model.
+    in-out property <bool> stream-visible;
+    in-out property <bool> streaming-available;
+    // The full "can start a live session right now" predicate, computed in
+    // Python: streaming-available AND the model's bytes are present (parakeet
+    // needs its download, nemotron's model is env/Nix-provisioned, always
+    // present). Kept separate from streaming-available (which is CAPABILITY
+    // only and must stay lit for a capable-but-undownloaded parakeet model to
+    // enable the config toggle + tooltips) so the Stream button binds one
+    // honest predicate instead of re-deriving the engine-specific bytes check.
+    in-out property <bool> stream-startable;
+    // True while a scratch-daemon streaming session runs. Set from Python on
+    // the UI thread (single-flight guard), cleared in the marshalled
+    // completion. Relabels Stream→Stop, gates the take controls (the daemon
+    // owns the mic), flips the transcript field editable so it can receive
+    // the daemon's typed output, and drives the live caption.
+    in-out property <bool> streaming;
+    // The live session caption ("starting voxtype daemon…", "streaming…
+    // 3.2s", "finalizing…"), pushed from Python off the observed daemon
+    // state transitions.
+    in-out property <string> stream-status;
+    // Fired by the Stream/Stop button. Python owns the session lifecycle.
+    callback stream();
+
+    // A worded note when the streaming config toggle is snapped off because the
+    // selection can no longer stream (mirrors the language snap-back). Occupies
+    // the params row's trailing slack slot, so it elides and never reflows.
+    in-out property <string> stream-note;
+
+    // --- Apply: write the effective config and restart the daemon ---
+    // True when the live params differ from the EFFECTIVE config (the override
+    // if present, else the baseline). The confirm popup then has changes to
+    // show. False disables Apply as "nothing to apply".
+    in-out property <bool> apply-available;
+    // The what-will-change preview: one "Field: old → new" line per differing
+    // param, plus the human name of the config being diffed against.
+    in-out property <[string]> apply-preview-lines;
+    in-out property <string> apply-preview-source;
+    // True while a write+restart runs. Disables Apply/Revert against re-entry.
+    in-out property <bool> applying;
+    // True when a user override file exists. Gates the Revert action, which is
+    // meaningless without one to remove.
+    in-out property <bool> override-exists;
+    // The Apply/Revert outcome for the status bar, and whether it is a failure
+    // (destructive tint, the wording carries the meaning either way).
+    in-out property <string> apply-status;
+    in-out property <bool> apply-status-error;
+    // Fired by the confirm popup's primary. Python serializes/writes/restarts.
+    callback apply-confirmed();
+    // Fired by the Revert action. Python removes the override and restarts.
+    callback revert-config();
+
+    // Python focuses the transcript field when the daemon goes live:
+    // voxtype's streaming types into the focused window, and being that
+    // window is how the tuner receives the stream.
+    public function focus-transcript() {
+        transcription-output.focus();
+    }
+
+    // The clean transcript of the last transcribe, shown in one shared,
+    // readable, selectable field, with `transcription-source` tagging the engine
+    // and model that produced it. Set from Python on the event loop, and two-way
+    // bound to the field, so a streaming session's typed text reads back out
+    // through the same property.
+    in-out property <string> transcription;
+    in-out property <string> transcription-source;
+    // The full timing caption, pre-formatted by Python: the batch metrics
+    // ("Transcribed in 0.9s · 7.1x realtime"), the streaming session's
+    // state-transition wall-clocks ("Streamed 5.6s · finalized in 0.4s" /
+    // "… reached max duration"), or the distinct "cancelled" after a Stop.
+    // Empty until the first run / after a failure.
+    in-out property <string> transcription-timing;
+
+    // While a session runs, the transcript field must hold focus to receive
+    // the daemon's typed output. Losing it turns the caption into a worded
+    // warning steering the user back.
+    private property <bool> stream-focus-lost: root.streaming
+        && !transcription-output.has-focus;
+
+    VerticalLayout {
+        // --- In-app titlebar: app identity + optional scheme override. The
+        // compositor still owns the OS window frame. This band only carries the
+        // icon tile, the name, and a Light/Dark segment that overrides
+        // Theme.dark (the default stays OS-following via scheme-dark above). ---
+        Rectangle {
+            height: Theme.titlebar-h;
+            background: Theme.window-bg;
+            vertical-stretch: 0;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.space-l;
+                padding-right: Theme.space-l;
+                spacing: Theme.space-m;
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: Theme.radius-key;
+                        background: Theme.accent;
+                        Icon {
+                            glyph: "mic";
+                            size: 18px;
+                            tint: Theme.on-accent;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
+                    Text {
+                        text: "Voice Tuner";
+                        color: Theme.text-primary;
+                        font-size: Theme.font-action;
+                        font-weight: Theme.weight-semibold;
+                    }
+                    Text {
+                        text: "voxtype-tuner";
+                        color: Theme.text-secondary;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-caption;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    theme-toggle := Segmented {
+                        width: 210px;
+                        options: ["Light", "Dark", "System"];
+                        // Two-way bound to theme-mode so a single click moves the
+                        // thumb and the mode together (the kit's first-click fix).
+                        // The scheme side effects live in `changed theme-mode`
+                        // above, so a click and a direct set stay identical.
+                        current <=> root.theme-mode;
+                    }
+                }
+            }
+        }
+
+        // --- Two-column body: left take + transcript (fixed 360), right the
+        // parameters (flexible). ---
+        HorizontalLayout {
+            vertical-stretch: 1;
+            padding: Theme.space-l;
+            spacing: Theme.space-l;
+
+            // LEFT COLUMN -----------------------------------------------------
+            VerticalLayout {
+                horizontal-stretch: 0;
+                min-width: 360px;
+                max-width: 360px;
+                spacing: Theme.space-l;
+
+                // Take card: the device picker, the live-input meter, and the
+                // single-take transport (record/play/transcribe/stream).
+                Card {
+                    title: "Current take";
+                    vertical-stretch: 0;
+
+                    // Input-device picker. Drives BOTH the tuner's own Record
+                    // and, on Apply, the voxtype [audio] device the daemon and a
+                    // live Stream session capture with. A combo-styled trigger +
+                    // popup (not a std ComboBox) so Python can re-enumerate the
+                    // list the moment it opens.
+                    VerticalLayout {
+                        spacing: Theme.space-xs;
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            Text {
+                                text: "DEVICE";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                            device-modified := ModifiedDot {
+                                modified: root.mod-device;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        device-anchor := Rectangle {
+                            height: Theme.control-height;
+
+                            device-combo := ComboTrigger {
+                                width: 100%;
+                                value: root.device-list[root.device-index];
+                                accessible-description: root.tt-device;
+                                Tooltip { TipCard { text: root.tt-device; } }
+                                opened => {
+                                    root.device-opened();
+                                    device-popup.show();
+                                }
+                            }
+
+                            device-popup := PopupWindow {
+                                x: 0;
+                                y: parent.height + Theme.space-xs;
+                                width: device-anchor.width;
+                                close-policy: PopupClosePolicy.close-on-click-outside;
+
+                                device-popup-card := Rectangle {
+                                    background: Theme.content-bg;
+                                    border-radius: Theme.radius-l;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    drop-shadow-blur: 18px;
+                                    drop-shadow-color: Theme.shadow;
+                                    drop-shadow-offset-y: 6px;
+
+                                    VerticalLayout {
+                                        padding: Theme.space-xs;
+
+                                        for label[i] in root.device-list: DeviceRow {
+                                            text: label;
+                                            selected: i == root.device-index;
+                                            activated => {
+                                                root.device-selected(i);
+                                                device-popup.close();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // The recorded take as a fixed bar row, doubling as the live
+                    // capture indicator (see TakeWaveform). It replaces the old
+                    // horizontal input-meter rail, keeping its id so the meter
+                    // lifecycle and tests still resolve it. Bins come from Python
+                    // on every take change, the live level while monitoring, and
+                    // an animation while capturing. Idle with a take shows the
+                    // static waveform, matching the reference.
+                    input-meter := TakeWaveform {
+                        bins: root.waveform-bins;
+                        level: root.input-level;
+                        capturing: root.recording || root.streaming;
+                        // Idle with no take yet and a mic present, so track the
+                        // live level as a mic check before the first record.
+                        monitoring: root.input-available && !root.recording
+                            && !root.streaming && root.waveform-bins.length == 0;
+                        available: root.input-available;
+                        progress: root.playback-progress;
+                        seeked(fraction) => {
+                            root.seeked(fraction);
+                        }
+                    }
+
+                    // Transport (tier 1): the round Record/Play controls and the
+                    // take's trailing meta. Record swaps its mic glyph for a stop
+                    // at a fixed 40px footprint, so the relabel never reflows. The
+                    // meta reads the take's real length/format, or the
+                    // no-microphone caption plus the hotplug Rescan link when the
+                    // host has no input (re-hosting the old INPUT-row affordances
+                    // into the strip where the level used to sit).
+                    HorizontalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: center;
+                            take-record := RoundButton {
+                                glyph: root.recording ? "stop" : "mic";
+                                glyph-filled: root.recording;
+                                glyph-size: 16px;
+                                fill: Theme.content-bg;
+                                icon-tint: Theme.destructive-fill;
+                                bordered: true;
+                                label: root.recording ? "Stop recording" : "Record take";
+                                // No mic to capture from, or the scratch daemon
+                                // owns the mic during a Stream session: either way
+                                // Record is inert.
+                                enabled: root.input-available && !root.streaming;
+                                accessible-description: root.tt-record;
+                                Tooltip { TipCard { text: root.tt-record; } }
+                                clicked => {
+                                    root.record();
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            take-play := RoundButton {
+                                glyph: root.playing ? "pause" : "play";
+                                glyph-filled: true;
+                                glyph-size: 15px;
+                                fill: Theme.accent;
+                                icon-tint: Theme.on-accent;
+                                label: root.playing ? "Pause take" : "Play take";
+                                // The take is being rewritten while capture runs.
+                                enabled: !root.recording && !root.streaming;
+                                accessible-description: root.tt-play;
+                                Tooltip { TipCard { text: root.tt-play; } }
+                                clicked => {
+                                    root.play();
+                                }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            spacing: 0px;
+                            // With a mic: the take's real length and format.
+                            if root.input-available: Text {
+                                text: root.take-duration;
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                horizontal-alignment: right;
+                            }
+                            if root.input-available: Text {
+                                text: root.take-meta;
+                                color: Theme.text-faint;
+                                font-family: Theme.font-mono;
+                                font-size: 11px;
+                                horizontal-alignment: right;
+                            }
+                            // No mic: the worded no-input caption plus the hotplug
+                            // Rescan link (the device picker's open runs the same
+                            // path). Worded, not hue-only, so it holds under CVD.
+                            if !root.input-available: Text {
+                                text: "No microphone";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                horizontal-alignment: right;
+                            }
+                            if !root.input-available: rescan-label := Text {
+                                text: "Rescan";
+                                color: rescan-touch.has-hover
+                                    ? Theme.text-primary
+                                    : Theme.accent-text;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                horizontal-alignment: right;
+                                accessible-role: button;
+                                accessible-label: "Rescan for input devices";
+                                rescan-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.rescan();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Record/playback/session errors. An error is always worded
+                    // (no hue-only signal). Red for visibility. Elides so a long
+                    // reason never grows the card.
+                    take-status := Text {
+                        text: root.take-status;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        font-size: Theme.font-caption;
+                        color: Theme.destructive-text;
+                    }
+                }
+
+                // Action row (tier 2): the primary Transcribe pill and the Stream
+                // A/B control, lifted out of the take card into their own row
+                // between the take and transcript cards (the reference's two-tier
+                // transport, not four identical pills). Both keep their ids,
+                // tooltips, enable logic and Stop relabels. Transcribe fills the
+                // row (its primary here), Stream holds a fixed width so its
+                // relabel never reflows, and a non-streamable selection renders
+                // Stream as the dimmed gate naming what unlocks it (via tt-stream).
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    spacing: 10px;
+                    take-transcribe := ActionButton {
+                        horizontal-stretch: 1;
+                        text: root.transcribing ? "Stop" : "Transcribe";
+                        glyph: root.transcribing ? "stop" : "bars";
+                        glyph-filled: root.transcribing;
+                        glyph-size: 17px;
+                        primary: true;
+                        // Stays ENABLED while a run is active. The click is then
+                        // the Stop that cancels it. Inert only while the take is
+                        // mid-rewrite or a stream session runs.
+                        enabled: !root.recording && !root.streaming;
+                        accessible-description: root.tt-transcribe;
+                        Tooltip { TipCard { text: root.tt-transcribe; } }
+                        clicked => {
+                            root.transcribe();
+                        }
+                    }
+                    if root.stream-visible: take-stream := ActionButton {
+                        // Fixed width sized to "Stream A/B", so the relabel to
+                        // "Stop" never reflows the row.
+                        width: 150px;
+                        text: root.streaming ? "Stop" : "Stream A/B";
+                        glyph: root.streaming ? "stop" : "broadcast";
+                        glyph-filled: root.streaming;
+                        glyph-size: 16px;
+                        // Not startable yet (whisper, or a non-streaming parakeet
+                        // model): the gating look, disabled, reason in tt-stream.
+                        // stream-startable folds capability AND bytes-present so
+                        // the gate works for nemotron (model-state always absent).
+                        gated: !root.streaming && !root.stream-startable;
+                        enabled: root.streaming
+                            || (root.stream-startable
+                                && !root.recording
+                                && !root.transcribing
+                                && !root.downloading);
+                        accessible-description: root.tt-stream;
+                        Tooltip { TipCard { text: root.tt-stream; } }
+                        clicked => {
+                            root.stream();
+                        }
+                    }
+                }
+
+                // Transcript card: the read-only output well (mono, caret-
+                // guarded), a Copy action, the source tag, the green RTF status
+                // chip, the busy spinner, and the focus-lost warning. Fills the
+                // left column's slack height so it stays the prominent surface.
+                Card {
+                    vertical-stretch: 1;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        Text {
+                            text: "Transcript";
+                            font-size: Theme.font-title;
+                            font-weight: Theme.weight-semibold;
+                            vertical-alignment: center;
+                            color: Theme.text-primary;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        // Copy and Clear as quiet muted text links (icon + label,
+                        // no pill chrome) tucked top-right, with the reference's
+                        // 14px gap between them.
+                        HorizontalLayout {
+                            spacing: 14px;
+                            // Copies the transcript to the system clipboard. A
+                            // fixed label slot holds the transient "Copied ✓" /
+                            // "Copy failed" relabel so it never shifts Clear.
+                            // Enabled only with a transcript and no run/session
+                            // about to rewrite it. The copy-feedback-timer clears
+                            // the relabel shortly after.
+                            VerticalLayout {
+                                alignment: center;
+                                transcription-copy := LinkButton {
+                                    glyph: "copy";
+                                    label-min: 64px;
+                                    text: root.copy-feedback == "ok" ? "Copied ✓"
+                                        : root.copy-feedback == "fail" ? "Copy failed"
+                                        : "Copy";
+                                    accessible-description: root.tt-copy;
+                                    Tooltip { TipCard { text: root.tt-copy; } }
+                                    enabled: root.transcription != ""
+                                        && !root.transcribing
+                                        && !root.streaming;
+                                    clicked => {
+                                        root.copy-transcription();
+                                    }
+                                }
+                            }
+                            // Resets the transcription surface (field, source tag
+                            // and timing) to the clean pre-transcribe state. The
+                            // recording and params are untouched. Disabled while
+                            // there is nothing to clear or a run is overwriting it.
+                            VerticalLayout {
+                                alignment: center;
+                                transcription-clear := LinkButton {
+                                    glyph: "trash";
+                                    text: "Clear";
+                                    accessible-description: root.tt-clear;
+                                    Tooltip { TipCard { text: root.tt-clear; } }
+                                    enabled: root.transcription != ""
+                                        && !root.transcribing
+                                        && !root.streaming;
+                                    clicked => {
+                                        root.clear-transcription();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Provenance of the shown transcript (engine · model), on its
+                    // own sub-line so a long tag elides here instead of squeezing
+                    // the header actions or the timing chip. Present only when set.
+                    if root.transcription-source != "": transcription-source-label := Text {
+                        text: root.transcription-source;
+                        overflow: elide;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-caption;
+                        color: Theme.text-secondary;
+                    }
+
+                    // Wrapper occupies the transcript cell and carries the slack
+                    // height and the min-height floor, so the caret cover reflows
+                    // nothing. It holds the field, the empty-state placeholder,
+                    // and the read-only cover on top. Clips so a long take stays
+                    // inside the card.
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 96px;
+                        clip: true;
+
+                        // TextInput carries no placeholder of its own, so show one
+                        // in the same top-left as the text while the field is
+                        // empty.
+                        if root.transcription == "": Text {
+                            width: 100%;
+                            text: root.streaming-available
+                                ? "Press Stream and speak. Text types in here live."
+                                : "Record a take, then transcribe it to see its text here.";
+                            color: Theme.text-faint;
+                            font-family: Theme.font-family;
+                            font-size: 15px;
+                            wrap: word-wrap;
+                            vertical-alignment: top;
+                        }
+
+                        transcription-output := TextInput {
+                            width: 100%;
+                            height: 100%;
+                            // Two-way: Python writes results in. A session's typed
+                            // stream (arriving as ordinary keyboard input while
+                            // the field is focused) reads back out the same
+                            // property.
+                            text <=> root.transcription;
+                            // A flush output surface, not a boxed input: a plain
+                            // Inter paragraph sitting directly on the white card.
+                            // The std TextEdit paints cupertino box chrome no knob
+                            // removes, so this low-level TextInput carries the
+                            // flush look while keeping wrap, read-only, selection,
+                            // and the two-way stream receive.
+                            color: Theme.text-primary;
+                            font-family: Theme.font-family;
+                            font-size: 15px;
+                            single-line: false;
+                            wrap: word-wrap;
+                            // Editable exactly while a session runs. The field is
+                            // the focused receiver of the daemon's typed output.
+                            read-only: !root.streaming;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.on-accent;
+                        }
+
+                        // Output pane, not an input. A focused TextInput paints a
+                        // caret even read-only, which reads as "type here" on
+                        // machine output. While read-only (every state but a live
+                        // streaming session) this transparent cover swallows the
+                        // focusing click, so no caret appears and the arrow cursor
+                        // (not an I-beam) reinforces that nothing is typed here.
+                        // Copying is the Copy link's job. Absent during a session,
+                        // when the field is the genuine editable receiver and a
+                        // caret is honest.
+                        if !root.streaming: TouchArea {
+                            mouse-cursor: default;
+                        }
+                    }
+
+                    // Footer: the resting metrics as a green status chip, or the
+                    // live/warning caption while a run or session is active. ONE
+                    // caption slot owns the stretch so a long caption elides
+                    // instead of reflowing the row.
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+
+                        // Resting metrics → green RTF status chip (success-text
+                        // on success-100, mono), the tuner's headline signal.
+                        if !root.transcribing && !root.streaming
+                            && !root.stream-focus-lost
+                            && root.transcription-timing != "": StatusChip {
+                            text: root.transcription-timing;
+                            tone: "ready";
+                        }
+
+                        // Active/warning → worded caption (never hue-only) plus
+                        // the spinner adjacent to the words it animates.
+                        if root.transcribing || root.streaming
+                            || root.stream-focus-lost: HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            horizontal-stretch: 1;
+                            transcription-timing-label := Text {
+                                text: root.transcribing ? "Transcribing…"
+                                    : root.stream-focus-lost
+                                        ? "streaming types into the focused window: click into the transcript"
+                                    : root.stream-status;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                font-size: Theme.font-caption;
+                                color: root.stream-focus-lost
+                                    ? Theme.warning-text : Theme.text-secondary;
+                            }
+                            if root.transcribing || root.streaming: VerticalLayout {
+                                alignment: center;
+                                SLSpinner { }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+
+            // RIGHT COLUMN ----------------------------------------------------
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-m;
+
+                // Parameter card: engine (segmented), model (status chip +
+                // dropdown + download pill), language (chips), VAD (toggle),
+                // threshold + max-duration (discrete sliders), streaming (toggle),
+                // and the initial prompt.
+                Card {
+                    vertical-stretch: 0;
+
+                    // Engine → segmented pill.
+                    VerticalLayout {
+                        spacing: Theme.space-xs;
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            Text {
+                                text: "ENGINE";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                            engine-modified := ModifiedDot {
+                                modified: root.mod-engine;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        engine-combo := Segmented {
+                            options: root.engine-list;
+                            current <=> root.engine-index;
+                            accessible-description: root.tt-engine;
+                            Tooltip { TipCard { text: root.tt-engine; } }
+                            changed(i) => {
+                                root.engine-changed(root.engine-list[i]);
+                            }
+                        }
+                    }
+
+                    // Model → status chip header + dropdown + Download pill. The
+                    // Download stays a dedicated button + status chip (never a
+                    // per-row fetch folded into the dropdown).
+                    VerticalLayout {
+                        spacing: Theme.space-xs;
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            Text {
+                                text: "MODEL";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                            model-modified := ModifiedDot {
+                                modified: root.mod-model;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            // Three-state availability, named by the word + dot
+                            // together. Absent when there is no model (nemotron
+                            // bakes its in, so there is nothing to show).
+                            if root.model-status != "": model-download-status := StatusChip {
+                                text: root.model-status;
+                                tone: root.downloading ? "downloading"
+                                    : (root.model-state == "user" || root.model-state == "system")
+                                        ? "ready" : "absent";
+                                accessible-description: root.tt-model-status;
+                                Tooltip { TipCard { text: root.tt-model-status; } }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            // A combo-styled trigger + popup list (the device
+                            // picker's pattern), NOT a std ComboBox: the cupertino
+                            // ComboBox paints its steppers and selection box in the
+                            // persistent cupertino blue, which violates "blue =
+                            // focus only". This is fully Theme-tokened (blue lives
+                            // only in the focus ring). The wiring is unchanged: the
+                            // rows drive model-index and fire model-changed, and the
+                            // value reads model-list[model-index] like sel-model, so
+                            // a programmatic seed/reset shows the right label.
+                            model-anchor := Rectangle {
+                                horizontal-stretch: 1;
+                                height: Theme.control-height;
+
+                                model-combo := ComboTrigger {
+                                    width: 100%;
+                                    value: root.model-list[root.model-index];
+                                    // nemotron bakes in its model, so its list is
+                                    // empty: grey it out.
+                                    enabled: root.model-list.length > 0;
+                                    accessible-description: root.tt-model;
+                                    Tooltip { TipCard { text: root.tt-model; } }
+                                    opened => {
+                                        model-popup.show();
+                                    }
+                                }
+
+                                model-popup := PopupWindow {
+                                    x: 0;
+                                    y: parent.height + Theme.space-xs;
+                                    width: model-anchor.width;
+                                    close-policy: PopupClosePolicy.close-on-click-outside;
+
+                                    Rectangle {
+                                        background: Theme.content-bg;
+                                        border-radius: Theme.radius-l;
+                                        border-width: 1px;
+                                        border-color: Theme.border-soft;
+                                        drop-shadow-blur: 18px;
+                                        drop-shadow-color: Theme.shadow;
+                                        drop-shadow-offset-y: 6px;
+
+                                        VerticalLayout {
+                                            padding: Theme.space-xs;
+
+                                            for label[i] in root.model-list: DeviceRow {
+                                                text: label;
+                                                selected: i == root.model-index;
+                                                activated => {
+                                                    root.model-index = i;
+                                                    root.model-changed(root.model-list[i]);
+                                                    model-popup.close();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Primary only while the selected model is absent:
+                            // fetching it is then what unblocks every transcribe.
+                            // An available model demotes it to a neutral pill and
+                            // disables it (styleguide disabled rule), so the accent
+                            // never advertises a pointless re-fetch. While a fetch
+                            // runs it relabels to Stop and drops the accent, so
+                            // cancel never reads as the view's primary. Fixed width
+                            // so the Download↔Stop relabel never reflows the combo.
+                            model-download := Pill {
+                                width: 124px;
+                                // match the model-combo dropdown height on this row
+                                height: Theme.control-height;
+                                text: root.downloading ? "■ Stop" : "Download";
+                                kind: root.model-state == "absent" && !root.downloading
+                                    ? "primary" : "secondary";
+                                enabled: root.downloading
+                                    || (root.model-list.length > 0
+                                        && root.model-state == "absent");
+                                accessible-description: root.tt-download;
+                                Tooltip { TipCard { text: root.tt-download; } }
+                                clicked => {
+                                    root.download-model();
+                                }
+                            }
+                        }
+                    }
+
+                    // Language → inline chips (Auto + per code). Enabled for the
+                    // engines that honor a language: whisper (multi) and nemotron
+                    // (single target). Parakeet takes none, so the chips grey out
+                    // rather than lying about an effect. language-pill wraps the
+                    // whole flow and anchors the tooltip.
+                    VerticalLayout {
+                        spacing: Theme.space-xs;
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            Text {
+                                text: "LANGUAGE";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                            language-modified := ModifiedDot {
+                                modified: root.mod-language;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            // Surfaces nemotron's single-target rule right beside
+                            // the chips (the tooltip says it too). Sits in the
+                            // header slack so it never reflows the chip row.
+                            if root.sel-engine == "nemotron": Text {
+                                text: "single target";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                        language-pill := Rectangle {
+                            height: Theme.chip-height;
+                            accessible-role: text;
+                            accessible-label: "language selection";
+                            accessible-description: root.tt-language;
+                            Tooltip { TipCard { text: root.tt-language; } }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: Theme.space-xs;
+
+                                LangChip {
+                                    text: "Auto";
+                                    selected: root.language-auto;
+                                    // Whisper and nemotron both honor a language
+                                    // selection. Parakeet ignores it.
+                                    enabled: root.sel-engine == "whisper"
+                                        || root.sel-engine == "nemotron";
+                                    // nemotron picks one target: radio, not check.
+                                    radio: root.sel-engine == "nemotron";
+                                    toggled => {
+                                        root.language-auto-selected();
+                                    }
+                                }
+
+                                for code[i] in root.language-list: LangChip {
+                                    text: code.to-uppercase();
+                                    selected: root.language-checked[i];
+                                    enabled: root.sel-engine == "whisper"
+                                        || root.sel-engine == "nemotron";
+                                    radio: root.sel-engine == "nemotron";
+                                    toggled => {
+                                        root.language-toggled(i);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Divider between the model/language selectors and the
+                    // detection settings (mirrors the reference's row rules).
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    // VAD → toggle.
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: "Voice activity detection";
+                                color: Theme.text-primary;
+                                font-size: Theme.font-body-s;
+                            }
+                            Text {
+                                text: "Drop takes with no detected speech";
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-caption;
+                            }
+                        }
+                        vad-modified := ModifiedDot {
+                            modified: root.mod-vad;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            vad-check := Toggle {
+                                checked <=> root.vad-checked;
+                                label: "voice activity detection";
+                                accessible-description: root.tt-vad;
+                                Tooltip { TipCard { text: root.tt-vad; } }
+                                toggled(on) => {
+                                    root.param-edited();
+                                }
+                            }
+                        }
+                    }
+
+                    // Threshold → discrete slider snapping to the catalog indices.
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Threshold";
+                                color: Theme.text-primary;
+                                font-size: Theme.font-body-s;
+                            }
+                        }
+                        threshold-modified := ModifiedDot {
+                            modified: root.mod-vad-threshold;
+                        }
+                        vad-threshold-combo := DiscreteSlider {
+                            horizontal-stretch: 1;
+                            labels: root.vad-threshold-list;
+                            current <=> root.vad-threshold-index;
+                            accessible-description: root.tt-vad-threshold;
+                            Tooltip { TipCard { text: root.tt-vad-threshold; } }
+                            changed(i) => {
+                                root.param-edited();
+                            }
+                        }
+                    }
+
+                    // Max duration → discrete slider snapping to the catalog.
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Max duration";
+                                color: Theme.text-primary;
+                                font-size: Theme.font-body-s;
+                            }
+                        }
+                        maxdur-modified := ModifiedDot {
+                            modified: root.mod-max-duration;
+                        }
+                        maxdur-combo := DiscreteSlider {
+                            horizontal-stretch: 1;
+                            labels: root.maxdur-list;
+                            current <=> root.maxdur-index;
+                            accessible-description: root.tt-maxdur;
+                            Tooltip { TipCard { text: root.tt-maxdur; } }
+                            changed(i) => {
+                                root.param-edited();
+                            }
+                        }
+                    }
+
+                    // Streaming config toggle. Enabled only for a streaming-
+                    // capable selection (a capable Parakeet model or Nemotron).
+                    // Python snaps it off and words `stream-note` when a switch
+                    // drops capability. The row's trailing slot carries the note
+                    // (elides) so a worded flip never reflows the toggle.
+                    HorizontalLayout {
+                        spacing: Theme.space-s;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: "Streaming";
+                                color: Theme.text-primary;
+                                font-size: Theme.font-body-s;
+                            }
+                            stream-note-label := Text {
+                                text: root.stream-note;
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-caption;
+                                overflow: elide;
+                            }
+                        }
+                        stream-param-modified := ModifiedDot {
+                            modified: root.mod-streaming;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            stream-param-check := Toggle {
+                                checked <=> root.param-streaming;
+                                label: "streaming";
+                                enabled: root.streaming-available;
+                                accessible-description: root.tt-streaming;
+                                Tooltip { TipCard { text: root.tt-streaming; } }
+                                toggled(on) => {
+                                    root.param-edited();
+                                }
+                            }
+                        }
+                    }
+
+                    // Divider before the prompt (a whisper-only text field).
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    // Initial prompt → field.
+                    VerticalLayout {
+                        spacing: Theme.space-xs;
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            Text {
+                                text: "INITIAL PROMPT";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                            prompt-modified := ModifiedDot {
+                                modified: root.mod-prompt;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: "whisper only";
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                        // A rounded single-line field matching the model/device
+                        // pickers. The std LineEdit paints cupertino square-corner
+                        // chrome no knob removes, so this drops to a low-level
+                        // TextInput on a rounded content surface (same escape the
+                        // transcript makes). Its own empty-state placeholder stands
+                        // in for the one TextInput lacks, and the focus ring is
+                        // drawn outside the border so gaining focus reflows nothing.
+                        Rectangle {
+                            height: Theme.control-height;
+
+                            focus-ring := Rectangle {
+                                x: -3px;
+                                y: -3px;
+                                width: parent.width + 6px;
+                                height: parent.height + 6px;
+                                border-radius: Theme.radius-field + 3px;
+                                border-width: 2px;
+                                border-color: Theme.focus-ring;
+                                visible: prompt-input.has-focus;
+                            }
+
+                            field := Rectangle {
+                                border-radius: Theme.radius-field;
+                                background: Theme.content-bg;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                clip: true;
+
+                                if root.prompt-text == "": Text {
+                                    x: Theme.space-m;
+                                    width: parent.width - 2 * Theme.space-m;
+                                    height: 100%;
+                                    text: "names, jargon: voxtype, Parakeet…";
+                                    color: Theme.text-faint;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-body-s;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+
+                                prompt-input := TextInput {
+                                    x: Theme.space-m;
+                                    width: parent.width - 2 * Theme.space-m;
+                                    height: 100%;
+                                    accessible-description: root.tt-prompt;
+                                    Tooltip { TipCard { text: root.tt-prompt; } }
+                                    text <=> root.prompt-text;
+                                    color: Theme.text-primary;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-body-s;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    selection-background-color: Theme.selection;
+                                    selection-foreground-color: Theme.on-accent;
+                                    edited => {
+                                        root.param-edited();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Streaming gate: when the feature exists for this engine but the
+                // selection can't stream yet, a dashed, dimmed, non-interactive
+                // row names what unlocks it (guidance, not an error). Hidden for
+                // whisper (no streaming at all) and once the selection is capable.
+                if root.stream-visible && !root.streaming-available: Rectangle {
+                    height: Theme.pill-height + Theme.space-l;
+                    background: Theme.window-bg;
+                    border-radius: Theme.radius-field;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    opacity: 0.85;
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-l;
+                        padding-right: Theme.space-l;
+                        spacing: Theme.space-m;
+                        alignment: start;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Icon {
+                                glyph: "info";
+                                size: 20px;
+                                tint: Theme.text-secondary;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Streaming A/B locked";
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-body-s;
+                                font-weight: Theme.weight-medium;
+                            }
+                            Text {
+                                text: "Switch to a streaming-capable Parakeet model (parakeet-unified-en-0.6b) or Nemotron to enable.";
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+        }
+
+        // --- Bottom action bar: the modified summary + provenance on the left,
+        // the config verbs on the right. Reset (secondary) and Apply (primary)
+        // are always present. Revert (the one danger control) only with an
+        // override to remove. ---
+        Rectangle {
+            height: Theme.bottombar-h;
+            background: Theme.window-bg;
+            vertical-stretch: 0;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.border-strong;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.space-l;
+                padding-right: Theme.space-l;
+                spacing: Theme.space-m;
+
+                // Modified summary: an amber dot (presence, not hue-as-sole-
+                // signal, the words carry it) + the count, from the same flags
+                // the dots use.
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: Theme.space-s;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 3.5px;
+                            background: Theme.warning-text;
+                            visible: root.any-modified;
+                        }
+                    }
+                    Text {
+                        text: root.any-modified
+                            ? (root.modified-count == 1
+                                ? "1 field modified from system default"
+                                : "\{root.modified-count} fields modified from system default")
+                            : "matches the system default";
+                        color: Theme.text-secondary;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-caption;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Provenance (loaded path / not found / unreadable), elides so a
+                // long path never pushes the verbs out.
+                defaults-status-label := Text {
+                    text: root.defaults-status;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-caption;
+                    color: Theme.text-secondary;
+                }
+
+                // Apply/Revert outcome. Success is quiet green, failure
+                // destructive red, but the wording carries the meaning. The hue
+                // only reinforces it. Elides so a long restart-failure note never
+                // pushes the verbs out.
+                apply-status-label := Text {
+                    text: root.apply-status;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
+                    max-width: 260px;
+                    overflow: elide;
+                    font-size: Theme.font-caption;
+                    color: root.apply-status-error ? Theme.destructive-text
+                        : root.apply-status != "" ? Theme.success-text
+                        : Theme.text-secondary;
+                }
+
+                // Restores every param to the seeded system defaults. Neutral
+                // pill (Apply keeps the bar's primary). Inert while nothing
+                // differs from the defaults.
+                VerticalLayout {
+                    alignment: center;
+                    defaults-reset := Pill {
+                        text: "Reset";
+                        kind: "secondary";
+                        enabled: root.any-modified;
+                        accessible-description: root.tt-reset;
+                        Tooltip { TipCard { text: root.tt-reset; } }
+                        clicked => {
+                            root.reset-defaults();
+                        }
+                    }
+                }
+
+                // Removes the user override so the daemon returns to system
+                // config. Only meaningful (and only shown) when an override
+                // exists. The one danger control. Recoverable, so it acts
+                // without a confirm.
+                if root.override-exists: VerticalLayout {
+                    alignment: center;
+                    config-revert := Pill {
+                        text: "Revert to system";
+                        kind: "danger";
+                        enabled: !root.applying;
+                        accessible-description: root.tt-revert;
+                        Tooltip { TipCard { text: root.tt-revert; } }
+                        clicked => {
+                            root.revert-config();
+                        }
+                    }
+                }
+
+                // Opens the confirm popup with the what-will-change preview. The
+                // popup's primary commits the write+restart. The bar's single
+                // accent. Inert when nothing differs from the effective config.
+                VerticalLayout {
+                    alignment: center;
+                    config-apply-anchor := Rectangle {
+                        width: 176px;
+                        height: Theme.pill-height;
+
+                        config-apply := Pill {
+                            width: 100%;
+                            text: "Apply & restart…";
+                            kind: "primary";
+                            enabled: root.apply-available && !root.applying;
+                            accessible-description: root.tt-apply;
+                            Tooltip { TipCard { text: root.tt-apply; } }
+                            clicked => {
+                                apply-popup.show();
+                            }
+                        }
+
+                        apply-popup := PopupWindow {
+                            // Opens UPWARD from the bar (it sits at the window
+                            // bottom, so there is only room above). Right-aligned.
+                            x: parent.width - self.width;
+                            y: -self.height - Theme.space-xs;
+                            width: 400px;
+                            close-policy: PopupClosePolicy.close-on-click-outside;
+
+                            apply-popup-card := Rectangle {
+                                background: Theme.content-bg;
+                                border-radius: Theme.radius-l;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                drop-shadow-blur: 30px;
+                                drop-shadow-color: Theme.shadow;
+                                drop-shadow-offset-y: 12px;
+
+                                VerticalLayout {
+                                    padding: Theme.space-l;
+                                    spacing: Theme.space-s;
+
+                                    Text {
+                                        text: "Apply & restart the daemon";
+                                        font-size: Theme.font-title;
+                                        font-weight: Theme.weight-semibold;
+                                        color: Theme.text-primary;
+                                    }
+                                    Text {
+                                        text: "Changes from " + root.apply-preview-source + ":";
+                                        font-size: Theme.font-caption;
+                                        color: Theme.text-secondary;
+                                        wrap: word-wrap;
+                                    }
+                                    for line in root.apply-preview-lines: Rectangle {
+                                        background: Theme.window-bg;
+                                        border-radius: Theme.radius-m;
+                                        height: line-text.preferred-height + 2 * Theme.space-xs;
+                                        line-text := Text {
+                                            x: Theme.space-s;
+                                            width: parent.width - 2 * Theme.space-s;
+                                            text: line;
+                                            font-family: Theme.font-mono;
+                                            font-size: Theme.font-caption;
+                                            color: Theme.text-primary;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Text {
+                                        text: "Writes ~/.config/voxtype/config.toml, then restarts the voxtype user service.";
+                                        font-size: Theme.font-caption;
+                                        color: Theme.text-secondary;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Theme.space-s;
+                                        padding-top: Theme.space-xs;
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                        }
+                                        apply-cancel := Pill {
+                                            text: "Cancel";
+                                            kind: "secondary";
+                                            clicked => {
+                                                apply-popup.close();
+                                            }
+                                        }
+                                        // The popup's own single primary, a
+                                        // transient dialog surface.
+                                        apply-confirm := Pill {
+                                            text: "Apply & restart";
+                                            kind: "primary";
+                                            clicked => {
+                                                apply-popup.close();
+                                                root.apply-confirmed();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Returns the Copy button to its resting "Copy" label a short moment after
+    // a copy, so the confirmation is transient and never sticks. running follows
+    // the non-idle state, so the timer only ticks while a confirmation shows
+    // (the styleguide's no-constant-CPU guidance for the Timer element).
+    copy-feedback-timer := Timer {
+        interval: 1500ms;
+        running: root.copy-feedback != "";
+        triggered => {
+            root.copy-feedback = "";
+        }
+    }
+
+    // Verification-only tooltip overlay. Absent in normal use (the guard is
+    // empty), so it adds no element and cannot shift any control. The real
+    // tooltips are the built-in Tooltips wired onto each control above. The MCP
+    // wire has no synthetic hover event, so the headless verification run pushes
+    // a tt-* string and a control's absolute position in here to force-render
+    // the same TipCard a real hover would, for the screenshot. A direct Window
+    // child, positioned absolutely (never in a layout).
+    if root.debug-tip-text != "": TipCard {
+        x: root.debug-tip-x;
+        y: root.debug-tip-y;
+        text: root.debug-tip-text;
+    }
+}

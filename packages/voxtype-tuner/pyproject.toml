@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voxtype-tuner"
+version = "0.1.0"
+description = "Voice Tuner: Slint desktop tuner for voxtype speech-to-text"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    # The [dev] extra pulls the matching slint-dev wheel that carries the
+    # MCP/testing binary. The versions must match or MCP degrades silently.
+    "slint[dev]>=1.17.0b2",
+    # Audio layer: sounddevice binds PortAudio for capture/playback, soundfile
+    # binds libsndfile for WAV I/O, numpy backs the sample buffers.
+    "sounddevice",
+    "soundfile",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+]
+
+[project.scripts]
+voxtype-tuner = "voxtype_tuner.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["voxtype_tuner"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# app.py resolves ui/app.slint via __file__/../../ui/app.slint, so the .slint
+# must land at site-packages/ui/ beside the package. This one line makes the
+# path resolve identically for editable-dev, a plain wheel, and the nix build.
+"ui" = "ui"
+
+[tool.pytest.ini_options]
+markers = [
+    # Exercises the REAL voxtype binary against a provisioned model. Skipped
+    # unless VOXTYPE_BIN / VOXTYPE_NEMOTRON_MODEL / VOXTYPE_TUNER_SAMPLE_WAV all
+    # point at real paths, so the in-sandbox nix-build suite stays hermetic.
+    "slow: needs the real voxtype binary and a provisioned model",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[[tool.mypy.overrides]]
+# The slint wheel ships no type stubs.
+module = ["slint", "slint.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# sounddevice/soundfile ship no type stubs either.
+module = ["sounddevice", "sounddevice.*", "soundfile", "soundfile.*"]
+ignore_missing_imports = true
+
+# No [tool.ruff] here: a per-package section would shadow the repo-root
+# ruff.toml, which is the single source of truth for lint config.

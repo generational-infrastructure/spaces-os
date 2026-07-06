@@ -1,0 +1,6 @@
+# Local dev toolchain + caches (see pyproject.toml verification runbook).
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
