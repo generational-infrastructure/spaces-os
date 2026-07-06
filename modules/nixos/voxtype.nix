@@ -1,7 +1,10 @@
 # Voice-to-text via voxtype (push-to-talk / toggle mode)
 #
 # Installs voxtype, writes a system-wide default config, and creates a
-# systemd user service that starts with the graphical session.
+# systemd user service that starts with the graphical session. The service
+# prefers a user override at ~/.config/voxtype/config.toml (written by the
+# voxtype-tuner "Apply" action) over the generated config, so tuning takes
+# effect on a plain `systemctl --user restart voxtype` — no nixos-rebuild.
 #
 # Two engines are supported:
 #   - whisper  (default): whisper.cpp, batch transcription. Uses the
@@ -124,6 +127,40 @@ let
       )
     )
   );
+
+  # Start the daemon against a user override at
+  # $XDG_CONFIG_HOME/voxtype/config.toml when one exists (the voxtype-tuner
+  # "Apply" action writes it), else against the Nix-generated config. The
+  # existence probe is load-bearing: `voxtype -c <missing>` silently runs on
+  # voxtype's built-in defaults (src/config/load.rs), which would re-enable
+  # the hotkey grab and the OSD we disable above.
+  #
+  # voxtype does not merge config files — an override layers over voxtype's
+  # *built-in* defaults, not over the generated config, so a partial
+  # hand-written override sheds the settings above. The tuner always writes
+  # a complete file (seeded from /etc/xdg/voxtype/config.toml).
+  #
+  # Failure mode: a malformed override makes the daemon exit at startup and
+  # Restart=on-failure loops it — the same as running voxtype by hand with a
+  # bad config. Deliberately no silent fallback to the generated config; a
+  # half-applied config is worse than a visibly failing unit. Escape hatch:
+  # fix or delete the override, then `systemctl --user restart voxtype`.
+  #
+  # `voxtype` is invoked by name, pinned via the unit's `path` below, so
+  # this script's closure stays tiny (just the generated TOML): the
+  # voxtype-user-override-nix-eval check can realise and read it without
+  # building the voxtype package.
+  daemonScript = pkgs.writeShellApplication {
+    name = "voxtype-daemon";
+    text = ''
+      user_config="''${XDG_CONFIG_HOME:-$HOME/.config}/voxtype/config.toml"
+      config="${configToml}"
+      if [ -f "$user_config" ]; then
+        config="$user_config"
+      fi
+      exec voxtype -c "$config" daemon
+    '';
+  };
 in
 {
   options.spaces.voxtype = {
@@ -252,7 +289,12 @@ in
       package = voxtypePkg;
     };
 
-    # System-wide default config; users can override via ~/.config/voxtype/config.toml.
+    # Reference copy of the generated config, read by the voxtype-tuner as
+    # "system defaults" ($VOXTYPE_TUNER_DEFAULT_CONFIG fallback). voxtype
+    # itself never reads /etc/xdg — its native system fallback is
+    # /etc/voxtype/config.toml (src/config/root.rs SYSTEM_PATH), and the
+    # daemon below is started with an explicit -c anyway. User overrides are
+    # honored by daemonScript, not through this file.
     environment.etc."xdg/voxtype/config.toml".source = configToml;
 
     # systemd user service — starts voxtype daemon with the graphical session.
@@ -265,13 +307,18 @@ in
         "pipewire.service"
         "pipewire-pulse.service"
       ];
-      path = [ pkgs.which ];
+      # voxtypePkg first: daemonScript execs `voxtype` by name (see its
+      # comment for why it is not an absolute store path).
+      path = [
+        voxtypePkg
+        pkgs.which
+      ];
       environment = lib.optionalAttrs isCudaVariant {
         LD_LIBRARY_PATH = cudaLibraryPath;
       };
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${voxtypePkg}/bin/voxtype -c ${configToml} daemon";
+        ExecStart = lib.getExe daemonScript;
         Restart = "on-failure";
         RestartSec = 5;
       };
