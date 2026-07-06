@@ -1,0 +1,59 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Hi"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_end",
+        "content": "Hi"
+      }
+    },
+    {
+      "type": "message_end",
+      "message": {
+        "role": "assistant",
+        "usage": {
+          "output": 120
+        }
+      }
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [
+      {
+        "role": "assistant",
+        "text": "Hi",
+        "streaming": false
+      }
+    ],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "text": "Hi",
+          "state": "sent",
+          "tps": 40,
+          "outputTokens": 120
+        }
+      ]
+    }
+  }
+}

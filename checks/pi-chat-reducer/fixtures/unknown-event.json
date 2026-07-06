@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "type": "flux_capacitor"
+    },
+    {
+      "type": "queue_update"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "messages": [],
+      "effects": [
+        {
+          "kind": "log",
+          "args": [
+            "unknown event",
+            "flux_capacitor"
+          ]
+        }
+      ]
+    }
+  }
+}

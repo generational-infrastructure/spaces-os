@@ -1,0 +1,47 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "confirm",
+      "id": "c1",
+      "title": "Run shell command?",
+      "message": "rm -rf /tmp/x"
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [
+      {
+        "id": "c1",
+        "state": "pending"
+      }
+    ],
+    "chat": {
+      "messages": [
+        {
+          "id": "c1",
+          "from": "peer",
+          "type": "confirm",
+          "text": "rm -rf /tmp/x",
+          "confirmTitle": "Run shell command?",
+          "confirmState": "pending"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "notify",
+          "text": "Run shell command?"
+        }
+      ],
+      "pendingExtensionUI": [
+        "c1"
+      ]
+    }
+  }
+}

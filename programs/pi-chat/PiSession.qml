@@ -32,6 +32,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "Msg.js" as Msg
+import "Reducer.js" as Reducer
 
 QtObject {
   id: session
@@ -498,212 +499,60 @@ QtObject {
     }
   }
 
+  // The pi-event → conversation-state fold lives in Reducer.js (pure,
+  // unit-checked by checks/pi-chat-reducer and cross-checked against
+  // the pi-web reducer through the shared fixture corpus). This
+  // component is only the lifecycle adapter: snapshot the fold-owned
+  // properties, Reducer.apply, assign back what changed, run effects.
+  // `response` envelopes stay here — request/response correlation and
+  // model bookkeeping are transport, not conversation state.
   function _handleEvent(ev) {
-    switch (ev.type) {
-    case "agent_start":
-      typing = true;
-      break;
-
-    case "message_update":
-      _handleMessageUpdate(ev);
-      break;
-
-    case "agent_end":
-      typing = false;
-      busy = false;
-      _finalizeStreaming();
-      if (lastError) lastError = "";
-      _assistantStartedAt = 0;
-      _assistantLastTextBubbleId = "";
-      break;
-
-    // Lifecycle markers from pi >=0.70. Bracket events around every
-    // committed message (user *and* assistant). For user messages we mirror
-    // pi's content into a panel bubble so *sibling* clients (n:m sync)
-    // see what was typed in a different client; the originator dedups
-    // against its own optimistic bubble added in send(). Assistant text
-    // arrives via message_update / text_delta so message_start/message_end
-    // for the assistant side stays a quiet bracket.
-    case "turn_start":
-    case "turn_end":
-      break;
-
-    case "message_start":
-      if (ev.message && ev.message.role === "user") {
-        _mirrorRemoteUserMessage(ev.message);
-      }
-      break;
-
-    case "message_end":
-      _handleMessageEnd(ev);
-      break;
-
-    case "tool_execution_start":
-      _appendToolBubble(ev);
-      break;
-
-    case "auto_retry_start":
-      _appendNoticeBubble("retrying (" + (ev.attempt || 1) + "): " + (ev.errorMessage || ""));
-      break;
-
-    case "auto_retry_end":
-      if (!ev.success && ev.finalError) {
-        lastError = ev.finalError;
-      }
-      break;
-
-    case "extension_ui_request":
-      _handleExtensionRequest(ev);
-      break;
-
-    case "approval_request":
-      _handleApprovalRequest(ev);
-      break;
-
-    case "extension_error":
-      Logger.w("PiSession", sessionId, "extension error", ev.error);
-      break;
-
-    case "response":
+    if (!ev) return;
+    if (ev.type === "response") {
       _handleResponse(ev);
-      break;
-
-    case "queue_update":
-    case "session_info_changed":
-    case "compaction_start":
-    case "compaction_end":
-    case "thinking_level_changed":
-      // No-op for the chat panel.
-      break;
-
-    default:
-      // Unrecognized but well-formed event. Log once at debug to keep
-      // the journal quiet during pi version skews.
-      Logger.w("PiSession", sessionId, "unknown event", ev.type);
-    }
-  }
-
-  function _handleMessageUpdate(ev) {
-    const me = ev.assistantMessageEvent;
-    if (!me) return;
-    if (me.type === "text_start") {
-      _streamingId = "stream-" + _now().toString(36);
-      _appendMessage(Msg.assistantStream(_streamingId, _now()));
-      typing = false;
-      // First text bubble of this assistant message starts the wall
-      // clock for the tps calculation; the last text bubble wins as
-      // the patch target when message_end arrives with usage.
-      if (_assistantStartedAt === 0) _assistantStartedAt = _now();
-      _assistantLastTextBubbleId = _streamingId;
-    } else if (me.type === "text_delta") {
-      if (!_streamingId) _handleMessageUpdate({ assistantMessageEvent: { type: "text_start" } });
-      messages = Msg.appendDelta(messages, _streamingId, me.delta);
-    } else if (me.type === "text_end") {
-      messages = Msg.finalizeStream(messages, _streamingId, me.content);
-      _streamingId = "";
-    } else if (me.type === "thinking_start") {
-      _thinkingId = "thinking-" + _now().toString(36);
-      _appendMessage(Msg.thinking(_thinkingId, _now()));
-    } else if (me.type === "thinking_delta") {
-      if (!_thinkingId) return;
-      messages = Msg.appendDelta(messages, _thinkingId, me.delta);
-    } else if (me.type === "thinking_end") {
-      if (!_thinkingId) return;
-      const cur = messages.find(x => x.id === _thinkingId);
-      if (cur) {
-        const finalText = me.content || cur.text;
-        // Empty thinking block (omitted/summarized) — remove it.
-        if (!finalText) messages = Msg.remove(messages, _thinkingId);
-        else messages = Msg.finalizeStream(messages, _thinkingId, finalText);
-      }
-      _thinkingId = "";
-    }
-  }
-
-  function _finalizeStreaming() {
-    if (_streamingId) {
-      messages = Msg.patch(messages, _streamingId, { state: "sent" });
-      _streamingId = "";
-    }
-    if (_thinkingId) {
-      messages = Msg.patch(messages, _thinkingId, { state: "sent" });
-      _thinkingId = "";
-    }
-  }
-
-  // Attach inference-speed (tokens/second) to the last text bubble of
-  // the assistant message that just ended. Pi forwards the full
-  // AgentMessage including provider usage on `message_end`; we use
-  // usage.output (output token count) over the wall clock since the
-  // first text_start. Skipped if usage is absent, output is zero, no
-  // bubble exists yet, or the elapsed clock is too small to be useful.
-  // The Panel renders this only when Settings.data.showInferenceSpeed
-  // is enabled, so unconditionally patching is safe.
-  function _handleMessageEnd(ev) {
-    const msg = ev.message;
-    if (!msg || msg.role !== "assistant") return;
-    const output = (msg.usage && msg.usage.output) || 0;
-    if (output <= 0) return;
-    if (!_assistantLastTextBubbleId || _assistantStartedAt === 0) return;
-    const elapsedMs = _now() - _assistantStartedAt;
-    if (elapsedMs < 50) return;
-    const tps = output / (elapsedMs / 1000);
-    patch(_assistantLastTextBubbleId, { tps: tps, outputTokens: output });
-    // Reset for the next assistant message in this turn (tool → text again).
-    _assistantStartedAt = 0;
-    _assistantLastTextBubbleId = "";
-  }
-
-  function _appendToolBubble(ev) {
-    const summary = _summarizeTool(ev.toolName, ev.args);
-    if (!summary) return;
-    _appendMessage(Msg.notification("tool-" + (ev.toolCallId || _now().toString(36)), summary, _now()));
-  }
-
-  function _summarizeTool(name, args) {
-    if (!name) return "";
-    if (name === "bash") return "$ " + String((args && args.command) || "").split("\n")[0].slice(0, 80);
-    if (name === "read") return "read " + String((args && args.path) || "");
-    if (name === "edit") return "edit " + String((args && args.path) || "");
-    if (name === "write") return "write " + String((args && args.path) || "");
-    return name;
-  }
-
-  function _appendNoticeBubble(text) {
-    _appendMessage(Msg.notification("notice-" + _now().toString(36), text, _now()));
-  }
-
-  function _handleExtensionRequest(ev) {
-    if (ev.method === "confirm") {
-      _pendingExtensionUI[ev.id] = true;
-      _appendMessage(Msg.confirm(ev.id, ev.message, _now(), ev.title));
-      incomingNotification(ev.title || "confirm");
       return;
     }
-    if (ev.method === "notify") {
-      _appendNoticeBubble(ev.message);
-      return;
-    }
-    if (ev.method === "select" || ev.method === "input" || ev.method === "editor") {
-      // No UI yet — auto-cancel so pi doesn't hang on the agent loop.
-      _send({ type: "extension_ui_response", id: ev.id, cancelled: true });
-      return;
-    }
-    // setStatus / setWidget / setTitle / set_editor_text are
-    // fire-and-forget; ignore them.
+    const r = Reducer.apply(_foldState(), ev, _now());
+    _applyFold(r.state);
+    for (const fx of r.effects) _runEffect(fx);
   }
 
-  // Gateway → panel: a non-allowlisted integration tool wants to run.
-  // Render an approval bubble — the args are the security-relevant payload
-  // the user is consenting to; {once, session, deny} reply over the ws.
-  function _handleApprovalRequest(ev) {
-    _pendingApprovals[ev.id] = true;
-    _appendMessage(Msg.approval(ev.id, _now(), {
-      integration: ev.integration,
-      tool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
-      args: JSON.stringify(ev.args || {}, null, 2),
-    }));
-    incomingNotification(ev.toolName || "approval");
+  function _foldState() {
+    return {
+      messages: messages,
+      typing: typing,
+      busy: busy,
+      lastError: lastError,
+      streamingId: _streamingId,
+      thinkingId: _thinkingId,
+      assistantStartedAt: _assistantStartedAt,
+      assistantLastTextBubbleId: _assistantLastTextBubbleId,
+      pendingExtensionUI: _pendingExtensionUI,
+      pendingApprovals: _pendingApprovals,
+    };
+  }
+
+  // Assign only what changed (Reducer.apply preserves identity on
+  // untouched fields) so property change signals — and the ListView
+  // bound to `messages` — fire exactly as often as before the fold
+  // was extracted.
+  function _applyFold(s) {
+    if (s.messages !== messages) messages = s.messages;
+    if (s.typing !== typing) typing = s.typing;
+    if (s.busy !== busy) busy = s.busy;
+    if (s.lastError !== lastError) lastError = s.lastError;
+    if (s.streamingId !== _streamingId) _streamingId = s.streamingId;
+    if (s.thinkingId !== _thinkingId) _thinkingId = s.thinkingId;
+    if (s.assistantStartedAt !== _assistantStartedAt) _assistantStartedAt = s.assistantStartedAt;
+    if (s.assistantLastTextBubbleId !== _assistantLastTextBubbleId) _assistantLastTextBubbleId = s.assistantLastTextBubbleId;
+    if (s.pendingExtensionUI !== _pendingExtensionUI) _pendingExtensionUI = s.pendingExtensionUI;
+    if (s.pendingApprovals !== _pendingApprovals) _pendingApprovals = s.pendingApprovals;
+  }
+
+  function _runEffect(fx) {
+    if (fx.kind === "notify") incomingNotification(fx.text);
+    else if (fx.kind === "send") _send(fx.command);
+    else if (fx.kind === "log") Logger.w("PiSession", sessionId, ...fx.args);
   }
 
   function _handleResponse(ev) {
@@ -734,7 +583,7 @@ QtObject {
         active: m.provider === ev.data.provider && m.id === ev.data.id,
       }));
     } else if (ev.command === "get_messages") {
-      _importHistoricalMessages(ev.data && ev.data.messages);
+      _applyFold(Reducer.importHistory(_foldState(), ev.data && ev.data.messages, _now()));
     } else if (ev.command === "get_state") {
       // Authoritative model state from pi. Overrides whatever
       // get_available_models picked from modelPref alone — covers the
@@ -748,60 +597,6 @@ QtObject {
         }));
       }
     }
-  }
-
-  function _importHistoricalMessages(piMessages) {
-    if (!Array.isArray(piMessages)) return;
-    const out = [];
-    for (const m of piMessages) {
-      if (!m || !m.role || !Array.isArray(m.content)) continue;
-      const text = m.content
-        .filter(c => c && c.type === "text")
-        .map(c => c.text)
-        .join("\n")
-        .trim();
-      if (!text) continue;
-      const id = "hist-" + out.length + "-" + _now().toString(36);
-      const ts = m.timestamp || _now();
-      out.push(m.role === "user" ? Msg.user(id, text, ts, "") : Msg.assistant(id, text, ts));
-    }
-    if (out.length > 0) {
-      messages = out.concat(messages);
-    }
-  }
-
-  // Append a user bubble from a pi message_start event when it didn't
-  // originate locally — i.e. another client (the PWA, another panel)
-  // attached to the same daemon session sent the prompt. The originating
-  // client's send() already added an optimistic "me" bubble; dedup by
-  // matching the most recent user bubble's text, scanning at most a 30s
-  // window so a legitimate identical prompt far later still renders.
-  function _mirrorRemoteUserMessage(message) {
-    const text = _extractUserMessageText(message);
-    if (!text) return;
-    const cutoff = _now() - 30000;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (!m || (m.ts || 0) < cutoff) break;
-      if (Msg.isMine(m) && m.text === text) return; // own echo
-    }
-    _appendMessage(Msg.user(
-      "user-" + _now().toString(36) + "-" + Math.floor(Math.random() * 1e6).toString(36),
-      text, message.timestamp || _now(), ""));
-  }
-
-  function _extractUserMessageText(message) {
-    if (!message) return "";
-    const c = message.content;
-    if (typeof c === "string") return c;
-    if (!Array.isArray(c)) return "";
-    let out = "";
-    for (const part of c) {
-      if (part && part.type === "text" && typeof part.text === "string") {
-        out += (out ? "\n" : "") + part.text;
-      }
-    }
-    return out.trim();
   }
 
   function _readImage(path) {

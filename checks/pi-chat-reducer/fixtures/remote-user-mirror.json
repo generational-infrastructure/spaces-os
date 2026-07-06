@@ -1,0 +1,84 @@
+{
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hi from phone"
+          }
+        ]
+      }
+    },
+    {
+      "type": "message_start",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hi from phone"
+          }
+        ]
+      }
+    },
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Hi!"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_end",
+        "content": "Hi!"
+      }
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [
+      {
+        "role": "user",
+        "text": "Hi from phone",
+        "streaming": false
+      },
+      {
+        "role": "assistant",
+        "text": "Hi!",
+        "streaming": false
+      }
+    ],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "from": "me",
+          "type": "",
+          "text": "Hi from phone"
+        },
+        {
+          "from": "peer",
+          "type": "",
+          "state": "sent",
+          "text": "Hi!"
+        }
+      ]
+    }
+  }
+}

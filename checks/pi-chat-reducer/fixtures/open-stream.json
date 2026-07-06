@@ -1,0 +1,41 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "partial"
+      }
+    }
+  ],
+  "expect": {
+    "transcript": [
+      {
+        "role": "assistant",
+        "text": "partial",
+        "streaming": true
+      }
+    ],
+    "confirms": [],
+    "chat": {
+      "typing": false,
+      "messages": [
+        {
+          "from": "peer",
+          "type": "",
+          "state": "streaming",
+          "text": "partial"
+        }
+      ]
+    }
+  }
+}

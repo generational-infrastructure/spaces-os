@@ -19,8 +19,6 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
-import "Msg.js" as Msg
-
 
 PanelWindow {
   id: shell
@@ -138,31 +136,16 @@ PanelWindow {
     }
 
     // Test probes. JSON-returning getters so the harness can parse
-    // without scraping pi's session.jsonl. Same shape as the plugin.
+    // without scraping pi's session.jsonl. Pure routing — the lookup
+    // and predicates live on PiChatBackend's per-session read surface.
     function sessionMessages(id: string): string {
-      const map = backend._sessionObjs;
-      const obj = (id && map && map[id]) ? map[id] : backend.chat;
-      if (!obj) return "[]";
-      return JSON.stringify(obj.messages || []);
+      return JSON.stringify(backend.sessionMessages(id));
     }
     function lastAssistantText(id: string): string {
-      const map = backend._sessionObjs;
-      const obj = (id && map && map[id]) ? map[id] : backend.chat;
-      if (!obj || !Array.isArray(obj.messages)) return "";
-      for (let i = obj.messages.length - 1; i >= 0; i--) {
-        const m = obj.messages[i];
-        if (m && Msg.isPlainAssistant(m) && m.text) return m.text;
-      }
-      return "";
+      return backend.lastAssistantText(id);
     }
-    // Model-picker probe. activeModel/models are populated only from the
-    // daemon's get_state / get_available_models `response` events, so an empty
-    // result means the command-response layer was rejected by the client.
     function sessionModel(id: string): string {
-      const map = backend._sessionObjs;
-      const obj = (id && map && map[id]) ? map[id] : backend.chat;
-      if (!obj) return "{}";
-      return JSON.stringify({ active: obj.activeModel || "", count: (obj.models || []).length });
+      return JSON.stringify(backend.sessionModel(id));
     }
   }
 }

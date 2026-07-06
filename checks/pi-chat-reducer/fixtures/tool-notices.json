@@ -1,0 +1,51 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "tool_execution_start",
+      "toolName": "bash",
+      "args": {
+        "command": "ls -la /tmp\necho hi"
+      },
+      "toolCallId": "t1"
+    },
+    {
+      "type": "tool_execution_start",
+      "toolName": "read",
+      "args": {
+        "path": "/etc/hosts"
+      }
+    },
+    {
+      "type": "auto_retry_start",
+      "attempt": 2,
+      "errorMessage": "boom"
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "id": "tool-t1",
+          "type": "notification",
+          "text": "$ ls -la /tmp"
+        },
+        {
+          "type": "notification",
+          "text": "read /etc/hosts"
+        },
+        {
+          "type": "notification",
+          "text": "retrying (2): boom"
+        }
+      ]
+    }
+  }
+}

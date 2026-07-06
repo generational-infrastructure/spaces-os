@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "type": "extension_ui_request",
+      "method": "notify",
+      "message": "heads up"
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "input",
+      "id": "i1"
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setStatus",
+      "id": "s1"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "type": "notification",
+          "text": "heads up"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "send",
+          "command": {
+            "type": "extension_ui_response",
+            "id": "i1",
+            "cancelled": true
+          }
+        }
+      ],
+      "pendingExtensionUI": []
+    }
+  }
+}

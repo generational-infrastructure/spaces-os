@@ -1,0 +1,37 @@
+{
+  "events": [
+    {
+      "type": "approval_request",
+      "id": "ap1",
+      "integration": "github",
+      "tool": "create_issue",
+      "args": {
+        "repo": "octo/repo"
+      }
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "id": "ap1",
+          "type": "approval",
+          "approvalIntegration": "github",
+          "approvalTool": "github_create_issue",
+          "approvalState": "pending"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "notify",
+          "text": "approval"
+        }
+      ],
+      "pendingApprovals": [
+        "ap1"
+      ]
+    }
+  }
+}

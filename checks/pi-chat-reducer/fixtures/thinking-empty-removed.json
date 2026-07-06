@@ -1,0 +1,29 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "thinking_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "thinking_end"
+      }
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "messages": []
+    }
+  }
+}

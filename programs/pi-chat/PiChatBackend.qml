@@ -402,6 +402,42 @@ Item {
     _sessionObjs = map;
   }
 
+  // ── per-session read surface (shell.qml IPC probes route here) ──
+  // First-class getters so external probes (test harnesses, the
+  // pi-chat IPC verbs) never reach into _sessionObjs themselves.
+  // Empty/unknown id falls back to the active chat, matching the
+  // send/sendTo routing above.
+
+  function sessionObj(id) {
+    return (id && _sessionObjs[id]) ? _sessionObjs[id] : chat;
+  }
+
+  function sessionMessages(id) {
+    const obj = sessionObj(id);
+    return (obj && obj.messages) ? obj.messages : [];
+  }
+
+  // Latest settled-or-streaming plain assistant text — what "the
+  // assistant last said", skipping thinking/tool/interaction bubbles.
+  function lastAssistantText(id) {
+    const msgs = sessionMessages(id);
+    if (!Array.isArray(msgs)) return "";
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && Msg.isPlainAssistant(m) && m.text) return m.text;
+    }
+    return "";
+  }
+
+  // Model-picker snapshot. activeModel/models are populated only from
+  // the daemon's get_state / get_available_models `response` events, so
+  // an empty result means the command-response layer was rejected.
+  function sessionModel(id) {
+    const obj = sessionObj(id);
+    if (!obj) return { active: "", count: 0 };
+    return { active: obj.activeModel || "", count: (obj.models || []).length };
+  }
+
   // Called by PiSession after a fresh create_session ack assigns it a
   // daemon-side id — or with "" when restart() drops the old daemon
   // session. Stamping the value on the persisted entry locks the

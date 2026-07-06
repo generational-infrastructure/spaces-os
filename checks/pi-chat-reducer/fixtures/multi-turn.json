@@ -1,0 +1,106 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "One"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_end",
+        "content": "One"
+      }
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "message_start",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      }
+    },
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_start"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "Two"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_end",
+        "content": "Two"
+      }
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [
+      {
+        "role": "assistant",
+        "text": "One",
+        "streaming": false
+      },
+      {
+        "role": "user",
+        "text": "again",
+        "streaming": false
+      },
+      {
+        "role": "assistant",
+        "text": "Two",
+        "streaming": false
+      }
+    ],
+    "confirms": [],
+    "chat": {
+      "messages": [
+        {
+          "from": "peer",
+          "text": "One",
+          "state": "sent"
+        },
+        {
+          "from": "me",
+          "text": "again"
+        },
+        {
+          "from": "peer",
+          "text": "Two",
+          "state": "sent"
+        }
+      ]
+    }
+  }
+}

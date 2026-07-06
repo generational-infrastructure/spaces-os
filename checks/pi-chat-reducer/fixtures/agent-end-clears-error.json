@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "auto_retry_end",
+      "success": false,
+      "finalError": "gave up"
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [],
+    "confirms": [],
+    "chat": {
+      "lastError": "",
+      "typing": false,
+      "messages": []
+    }
+  }
+}

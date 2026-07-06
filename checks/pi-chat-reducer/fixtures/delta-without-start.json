@@ -1,0 +1,45 @@
+{
+  "events": [
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "a"
+      }
+    },
+    {
+      "type": "message_update",
+      "assistantMessageEvent": {
+        "type": "text_delta",
+        "delta": "b"
+      }
+    },
+    {
+      "type": "agent_end"
+    }
+  ],
+  "expect": {
+    "transcript": [
+      {
+        "role": "assistant",
+        "text": "ab",
+        "streaming": false
+      }
+    ],
+    "confirms": [],
+    "chat": {
+      "typing": false,
+      "messages": [
+        {
+          "from": "peer",
+          "type": "",
+          "state": "sent",
+          "text": "ab"
+        }
+      ]
+    }
+  }
+}
