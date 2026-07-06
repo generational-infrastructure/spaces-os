@@ -156,27 +156,11 @@ let
       };
     };
 
-  baseModules = [
-    clanCoreStub
-    {
-      nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-      fileSystems."/" = {
-        device = "none";
-        fsType = "tmpfs";
-      };
-      boot.loader.grub.enable = false;
-      system.stateVersion = "26.05";
-    }
-  ];
-
   mkSystem =
     extra:
-    lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-        flake = inputs.self;
-      };
-      modules = baseModules ++ extra;
+    inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
+      modules = [ clanCoreStub ] ++ extra;
     };
 
   kiwiSystem = mkSystem [

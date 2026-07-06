@@ -14,22 +14,12 @@
 { pkgs, inputs, ... }:
 let
   signalCli =
-    (inputs.nixpkgs.lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-        flake = inputs.self;
-      };
+    (inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
         inputs.self.nixosModules.spaces
         {
-          nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = "signal-flags";
-          fileSystems."/" = {
-            device = "none";
-            fsType = "tmpfs";
-          };
-          boot.loader.grub.enable = false;
-          system.stateVersion = "26.05";
           services.spaces-signal.enable = true;
         }
       ];

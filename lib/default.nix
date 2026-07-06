@@ -101,6 +101,43 @@ in
         rel == toString path || !(builtins.elem top excludedTopLevel);
     };
 
+  # Minimal bootable NixOS eval fixture for the checks/ nix-eval tests.
+  #
+  # Every cheap nix-eval check wants the same throwaway scaffolding —
+  # enough to satisfy the NixOS assertions (a root fs, a bootloader
+  # decision, a stateVersion) without pulling in nixosModules.spaces the
+  # way mkSystem does, so a single module can be evaluated in isolation.
+  # Checks pass only the modules under test (plus any hostName /
+  # fixture config as ordinary modules); the audited call sites vary
+  # nothing else, so the surface stays exactly { modules, system }.
+  #
+  # Deliberately NOT delegated to by mkSystem: real hosts must supply
+  # their own fileSystems/bootloader, and injecting the tmpfs root here
+  # would conflict with (not be overridden by) a host's disk config.
+  mkEvalSystem =
+    {
+      modules ? [ ],
+      system ? "x86_64-linux",
+    }:
+    inputs.nixpkgs.lib.nixosSystem {
+      specialArgs = {
+        inherit inputs;
+        flake = inputs.self or flake;
+      };
+      modules = [
+        {
+          nixpkgs.hostPlatform = system;
+          fileSystems."/" = {
+            device = "none";
+            fsType = "tmpfs";
+          };
+          boot.loader.grub.enable = false;
+          system.stateVersion = "26.05";
+        }
+      ]
+      ++ modules;
+    };
+
   # Build a NixOS system pre-wired with the spaces module.
   #
   # Consumers (e.g. the Calamares-generated installed flake) only have to

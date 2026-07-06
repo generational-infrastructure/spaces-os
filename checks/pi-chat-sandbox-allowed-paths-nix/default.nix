@@ -39,22 +39,12 @@ let
 
   mkSystem =
     hostName: extraConfig:
-    inputs.nixpkgs.lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-        flake = inputs.self;
-      };
+    inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
         inputs.self.nixosModules.spaces
         {
-          nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = hostName;
-          fileSystems."/" = {
-            device = "none";
-            fsType = "tmpfs";
-          };
-          boot.loader.grub.enable = false;
-          system.stateVersion = "26.05";
 
           # Test the sandboxAllowedPaths wiring contract in isolation. The
           # signal-cli module would otherwise inject entries of its

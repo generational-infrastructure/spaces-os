@@ -13,23 +13,11 @@
 # distro module auto-enables pi-chat). Pure nix eval. ~3-5s.
 { pkgs, inputs, ... }:
 let
-  system = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
+  system = inputs.self.lib.mkEvalSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces
-      {
-        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-        fileSystems."/" = {
-          device = "none";
-          fsType = "tmpfs";
-        };
-        boot.loader.grub.enable = false;
-        system.stateVersion = "26.05";
-        services.pi-chat.notificationForwarding.enable = true;
-      }
+      { services.pi-chat.notificationForwarding.enable = true; }
     ];
   };
   # The forwarder matches app names case-insensitively, so compare

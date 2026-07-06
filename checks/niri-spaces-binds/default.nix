@@ -44,23 +44,9 @@ let
     lib.concatStringsSep "\n" (lib.unique (map docChord (lib.attrNames kb.binds)))
   );
 
-  system = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
-    modules = [
-      inputs.self.nixosModules.niri
-      {
-        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-        fileSystems."/" = {
-          device = "none";
-          fsType = "tmpfs";
-        };
-        boot.loader.grub.enable = false;
-        system.stateVersion = "26.05";
-      }
-    ];
+  system = inputs.self.lib.mkEvalSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    modules = [ inputs.self.nixosModules.niri ];
   };
   niriConfig = system.config.environment.etc."niri/config.kdl".source;
   cmds = system.config.services.spaces.commands;

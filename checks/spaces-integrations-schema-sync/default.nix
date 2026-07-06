@@ -18,24 +18,12 @@ let
       inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond.seccompDenylist;
   };
 
-  system = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
+  system = inputs.self.lib.mkEvalSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces-integrations
       ../../hosts/test-machine/integrations.nix
-      {
-        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-        networking.hostName = "schema-sync-fixture";
-        fileSystems."/" = {
-          device = "none";
-          fsType = "tmpfs";
-        };
-        boot.loader.grub.enable = false;
-        system.stateVersion = "26.05";
-      }
+      { networking.hostName = "schema-sync-fixture"; }
     ];
   };
 

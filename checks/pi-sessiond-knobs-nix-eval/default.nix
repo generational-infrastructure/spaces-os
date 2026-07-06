@@ -17,26 +17,14 @@
 # Pure nix-eval + jq. No VM, no quickshell. ~3s.
 { pkgs, inputs, ... }:
 let
-  inherit (inputs.nixpkgs) lib;
-
   mkSystem =
     hostName: extraConfig:
-    lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-        flake = inputs.self;
-      };
+    inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
         inputs.self.nixosModules.pi-sessiond
         {
-          nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           networking.hostName = hostName;
-          fileSystems."/" = {
-            device = "none";
-            fsType = "tmpfs";
-          };
-          boot.loader.grub.enable = false;
-          system.stateVersion = "26.05";
           # Keep the eval cheap: the sediment memory extension drags a model
           # cache into the closure and is irrelevant to the token/bind knobs.
           services.pi-sessiond.memory.enable = false;

@@ -33,73 +33,51 @@ let
     # transitively, so the eval here exercises the same import
     # graph spaces users get.
     inputs.self.nixosModules.spaces
-    {
-      nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-      fileSystems."/" = {
-        device = "none";
-        fsType = "tmpfs";
-      };
-      boot.loader.grub.enable = false;
-      system.stateVersion = "26.05";
-    }
   ];
+
+  mkSystem =
+    extra:
+    inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
+      modules = extra;
+    };
 
   # Default deployment shape: spaces module (which auto-enables
   # pi-chat) plus an explicit `enable = true` on spaces-signal. The
   # explicit set is redundant with the new pi-chat-tracking default
   # but keeps the intent obvious next to the assertions below.
-  enabledSystem = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
-    modules = baseModules ++ [
+  enabledSystem = mkSystem (
+    baseModules
+    ++ [
       {
         networking.hostName = "signal-enabled";
         services.spaces-signal.enable = true;
       }
-    ];
-  };
+    ]
+  );
 
   # Opt-out path: same imports, explicit `enable = false`. Must
   # leave NO spaces-signal-* user units, NO sandbox binds, and the
   # signal skill must not reach the agent's skills-defs farm.
-  disabledSystem = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
-    modules = baseModules ++ [
+  disabledSystem = mkSystem (
+    baseModules
+    ++ [
       {
         networking.hostName = "signal-disabled";
         services.spaces-signal.enable = false;
       }
-    ];
-  };
+    ]
+  );
 
   # No spaces / pi-chat in the import chain — spaces-signal
   # alone should trip its own assertion.
-  brokenSystem = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
-    modules = [
-      inputs.self.nixosModules.signal-cli
-      {
-        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-        networking.hostName = "signal-no-pichat";
-        fileSystems."/" = {
-          device = "none";
-          fsType = "tmpfs";
-        };
-        boot.loader.grub.enable = false;
-        system.stateVersion = "26.05";
-
-        services.spaces-signal.enable = true;
-      }
-    ];
-  };
+  brokenSystem = mkSystem [
+    inputs.self.nixosModules.signal-cli
+    {
+      networking.hostName = "signal-no-pichat";
+      services.spaces-signal.enable = true;
+    }
+  ];
 
   brokenAttempt = builtins.tryEval (
     builtins.deepSeq brokenSystem.config.system.build.toplevel.drvPath null

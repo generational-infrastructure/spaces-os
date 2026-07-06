@@ -23,23 +23,11 @@ let
 
   # Default spaces shape: the bundle auto-enables pi-chat and (via
   # pi-chat's own dep) signal-cli. Both default-on; nothing extra to set.
-  system = inputs.nixpkgs.lib.nixosSystem {
-    specialArgs = {
-      inherit inputs;
-      flake = inputs.self;
-    };
+  system = inputs.self.lib.mkEvalSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces
-      {
-        nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-        networking.hostName = "skill-clis-fixture";
-        fileSystems."/" = {
-          device = "none";
-          fsType = "tmpfs";
-        };
-        boot.loader.grub.enable = false;
-        system.stateVersion = "26.05";
-      }
+      { networking.hostName = "skill-clis-fixture"; }
     ];
   };
 

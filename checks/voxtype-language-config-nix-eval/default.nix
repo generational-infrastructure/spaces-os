@@ -19,26 +19,11 @@
 # each with tomllib. ~1s, no VM.
 { pkgs, inputs, ... }:
 let
-  baseModules = [
-    {
-      nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
-      fileSystems."/" = {
-        device = "none";
-        fsType = "tmpfs";
-      };
-      boot.loader.grub.enable = false;
-      system.stateVersion = "26.05";
-    }
-  ];
-
   mkSystem =
     extraModules:
-    inputs.nixpkgs.lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-        flake = inputs.self;
-      };
-      modules = baseModules ++ [ inputs.self.nixosModules.spaces ] ++ extraModules;
+    inputs.self.lib.mkEvalSystem {
+      inherit (pkgs.stdenv.hostPlatform) system;
+      modules = [ inputs.self.nixosModules.spaces ] ++ extraModules;
     };
 
   # Default: whisperLanguage keeps its historic bare-string default "auto".
