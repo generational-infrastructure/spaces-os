@@ -32,10 +32,56 @@ FloatingWindow {
 
   color: Color.mSurface
 
+  // Broker socket address; overridable so headless checks can point the
+  // bridge at a fake. Production resolves the per-user runtime socket.
+  property string integrationsSockPath: String(Quickshell.env("XDG_RUNTIME_DIR") || "") + "/spaces-integrations.sock"
+
+  // Inline device-setup flow state (one integration at a time).
+  // setupFor names the integration whose setup pane is open; the rest
+  // mirror the broker's streamed NDJSON events (see IntegrationsBridge).
+  property string setupFor: ""
+  property string setupPhase: ""   // "connecting" | "qr" | "done" | "error"
+  property string setupPng: ""
+  property string setupText: ""
+  property string setupErrorText: ""
+
   IntegrationsBridge {
     id: integrations
-    sockPath: String(Quickshell.env("XDG_RUNTIME_DIR") || "") + "/spaces-integrations.sock"
+    sockPath: root.integrationsSockPath
     Component.onCompleted: refresh()
+  }
+
+  // Relay the bridge's streamed setup events into the inline pane state.
+  Connections {
+    target: integrations
+    function onSetupEvent(ev) {
+      if (!ev || !ev.event) return;
+      if (ev.event === "qr") {
+        root.setupPng = ev.png || "";
+        root.setupPhase = "qr";
+      } else if (ev.event === "message") {
+        root.setupText = ev.text || "";
+      } else if (ev.event === "done") {
+        root.setupText = "";
+        root.setupPhase = "done";
+        setupAutoClose.restart();
+      } else if (ev.event === "error") {
+        root.setupErrorText = ev.error || "";
+        root.setupPhase = "error";
+      }
+    }
+  }
+
+  // On success the pane shows its done state briefly, then closes.
+  Timer {
+    id: setupAutoClose
+    interval: 1200
+    onTriggered: {
+      root.setupFor = "";
+      root.setupPhase = "";
+      root.setupPng = "";
+      root.setupText = "";
+    }
   }
 
   // One profile's provisioning form: config fields (plain) + secret fields
@@ -224,6 +270,19 @@ FloatingWindow {
             }
             Item { Layout.fillWidth: true }
             NButton {
+              objectName: "setupBtn-" + (intRow.modelData.name || "")
+              visible: intRow.modelData.enabled === true && intRow.modelData.setup === true
+              text: I18n.tr("settings.integrations-setup")
+              onClicked: {
+                root.setupFor = intRow.modelData.name;
+                root.setupPhase = "connecting";
+                root.setupPng = "";
+                root.setupText = "";
+                root.setupErrorText = "";
+                integrations.startSetup(intRow.modelData.name);
+              }
+            }
+            NButton {
               text: intRow.modelData.enabled
                 ? I18n.tr("settings.integrations-disable")
                 : I18n.tr("settings.integrations-enable")
@@ -241,6 +300,73 @@ FloatingWindow {
             wrapMode: Text.Wrap
             color: Color.mOnSurfaceVariant
             pointSize: Style.fontSizeS
+          }
+
+          // Inline device-setup flow, rendered only for the integration
+          // whose setup was launched (one at a time). qr paints the
+          // linking QR, message events show progress, done shows success
+          // then auto-closes, error surfaces the failure.
+          Loader {
+            Layout.fillWidth: true
+            active: root.setupFor === intRow.modelData.name
+            visible: active
+            sourceComponent: ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.marginXS
+
+              NText {
+                text: I18n.tr("settings.integrations-setup-title")
+                font.bold: true
+                color: Color.mOnSurface
+                pointSize: Style.fontSizeS
+              }
+
+              Image {
+                objectName: "setupQr"
+                visible: root.setupPhase === "qr" && root.setupPng !== ""
+                Layout.alignment: Qt.AlignHCenter
+                sourceSize.width: 180
+                sourceSize.height: 180
+                fillMode: Image.PreserveAspectFit
+                source: root.setupPng !== "" ? ("data:image/png;base64," + root.setupPng) : ""
+              }
+
+              NText {
+                visible: root.setupPhase === "qr"
+                Layout.fillWidth: true
+                text: I18n.tr("settings.integrations-setup-scan")
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                color: Color.mOnSurfaceVariant
+                pointSize: Style.fontSizeS
+              }
+
+              NText {
+                objectName: "setupStatus"
+                Layout.fillWidth: true
+                visible: text !== ""
+                wrapMode: Text.Wrap
+                pointSize: Style.fontSizeS
+                text: {
+                  if (root.setupPhase === "done") return I18n.tr("settings.integrations-setup-done");
+                  if (root.setupPhase === "error") return I18n.tr("settings.integrations-setup-error", { error: root.setupErrorText });
+                  return root.setupText;
+                }
+                color: root.setupPhase === "error" ? Color.mError : Color.mOnSurfaceVariant
+              }
+
+              NButton {
+                visible: root.setupPhase !== "done"
+                text: I18n.tr("settings.integrations-setup-cancel")
+                bgColor: Color.mSurfaceVariant
+                fgColor: Color.mOnSurfaceVariant
+                onClicked: {
+                  integrations.cancelSetup();
+                  root.setupFor = "";
+                  root.setupPhase = "";
+                }
+              }
+            }
           }
 
           // Multi-account: each provisioned profile, plus an "add account" draft.

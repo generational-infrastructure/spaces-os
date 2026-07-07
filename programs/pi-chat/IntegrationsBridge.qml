@@ -21,7 +21,9 @@ QtObject {
   property string sockPath: ""
 
   // Mirror of the broker's `list` reply. Each entry:
-  //   { name, description, enabled, secrets: [{ name, description, set }] }
+  //   { name, description, enabled, setup, multiProfile, config, secrets, profiles }
+  // `setup` (bool) is surfaced verbatim: the panel gates the Link/Setup
+  // button on it.
   property var integrations: []
 
   // True once a `list` has succeeded — lets the UI tell "still connecting"
@@ -36,6 +38,21 @@ QtObject {
   // Emitted after a set-secret/enable/disable terminal reply.
   signal acked(string op, string integration, bool ok, string error)
 
+  // ── setup flow ────────────────────────────────────────────────────
+  // op:"setup" opens a DEDICATED long-lived broker connection that
+  // streams NDJSON events (qr | message | done | error) until the
+  // broker closes it. Only one flow runs at a time.
+
+  // One parsed setup event line relayed from the broker.
+  signal setupEvent(var ev)
+  // The setup connection closed (done, error, cancel, or peer EOF).
+  signal setupClosed()
+
+  // True while a setup flow is live — enforces the one-at-a-time rule
+  // and lets the UI show/hide its inline setup area.
+  property bool setupActive: false
+  property var _setupSock: null
+
   function refresh() { _request({ op: "list" }); }
   function setField(integration, profile, field, value) {
     _request({ op: "set-field", integration: integration, profile: profile, field: field, value: value });
@@ -45,6 +62,28 @@ QtObject {
   }
   function enable(integration) { _request({ op: "enable", integration: integration }); }
   function disable(integration) { _request({ op: "disable", integration: integration }); }
+
+  // Open the sandboxed setup channel for `integration`. The broker
+  // validates it is enabled + setup-capable, starts the twin setup
+  // unit, and relays its NDJSON events until done/error. Returns false
+  // when inert, already running, or the socket could not be opened.
+  function startSetup(integration) {
+    if (root.sockPath === "") { root.lastError = "no integrations socket"; return false; }
+    if (root.setupActive) return false;
+    const s = _sock.stream({ op: "setup", integration: integration },
+                           (ev, raw) => root._onSetupLine(ev, raw),
+                           () => root._onSetupClosed());
+    if (!s) { root.lastError = "could not open integrations socket"; return false; }
+    root._setupSock = s;
+    root.setupActive = true;
+    return true;
+  }
+
+  // Abort the live setup flow; closing our end makes the broker kill
+  // the setup helper. _onSetupClosed() clears the state on teardown.
+  function cancelSetup() {
+    if (root._setupSock) root._setupSock.closeStream();
+  }
 
   property NdjsonSocket _sock: NdjsonSocket {
     path: root.sockPath
@@ -82,5 +121,20 @@ QtObject {
     // A successful mutation changed broker state — re-list so the form,
     // enable badges, and secret "set" markers reflect it.
     if (ok) root.refresh();
+  }
+
+  function _onSetupLine(ev, _raw) {
+    if (!ev || !ev.event) return;
+    root.setupEvent(ev);
+    // A completed link changed broker/service state — re-list so the
+    // form (enable badges, setup gating) reflects the freshly linked
+    // integration.
+    if (ev.event === "done") root.refresh();
+  }
+
+  function _onSetupClosed() {
+    root._setupSock = null;
+    root.setupActive = false;
+    root.setupClosed();
   }
 }

@@ -31,6 +31,14 @@
 // `onReply(msg, raw)`: parsed reply + raw line on success, (null, raw)
 // on an unparseable reply, (null, "") on close/error/timeout without
 // a reply.
+//
+// `stream(payload, onLine, onClose)` is `request`'s long-lived
+// sibling for streaming ops (e.g. the broker's `setup`, which stays
+// open emitting NDJSON events until it closes): a fresh dedicated
+// connection — connect → write payload → deliver EVERY parsed line
+// via `onLine(msg, raw)` — that lives until the peer closes or the
+// caller closes the returned handle with `.closeStream()`; `onClose()`
+// then fires exactly once. No reconnect: the flow is one-shot.
 pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell.Io
@@ -89,6 +97,15 @@ QtObject {
       return false;
     const sock = _oneShot.createObject(root, { path: path, payload: payload, replyCb: onReply ?? null });
     return sock !== null;
+  }
+
+  // Long-lived streaming request on a fresh dedicated connection; see
+  // the header. Returns the connection handle (call `.closeStream()`
+  // to tear it down early) or null when no attempt could be made.
+  function stream(payload, onLine, onClose) {
+    if (path === "")
+      return null;
+    return _streamer.createObject(root, { path: path, payload: payload, lineCb: onLine ?? null, closeCb: onClose ?? null });
   }
 
   function _deliver(raw) {
@@ -212,6 +229,62 @@ QtObject {
         }
       }
       onError: _e => shot._finish(null, "")
+    }
+  }
+
+  // ── stream internals ─────────────────────────────────────────────
+  //
+  // Like _oneShot but multi-line and long-lived: no reply deadline,
+  // every parsed line is delivered, and teardown (peer close, error,
+  // or an explicit closeStream()) fires closeCb exactly once.
+
+  property Component _streamer: Component {
+    Socket {
+      id: strm
+
+      property var payload: null
+      property var lineCb: null
+      property var closeCb: null
+      // First teardown wins: peer close, error, or closeStream().
+      property bool ended: false
+
+      // Proactive teardown by the caller (cancel). Dropping the
+      // connection routes through onConnectionStateChanged → _end().
+      function closeStream() {
+        if (ended)
+          return;
+        connected = false;
+      }
+
+      function _end() {
+        if (ended)
+          return;
+        ended = true;
+        if (closeCb)
+          closeCb();
+        strm.destroy(1000);
+      }
+
+      connected: path !== ""
+      parser: SplitParser {
+        onRead: line => {
+          let msg = null;
+          try {
+            msg = JSON.parse(line);
+          } catch (_e) {}
+          if (strm.lineCb)
+            strm.lineCb(msg, line);
+        }
+      }
+      onConnectionStateChanged: {
+        if (connected) {
+          write(JSON.stringify(strm.payload) + "\n");
+          flush();
+        } else {
+          strm._end();
+        }
+      }
+      onError: _e => strm._end()
     }
   }
 
