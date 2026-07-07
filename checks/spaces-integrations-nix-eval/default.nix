@@ -44,6 +44,22 @@ let
       description = "Local notes";
       command = "integration-notes-placeholder";
     };
+    # extraPaths (step 2): a rw daemon-socket dir + an ro attachments dir folded
+    # into the Landlock policy. Offline (network defaults false), like signal.
+    withpaths = {
+      description = "Extra-paths demo";
+      command = "integration-withpaths-placeholder";
+      extraPaths = [
+        {
+          source = "/run/user/1000/signal-cli";
+          mode = "rw";
+        }
+        {
+          source = "/home/x/.local/share/signal-cli/attachments";
+          mode = "ro";
+        }
+      ];
+    };
   };
 
   enabledSystem = mkSystem [
@@ -90,6 +106,12 @@ let
     landlockExec = "unused-here";
   };
   ghDef = ghInteg.definition;
+  wpInteg = integLib.mkIntegration {
+    name = "withpaths";
+    manifest = enabledSystem.config.services.spaces-integrations.integrations.withpaths;
+    landlockPolicyCli = "unused-here";
+    landlockExec = "unused-here";
+  };
   brokerSvc = enabledSystem.config.systemd.user.services.spaces-integrationd;
 in
 # ── Exec lines: shape at eval (no realize) ──────────────────────────────────
@@ -130,6 +152,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     ghSocket = builtins.toJSON ghSock.socketConfig;
     ghDefinition = builtins.toJSON ghDef;
     specFile = ghInteg.policySpecFile;
+    wpSpecFile = wpInteg.policySpecFile;
     disabledHasGithub =
       if (disabledSystem.config.systemd.user.services."spaces-integration-github" or null) == null then
         "no"
@@ -211,6 +234,30 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     jq -e '([.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]]) as $rw
            | (($rw | index("/sample/state")) != null) and (($rw | index("/sample/share")) != null)' \
       "$policy2" >/dev/null || fail "shared dir not granted rw when SPACES_INTEGRATION_SHARED_DIR set"
+
+    # ── 8. extraPaths (step 2): spec carries the grants; the CLI folds them ──
+    # The extraPaths-bearing integration's SPEC lists both grants verbatim; the
+    # CLI expands any %t/%h at unit start (here literal, so byte-for-byte).
+    jq -e '.extraPaths == [{"source":"/run/user/1000/signal-cli","mode":"rw"},{"source":"/home/x/.local/share/signal-cli/attachments","mode":"ro"}]' \
+      "$wpSpecFile" >/dev/null || fail "extraPaths missing from policy spec"
+
+    # Deny-by-default unchanged: an integration WITHOUT extraPaths emits NO
+    # extraPaths key — byte-identical to the pre-mechanism spec shape.
+    jq -e 'has("extraPaths") | not' "$specFile" >/dev/null \
+      || fail "extraPaths key leaked into an integration that declared none"
+    jq -e '. == {"abi":6,"connectPorts":[443],"scope":["signal","abstract_unix_socket"]}' \
+      "$specFile" >/dev/null || fail "no-extraPaths spec not byte-identical to before"
+
+    # Lowering routes rw→writable set, ro→read-only set (nothing else granted).
+    wppolicy=$PWD/landlock-withpaths.json
+    env STATE_DIRECTORY=/sample/state spaces-landlock-policy --spec "$wpSpecFile" --out "$wppolicy"
+    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] as $rw
+           | (($rw | index("/sample/state")) != null) and (($rw | index("/run/user/1000/signal-cli")) != null)' \
+      "$wppolicy" >/dev/null || fail "rw extraPath not folded into the writable set"
+    jq -e 'any(.pathBeneath[]; (.parent | index("/home/x/.local/share/signal-cli/attachments")) and (.allowedAccess | index("read_file")) and (.allowedAccess | index("write_file") | not))' \
+      "$wppolicy" >/dev/null || fail "ro extraPath not folded into the read-only set"
+    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] | index("/home/x/.local/share/signal-cli/attachments") == null' \
+      "$wppolicy" >/dev/null || fail "ro extraPath leaked into the writable set"
 
     touch "$out"
   ''

@@ -104,3 +104,68 @@ test("end-to-end: deny-by-default doc grants exactly StateDir(rw) + cred(ro) + 4
   expect(allParents).not.toContain("/home/alice");
   expect(allParents).not.toContain("/home/alice/.local/state");
 });
+
+// A signal-style integration: a rw socket dir + an ro attachments dir folded
+// into the sandbox surfaces via `extraPaths`. The state dir stays the only
+// implicit writable; the ro grant must never leak into the writable set.
+const signalResolved = {
+  stateDirs: ["/home/alice/.local/state/spaces-integration-signal"],
+  credDirs: [],
+  runtimeDir: "/run/user/1000",
+  homeDir: "/home/alice",
+};
+
+test("lowerIntegrationPolicy: extraPaths route ro→roDirs, rw→rwDirs", () => {
+  const spec: IntegrationPolicySpec = {
+    abi: 6,
+    scope: ["signal", "abstract_unix_socket"],
+    extraPaths: [
+      { source: "/run/user/1000/signal-cli", mode: "rw" },
+      { source: "/home/x/.local/share/signal-cli/attachments", mode: "ro" },
+    ],
+  };
+  const p = lowerIntegrationPolicy(spec, signalResolved);
+  expect(p.rwDirs).toContain("/run/user/1000/signal-cli");
+  expect(p.roDirs).toContain("/home/x/.local/share/signal-cli/attachments");
+  // StateDirectory stays writable; the ro extra never joins the rw set.
+  expect(p.rwDirs).toContain(
+    "/home/alice/.local/state/spaces-integration-signal",
+  );
+  expect(p.rwDirs).not.toContain(
+    "/home/x/.local/share/signal-cli/attachments",
+  );
+});
+
+test("lowerIntegrationPolicy: %t/%h in extraPaths expand from the unit env", () => {
+  // lib.nix bakes the spec into a store file, so systemd never expands
+  // specifiers inside its CONTENTS — the CLI resolves %t/%h from the env itself.
+  const spec: IntegrationPolicySpec = {
+    extraPaths: [
+      { source: "%t/signal-cli", mode: "rw" },
+      { source: "%h/.local/share/signal-cli/attachments", mode: "ro" },
+    ],
+  };
+  const p = lowerIntegrationPolicy(spec, signalResolved);
+  expect(p.rwDirs).toContain("/run/user/1000/signal-cli");
+  expect(p.roDirs).toContain(
+    "/home/alice/.local/share/signal-cli/attachments",
+  );
+});
+
+test("lowerIntegrationPolicy: an unresolvable specifier fails closed", () => {
+  const spec: IntegrationPolicySpec = {
+    extraPaths: [{ source: "%t/signal-cli", mode: "rw" }],
+  };
+  expect(() =>
+    lowerIntegrationPolicy(spec, { stateDirs: [], credDirs: [] }),
+  ).toThrow(/XDG_RUNTIME_DIR/);
+});
+
+test("resolveFromEnv: %t/%h sources come from XDG_RUNTIME_DIR/HOME", () => {
+  const r = resolveFromEnv({
+    XDG_RUNTIME_DIR: "/run/user/1000",
+    HOME: "/home/bob",
+  });
+  expect(r.runtimeDir).toBe("/run/user/1000");
+  expect(r.homeDir).toBe("/home/bob");
+});

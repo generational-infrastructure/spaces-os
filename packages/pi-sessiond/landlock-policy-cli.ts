@@ -30,6 +30,17 @@ export interface IntegrationPolicySpec {
   roDirs?: string[];
   roFiles?: string[];
   rwDirs?: string[];
+  // Manifest `extraPaths`: dirs granted beyond the implicit StateDir/cred surface
+  // (ro → read set, rw → write set). Sources may carry %t/%h; default none.
+  extraPaths?: IntegrationExtraPath[];
+}
+
+// One manifest-declared extra grant: an absolute path plus its access mode.
+// `source` may embed systemd %t/%h specifiers, resolved at unit start by the
+// CLI (see expandSpecifiers) — never at build time.
+export interface IntegrationExtraPath {
+  source: string;
+  mode: "ro" | "rw";
 }
 
 // The paths systemd hands the unit at start.
@@ -37,6 +48,30 @@ export interface ResolvedPaths {
   stateDirs: string[]; // $STATE_DIRECTORY (rw): the server's own scratch/state
   credDirs: string[]; // $CREDENTIALS_DIRECTORY (ro): decrypted secrets mount
   sharedDirs?: string[]; // per-pair file-exchange dirs (rw); set in step 6
+  runtimeDir?: string; // $XDG_RUNTIME_DIR, expands %t in extraPaths sources
+  homeDir?: string; // $HOME, expands %h in extraPaths sources
+}
+
+// Resolve systemd %t/%h specifiers embedded in an `extraPaths` source. lib.nix
+// bakes the policy spec into a store file, so systemd expands specifiers in the
+// ExecStartPre `--out` ARG (a unit directive value) but NOT inside the spec
+// file's CONTENTS — this CLI resolves them itself from the unit environment
+// ($XDG_RUNTIME_DIR / $HOME). An unset target fails closed (throws) rather than
+// granting a half-resolved path.
+function expandSpecifiers(
+  source: string,
+  runtimeDir: string | undefined,
+  homeDir: string | undefined,
+): string {
+  return source.replace(/%[th]/g, (m) => {
+    const [value, varName] =
+      m === "%t" ? [runtimeDir, "XDG_RUNTIME_DIR"] : [homeDir, "HOME"];
+    if (!value)
+      throw new Error(
+        `spaces-landlock-policy: cannot expand ${m} in "${source}": ${varName} is unset`,
+      );
+    return value;
+  });
 }
 
 // Compose the static spec + the unit-start-resolved paths into a SandboxPolicy.
@@ -49,13 +84,23 @@ export function lowerIntegrationPolicy(
   spec: IntegrationPolicySpec,
   resolved: ResolvedPaths,
 ): SandboxPolicy {
+  const expand = (source: string): string =>
+    expandSpecifiers(source, resolved.runtimeDir, resolved.homeDir);
+  const extra = spec.extraPaths ?? [];
+  const extraRw = extra
+    .filter((e) => e.mode === "rw")
+    .map((e) => expand(e.source));
+  const extraRo = extra
+    .filter((e) => e.mode === "ro")
+    .map((e) => expand(e.source));
   return {
     rwDirs: [
       ...resolved.stateDirs,
       ...(resolved.sharedDirs ?? []),
       ...(spec.rwDirs ?? []),
+      ...extraRw,
     ],
-    roDirs: [...resolved.credDirs, ...(spec.roDirs ?? [])],
+    roDirs: [...resolved.credDirs, ...(spec.roDirs ?? []), ...extraRo],
     roFiles: spec.roFiles ?? [],
     connectPorts: spec.connectPorts ?? [],
     abi: spec.abi,
@@ -75,6 +120,8 @@ export function resolveFromEnv(
     stateDirs: list(env.STATE_DIRECTORY),
     credDirs: list(env.CREDENTIALS_DIRECTORY),
     sharedDirs: list(env.SPACES_INTEGRATION_SHARED_DIR),
+    runtimeDir: env.XDG_RUNTIME_DIR,
+    homeDir: env.HOME,
   };
 }
 

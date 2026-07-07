@@ -55,6 +55,31 @@ let
     };
   };
 
+  extraPathSubmodule = lib.types.submodule {
+    options = {
+      source = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          Absolute path granted to the integration's Landlock domain beyond its
+          implicit StateDirectory (rw) + credentials mount (ro). May embed
+          systemd `%t` ($XDG_RUNTIME_DIR) / `%h` ($HOME) specifiers, which the
+          spaces-landlock-policy CLI resolves at unit start — the policy spec is
+          a store file, so systemd never expands specifiers inside its contents.
+        '';
+      };
+      mode = lib.mkOption {
+        type = lib.types.enum [
+          "ro"
+          "rw"
+        ];
+        description = ''
+          Access mode: `ro` folds `source` into the read set, `rw` into the
+          writable set of the lowered Landlock policy.
+        '';
+      };
+    };
+  };
+
   integrationSubmodule = lib.types.submodule {
     options = {
       description = lib.mkOption {
@@ -85,6 +110,19 @@ let
           only these ports are dialable and every other TCP connect is denied.
           Empty with `network = true` => all ports (coarse). Ignored when
           network is off.
+        '';
+      };
+      extraPaths = lib.mkOption {
+        type = lib.types.listOf extraPathSubmodule;
+        default = [ ];
+        description = ''
+          Extra host paths folded into the Landlock policy by
+          spaces-landlock-policy, beyond the implicit StateDirectory (rw) and
+          credentials mount (ro). Each entry is `{ source; mode; }` with mode
+          `ro`|`rw`; sources may carry systemd `%t`/`%h` specifiers. Empty (the
+          default) keeps the deny-by-default posture — exactly StateDir +
+          credentials + declared egress. Used e.g. by signal to reach the daemon
+          socket dir (rw) and the read-only attachments store.
         '';
       };
       secrets = lib.mkOption {

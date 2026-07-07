@@ -74,6 +74,12 @@ in
           "signal"
           "abstract_unix_socket"
         ];
+      }
+      // lib.optionalAttrs (manifest.extraPaths != [ ]) {
+        # ro → read set, rw → write set (folded by spaces-landlock-policy). Sources
+        # keep %t/%h verbatim; the spec is a store file, so systemd never expands
+        # them — the CLI resolves them from the unit env ($XDG_RUNTIME_DIR/$HOME).
+        extraPaths = map (p: { inherit (p) source mode; }) manifest.extraPaths;
       };
       policySpecFile = jsonFormat.generate "${unitName}-policy-spec.json" policySpec;
 
