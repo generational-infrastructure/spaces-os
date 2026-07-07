@@ -92,6 +92,7 @@ in
           network
           connectPorts
           autoRun
+          confirmPreview
           multiProfile
           ;
         config = lib.mapAttrs (_: c: { inherit (c) description required; }) manifest.config;

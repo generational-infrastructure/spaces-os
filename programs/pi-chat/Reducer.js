@@ -265,6 +265,7 @@ function _approvalRequest(s, ev, now, effects) {
     integration: ev.integration,
     tool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
     args: JSON.stringify(ev.args || {}, null, 2),
+    context: typeof ev.context === "string" ? ev.context : "",
   }));
   effects.push({ kind: "notify", text: ev.toolName || "approval" });
 }

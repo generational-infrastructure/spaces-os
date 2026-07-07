@@ -7,8 +7,10 @@
 # Asserts the step-4 acceptance: discovery stages the per-session tool spec; an
 # autoRun tool runs unprompted; a non-allowlisted tool raises an approval
 # carrying its args; Deny never reaches the server; "for this session" runs it
-# and suppresses the next prompt; a daemon with no integrations env exposes no
-# tools.
+# and suppresses the next prompt; a confirmPreview tool has its preview called
+# (same socket/args) before the prompt, its output ridden on the approval as
+# `context`, and a preview error fails closed (tool errors, no prompt, real
+# send never called); a daemon with no integrations env exposes no tools.
 # Also asserts the step-6 file-exchange wiring: an enabled integration adds its
 # shared dir to the session's Landlock rw set (created by the supervisor); with
 # none enabled, no such grant appears.

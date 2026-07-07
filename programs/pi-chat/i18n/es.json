@@ -37,6 +37,7 @@
     "reply-tooltip": "Responder",
     "quote-missing": "↳ (mensaje anterior)",
     "approval-title": "¿Permitir llamada a herramienta de integración?",
+    "approval-context": "Vista previa:",
     "approval-deny": "Denegar",
     "approval-once": "Permitir una vez",
     "approval-session": "Permitir en la sesión",

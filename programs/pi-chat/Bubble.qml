@@ -387,6 +387,28 @@ Item {
           }
         }
       }
+      // Untrusted preview context (a confirmPreview tool's output). PLAIN text
+      // ONLY — never markdown/rich markup, since the integration server owns
+      // this string. Shown above the raw args when the gateway supplied it.
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: 0
+        visible: (row.msg.approvalContext || "") !== ""
+        NText {
+          text: row.tr("bubble.approval-context")
+          pointSize: Style.fontSizeXS
+          font.bold: true
+          color: Color.mOnSurfaceVariant
+        }
+        NText {
+          Layout.fillWidth: true
+          text: row.msg.approvalContext
+          textFormat: Text.PlainText
+          wrapMode: Text.Wrap
+          color: Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeXS
+        }
+      }
       // The exact args the tool will run with — the security-relevant payload.
       NText {
         Layout.fillWidth: true

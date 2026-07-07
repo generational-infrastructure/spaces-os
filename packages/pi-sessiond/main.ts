@@ -653,19 +653,24 @@ function raiseApproval(
   session: Session,
   entry: RegistryEntry,
   args: Record<string, unknown>,
+  context?: string,
 ): Promise<string> {
   const id = randomUUID();
   const promise = session.ledger.raiseApproval(id);
   // A side-channel event payload (like extension_ui_request) routed by `type`;
   // the panel renders {once, session, deny} and replies approval_response.
-  broadcast(session, {
+  // `context` (a confirmPreview tool's output) is untrusted preview text the
+  // panel renders as plain quoted text; omitted when the tool has no preview.
+  const payload: Record<string, unknown> = {
     type: "approval_request",
     id,
     integration: entry.integration,
     tool: entry.tool,
     toolName: entry.piName,
     args,
-  });
+  };
+  if (context !== undefined) payload.context = context;
+  broadcast(session, payload);
   if (session.subscribers.size === 0) {
     fireNotifier(session, "approval", entry.piName);
   }
@@ -717,7 +722,23 @@ async function handleIntegrationCall(
   const args = isRecord(call.args) ? call.args : {};
 
   if (!entry.autoRun && !session.toolGrants.has(piName)) {
-    const decision = await raiseApproval(session, entry, args);
+    let context: string | undefined;
+    if (entry.confirmPreview) {
+      // Render the untrusted approval context by calling the preview tool with
+      // the same args over the same socket. A preview error/timeout FAILS
+      // CLOSED: reply the tool error and raise NO approval (design decision 5).
+      const preview = await callIntegrationTool(
+        entry.socketPath,
+        entry.confirmPreview,
+        args,
+      );
+      if (preview.isError) {
+        reply(preview.text, true);
+        return;
+      }
+      context = preview.text;
+    }
+    const decision = await raiseApproval(session, entry, args, context);
     if (decision === "deny") {
       reply("Denied by user.", true); // the server is never called
       return;

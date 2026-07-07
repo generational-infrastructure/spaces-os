@@ -51,6 +51,7 @@
     "prompt-cancelled": "✗ cancelled",
     "prompt-retracted": "⚠ retracted",
     "approval-title": "Allow integration tool call?",
+    "approval-context": "Preview:",
     "approval-deny": "Deny",
     "approval-once": "Allow once",
     "approval-session": "Allow for session",

@@ -37,6 +37,7 @@
     "reply-tooltip": "Odpowiedz",
     "quote-missing": "↳ (wcześniejsza wiadomość)",
     "approval-title": "Zezwolić na wywołanie narzędzia integracji?",
+    "approval-context": "Podgląd:",
     "approval-deny": "Odmów",
     "approval-once": "Zezwól raz",
     "approval-session": "Zezwól na sesję",

@@ -37,6 +37,7 @@
     "reply-tooltip": "Beantwoorden",
     "quote-missing": "↳ (eerder bericht)",
     "approval-title": "Aanroep van integratietool toestaan?",
+    "approval-context": "Voorbeeld:",
     "approval-deny": "Weigeren",
     "approval-once": "Eén keer toestaan",
     "approval-session": "Toestaan voor sessie",

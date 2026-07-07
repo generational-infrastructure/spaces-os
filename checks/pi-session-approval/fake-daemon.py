@@ -97,7 +97,36 @@ async def handler(ws, *_):
             ptype = payload.get("type")
             if ptype == "prompt":
                 message = payload.get("message") or ""
-                if message.startswith("approve:"):
+                if message.startswith("approve-ctx:"):
+                    # A confirmPreview tool (decision 5): the gateway ran the
+                    # preview and put its untrusted output on the approval as
+                    # `context`; the panel must render it as plain quoted text.
+                    appr_id = message.split(":", 1)[1]
+                    await send_event(
+                        sid,
+                        {
+                            "type": "approval_request",
+                            "id": appr_id,
+                            "integration": "signal",
+                            "tool": "send",
+                            "toolName": "signal_send",
+                            "args": {
+                                "recipient": "+15550001111",
+                                "name": "Alice",
+                                "body": "hi",
+                            },
+                            "context": (
+                                'to: Alice <+15550001111>\n'
+                                '\u26a0 similar to "Alicia" <+15550002222>'
+                            ),
+                        },
+                    )
+                elif message.startswith("fail-closed:"):
+                    # A preview error FAILS CLOSED: the gateway replies a tool
+                    # error to the child and raises NO approval_request. The
+                    # panel must not conjure a bubble the gateway never sent.
+                    pass
+                elif message.startswith("approve:"):
                     appr_id = message.split(":", 1)[1]
                     await send_event(
                         sid,

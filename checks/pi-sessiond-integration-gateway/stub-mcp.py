@@ -36,6 +36,32 @@ TOOLS = [
             "required": ["repo", "title"],
         },
     },
+    {
+        "name": "send",
+        "description": "Send a message (confirm)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "recipient": {"type": "string"},
+                "name": {"type": "string"},
+                "body": {"type": "string"},
+            },
+            "required": ["recipient", "name", "body"],
+        },
+    },
+    {
+        "name": "send_preview",
+        "description": "Preview a send (gateway-only, never child-facing)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "recipient": {"type": "string"},
+                "name": {"type": "string"},
+                "body": {"type": "string"},
+            },
+            "required": ["recipient", "name", "body"],
+        },
+    },
 ]
 
 
@@ -68,17 +94,46 @@ async def handle(reader, writer):
             args = params.get("arguments") or {}
             with open(CALLS_OUT, "a") as fh:
                 fh.write(json.dumps({"name": name, "args": args}) + "\n")
-            send(
-                {
-                    "content": [
+            if name == "send_preview":
+                # The gateway calls the preview tool before raising approval. A
+                # "boom" body simulates a preview error → the gateway FAILS
+                # CLOSED (tool errors, no approval, the real send never runs).
+                if args.get("body") == "boom":
+                    send(
                         {
-                            "type": "text",
-                            "text": f"ok:{name}:{json.dumps(args, sort_keys=True)}",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "preview failed: unknown recipient",
+                                }
+                            ],
+                            "isError": True,
                         }
-                    ],
-                    "isError": False,
-                }
-            )
+                    )
+                else:
+                    send(
+                        {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"to: {args.get('name', '')} <{args.get('recipient', '')}>",
+                                }
+                            ],
+                            "isError": False,
+                        }
+                    )
+            else:
+                send(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"ok:{name}:{json.dumps(args, sort_keys=True)}",
+                            }
+                        ],
+                        "isError": False,
+                    }
+                )
         # notifications/initialized and anything else: no reply.
         await writer.drain()
 

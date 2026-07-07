@@ -37,6 +37,7 @@
     "reply-tooltip": "返信",
     "quote-missing": "↳（以前のメッセージ）",
     "approval-title": "統合ツールの呼び出しを許可しますか?",
+    "approval-context": "プレビュー:",
     "approval-deny": "拒否",
     "approval-once": "1回だけ許可",
     "approval-session": "セッション中は許可",

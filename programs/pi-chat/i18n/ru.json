@@ -37,6 +37,7 @@
     "reply-tooltip": "Ответить",
     "quote-missing": "↳ (более раннее сообщение)",
     "approval-title": "Разрешить вызов инструмента интеграции?",
+    "approval-context": "Предпросмотр:",
     "approval-deny": "Отклонить",
     "approval-once": "Разрешить один раз",
     "approval-session": "Разрешить на сессию",

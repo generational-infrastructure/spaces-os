@@ -37,6 +37,7 @@
     "reply-tooltip": "Antworten",
     "quote-missing": "↳ (frühere Nachricht)",
     "approval-title": "Integrationstool-Aufruf zulassen?",
+    "approval-context": "Vorschau:",
     "approval-deny": "Ablehnen",
     "approval-once": "Einmal zulassen",
     "approval-session": "Für Sitzung zulassen",

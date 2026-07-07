@@ -37,6 +37,7 @@
     "reply-tooltip": "回复",
     "quote-missing": "↳（更早的消息）",
     "approval-title": "允许集成工具调用?",
+    "approval-context": "预览:",
     "approval-deny": "拒绝",
     "approval-once": "允许一次",
     "approval-session": "本会话内允许",

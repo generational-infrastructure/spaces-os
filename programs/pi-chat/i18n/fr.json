@@ -37,6 +37,7 @@
     "reply-tooltip": "Répondre",
     "quote-missing": "↳ (message antérieur)",
     "approval-title": "Autoriser l'appel d'outil d'intégration ?",
+    "approval-context": "Aperçu :",
     "approval-deny": "Refuser",
     "approval-once": "Autoriser une fois",
     "approval-session": "Autoriser pour la session",

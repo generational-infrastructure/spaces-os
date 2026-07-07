@@ -65,5 +65,11 @@ FloatingWindow {
       var m = win._find(id);
       return m ? (m.approvalArgs || "") : "";
     }
+    // The untrusted preview text the gateway attached (a confirmPreview tool's
+    // output), proving the panel surfaces `context` as plain quoted text.
+    function approvalContext(id: string): string {
+      var m = win._find(id);
+      return m ? (m.approvalContext || "") : "";
+    }
   }
 }

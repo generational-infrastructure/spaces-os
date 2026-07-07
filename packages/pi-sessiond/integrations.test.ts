@@ -19,6 +19,7 @@ import {
   INTEGRATION_CALL_TITLE,
   INTEGRATION_TOOL_SPEC_FILE,
   integrationNames,
+  loadDefinition,
   mcpExchange,
   refreshRegistry,
   type Registry,
@@ -144,7 +145,10 @@ test("discoverTools resolves [] when the socket is unreachable", async () => {
 
 function setupManifest(
   name: string,
-  defs: Record<string, { autoRun?: string[] }>,
+  defs: Record<
+    string,
+    { autoRun?: string[]; confirmPreview?: Record<string, string> }
+  >,
   enabled: unknown,
 ): { defsDir: string; enabledPath: string; socketDir: string } {
   const dir = join(root, name);
@@ -196,6 +200,57 @@ test("buildRegistry namespaces tools and precomputes the autoRun verdict", async
   });
   // create_issue is not on the allowlist ⇒ confirm-per-call.
   expect(reg.get("github_create_issue")!.autoRun).toBe(false);
+});
+
+// ---- loadDefinition: confirmPreview -----------------------------------------
+
+test("loadDefinition parses confirmPreview; absent ⇒ empty map", () => {
+  const dir = join(root, "defs-preview");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "sig.json"),
+    JSON.stringify({
+      autoRun: ["threads"],
+      confirmPreview: { send: "send_preview" },
+    }),
+  );
+  writeFileSync(join(dir, "plain.json"), JSON.stringify({ autoRun: [] }));
+  expect(loadDefinition(dir, "sig")!.confirmPreview).toEqual({
+    send: "send_preview",
+  });
+  // A definition without the key ⇒ empty map, never undefined.
+  expect(loadDefinition(dir, "plain")!.confirmPreview).toEqual({});
+});
+
+test("buildRegistry carries confirmPreview and hides preview tools from the registry", async () => {
+  const discovered: DiscoveredTool[] = [
+    { name: "send", description: "Send a message", parameters: {} },
+    { name: "send_preview", description: "Preview a send", parameters: {} },
+    { name: "threads", description: "List threads", parameters: {} },
+  ];
+  const m = setupManifest(
+    "sigreg",
+    {
+      signal: {
+        autoRun: ["threads"],
+        confirmPreview: { send: "send_preview" },
+      },
+    },
+    { integrations: { signal: { enabled: true } } },
+  );
+  const reg = await buildRegistry(
+    m,
+    fakeDiscover({
+      [join(m.socketDir, "spaces-integration-signal.sock")]: discovered,
+    }),
+  );
+  // send_preview is a gateway-only preview target: never registered, so never
+  // child-facing (decision 1: "never listed").
+  expect([...reg.keys()]).toEqual(["signal_send", "signal_threads"]);
+  expect(reg.get("signal_send")!.confirmPreview).toBe("send_preview");
+  expect(reg.get("signal_threads")!.confirmPreview).toBeUndefined();
+  // The child-facing spec likewise excludes the preview tool.
+  expect(toolSpec(reg).map((e) => e.tool)).toEqual(["send", "threads"]);
 });
 
 test("buildRegistry skips disabled integrations and missing definitions", async () => {

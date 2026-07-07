@@ -74,6 +74,11 @@ export function loadEnabled(enabledPath: string): string[] {
 // autoRun allowlist; the panel/broker read the rest (description, secrets…).
 export interface IntegrationDef {
   autoRun: string[];
+  // Per-tool preview map: a confirm tool name → the gateway-only preview tool
+  // it calls (same socket, same args) before raising the approval prompt, whose
+  // text becomes the approval's untrusted `context`. Absent/empty ⇒ no
+  // previews. Preview tools are never child-facing (buildRegistry drops them).
+  confirmPreview: Record<string, string>;
 }
 
 export function loadDefinition(
@@ -91,7 +96,13 @@ export function loadDefinition(
   const autoRun = Array.isArray(def.autoRun)
     ? def.autoRun.filter((t): t is string => typeof t === "string")
     : [];
-  return { autoRun };
+  const confirmPreview: Record<string, string> = {};
+  if (isRecord(def.confirmPreview)) {
+    for (const [tool, preview] of Object.entries(def.confirmPreview)) {
+      if (typeof preview === "string") confirmPreview[tool] = preview;
+    }
+  }
+  return { autoRun, confirmPreview };
 }
 
 // ---- runtime discovery + registry -------------------------------------------
@@ -112,6 +123,10 @@ export interface RegistryEntry {
   parameters: Record<string, unknown>;
   socketPath: string;
   autoRun: boolean; // on the manifest allowlist ⇒ runs without a prompt
+  // The gateway-only preview tool called (same socket, same args) before the
+  // approval prompt; its text rides the approval as untrusted `context`.
+  // Absent ⇒ the prompt carries no context. Never itself a registered tool.
+  confirmPreview?: string;
 }
 
 export type Registry = Map<string, RegistryEntry>; // keyed by piName
@@ -281,9 +296,14 @@ export async function buildRegistry(
     // unitName): %t/spaces-integration-<name>.sock. socketDir is the daemon's
     // %t ($XDG_RUNTIME_DIR), shared with the integration units' user manager.
     const socketPath = join(opts.socketDir, `spaces-integration-${name}.sock`);
+    // Preview tools are gateway-internal: the gateway calls them directly by
+    // name over the same socket, so they get no registry entry and thus never
+    // reach the child spec (decision 1: "never listed").
+    const previewTools = new Set(Object.values(def.confirmPreview));
     const tools = await discover(socketPath);
     for (const t of tools) {
       if (!NAME_RE.test(t.name)) continue;
+      if (previewTools.has(t.name)) continue;
       const piName = `${name}_${t.name}`;
       registry.set(piName, {
         piName,
@@ -293,6 +313,7 @@ export async function buildRegistry(
         parameters: t.parameters,
         socketPath,
         autoRun: def.autoRun.includes(t.name),
+        confirmPreview: def.confirmPreview[t.name],
       });
     }
   }

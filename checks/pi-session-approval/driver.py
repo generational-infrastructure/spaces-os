@@ -135,8 +135,34 @@ def main():
                     f"gateway never received approval_response {{{appr_id}: {decision}}} on the wire"
                 )
 
+        # Preview context (decision 5): a confirmPreview tool's untrusted output
+        # rides the approval as `context`; the panel renders it as plain quoted
+        # text below the args. The gateway owns producing it — here the fake
+        # gateway supplies it directly; the assertion is the panel surfaces it.
+        ipc("send", "approve-ctx:appr-ctx")
+        if not wait_until(
+            lambda: ipc("approvalState", "appr-ctx") == "pending", timeout_s=15
+        ):
+            die("preview-context approval bubble never appeared pending")
+        if ipc("approvalTool", "appr-ctx") != "signal_send":
+            die(f"context approval tool mismatch: {ipc('approvalTool', 'appr-ctx')!r}")
+        ctx = ipc("approvalContext", "appr-ctx")
+        if "Alice" not in ctx or "similar to" not in ctx:
+            die(f"panel did not surface the preview context: {ctx!r}")
+        ipc("respond", "appr-ctx", "once")
+
+        # Fail-closed (decision 5): when the gateway's preview errors it raises
+        # NO approval_request (the child gets a tool error instead). The panel
+        # must never render a bubble the gateway did not send.
+        ipc("send", "fail-closed:appr-fc")
+        if wait_until(
+            lambda: ipc("approvalState", "appr-fc") != "", timeout_s=3
+        ):
+            die("panel rendered an approval bubble for a fail-closed call")
+
         sys.stderr.write(
-            "PASS: approval_request rendered + once/session/deny replied over WS\n"
+            "PASS: approval_request rendered (+ preview context, fail-closed) "
+            "and once/session/deny replied over WS\n"
         )
     finally:
         qs.stop()

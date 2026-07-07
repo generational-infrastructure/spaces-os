@@ -95,9 +95,10 @@ function confirm(id, text, ts, title) {
 }
 
 // Integration tool-call approval card (gateway approval_request).
-// meta: { integration, tool, args } — args already JSON-pretty-printed
-// by the caller (it owns the event shape). approvalState ∈ pending |
-// once | session | deny.
+// meta: { integration, tool, args, context } — args already JSON-pretty-
+// printed by the caller (it owns the event shape); context is optional
+// untrusted preview text (a confirmPreview tool's output), rendered as
+// plain quoted text. approvalState ∈ pending | once | session | deny.
 function approval(id, ts, meta) {
   meta = meta || {};
   const m = _base(id, "peer", ts);
@@ -105,6 +106,7 @@ function approval(id, ts, meta) {
   m.approvalIntegration = meta.integration || "";
   m.approvalTool = meta.tool || "";
   m.approvalArgs = meta.args || "";
+  m.approvalContext = meta.context || "";
   m.approvalState = "pending";
   return m;
 }

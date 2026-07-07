@@ -74,11 +74,12 @@ async def create_session(ws):
 
 
 async def do_call(ws, sid, integration, tool, args, decision=None, timeout=30):
-    """Drive one INTCALL through the gateway. Returns (saw_approval, args, result)."""
+    """Drive one INTCALL. Returns (saw_approval, args, result, context)."""
     payload = json.dumps({"integration": integration, "tool": tool, "args": args})
     await ws.send(cmd(sid, {"type": "prompt", "message": "INTCALL " + payload}))
     saw_approval = False
     approval_args = None
+    approval_context = None
     result = None
     deadline = time.monotonic() + timeout
     while True:
@@ -92,6 +93,7 @@ async def do_call(ws, sid, integration, tool, args, decision=None, timeout=30):
         if p.get("type") == "approval_request":
             saw_approval = True
             approval_args = p.get("args")
+            approval_context = p.get("context")
             if decision is None:
                 fail(f"unexpected approval_request for {integration}_{tool}")
             await ws.send(
@@ -106,7 +108,7 @@ async def do_call(ws, sid, integration, tool, args, decision=None, timeout=30):
             result = json.loads(p["text"][len("RESULT ") :])
         elif p.get("type") == "agent_end":
             break
-    return saw_approval, approval_args, result
+    return saw_approval, approval_args, result, approval_context
 
 
 def read_calls(calls_out):
@@ -149,8 +151,12 @@ async def scenarios(state, calls_out, shared_base):
         with open(spec_path) as fh:
             spec = json.load(fh)
         names = sorted(e["name"] for e in spec)
-        if names != ["github_create_issue", "github_get_repo"]:
-            fail(f"spec should list both discovered tools, got {names}")
+        if names != ["github_create_issue", "github_get_repo", "github_send"]:
+            fail(f"spec should list the child-facing tools, got {names}")
+        # send_preview is a gateway-only preview tool (decision 1/5): the server
+        # exposes it, but the gateway must never surface it to the child.
+        if any(e["name"] == "github_send_preview" for e in spec):
+            fail("send_preview must never be child-facing")
         get_entry = next(e for e in spec if e["name"] == "github_get_repo")
         if (
             get_entry["parameters"].get("properties", {}).get("repo", {}).get("type")
@@ -161,7 +167,7 @@ async def scenarios(state, calls_out, shared_base):
             fail("the child spec must not carry the allowlist")
 
         # 1. Allowlisted (autoRun) tool: no prompt, server called, text returned.
-        saw, _, res = await do_call(ws, sid, "github", "get_repo", {"repo": "o/r"})
+        saw, _, res, _ = await do_call(ws, sid, "github", "get_repo", {"repo": "o/r"})
         if saw:
             fail("allowlisted get_repo must not prompt")
         if not res or res.get("isError") or not res["text"].startswith("ok:get_repo:"):
@@ -170,7 +176,7 @@ async def scenarios(state, calls_out, shared_base):
             fail("get_repo should have reached the server exactly once")
 
         # 2. Non-allowlisted tool, Deny: prompt with args, server NOT called.
-        saw, ap_args, res = await do_call(
+        saw, ap_args, res, _ = await do_call(
             ws,
             sid,
             "github",
@@ -188,7 +194,7 @@ async def scenarios(state, calls_out, shared_base):
             fail("a denied call must never reach the server")
 
         # 3. "Allow for this session": runs, and the next call is not prompted.
-        saw, _, res = await do_call(
+        saw, _, res, _ = await do_call(
             ws,
             sid,
             "github",
@@ -198,7 +204,7 @@ async def scenarios(state, calls_out, shared_base):
         )
         if not saw or not res or res.get("isError"):
             fail(f"session-grant call should run, got saw={saw} res={res}")
-        saw2, _, res2 = await do_call(
+        saw2, _, res2, _ = await do_call(
             ws, sid, "github", "create_issue", {"repo": "o/r", "title": "y"}
         )
         if saw2:
@@ -214,6 +220,52 @@ async def scenarios(state, calls_out, shared_base):
             fail(
                 f"create_issue should have reached the server twice, got {len(issues)}"
             )
+
+        # 4. confirmPreview (decision 5): a non-allowlisted tool WITH a preview
+        # tool. The gateway calls the preview (same socket, same args) BEFORE
+        # the prompt and rides its output on the approval as `context`. "once"
+        # runs the tool without a session grant, so scenario 5 still exercises
+        # the pre-approval preview path.
+        saw, _, res, ctx = await do_call(
+            ws,
+            sid,
+            "github",
+            "send",
+            {"recipient": "+1555", "name": "Alice", "body": "hi"},
+            decision="once",
+        )
+        if not saw:
+            fail("send must raise an approval prompt")
+        if ctx != "to: Alice <+1555>":
+            fail(f"approval must carry the preview output as context, got {ctx!r}")
+        if not res or res.get("isError") or not res["text"].startswith("ok:send:"):
+            fail(f"approved send should run, got {res}")
+        seq = [
+            c["name"]
+            for c in read_calls(calls_out)
+            if c["name"] in ("send", "send_preview")
+        ]
+        if seq != ["send_preview", "send"]:
+            fail(f"expected preview-then-send call order, got {seq}")
+
+        # 5. Preview failure FAILS CLOSED (decision 5): the tool errors, NO
+        # approval is raised (do_call fails on an unexpected prompt), and the
+        # real send never reaches the server.
+        sends_before = len([c for c in read_calls(calls_out) if c["name"] == "send"])
+        saw, _, res, _ = await do_call(
+            ws,
+            sid,
+            "github",
+            "send",
+            {"recipient": "+1555", "name": "Alice", "body": "boom"},
+        )
+        if saw:
+            fail("a failed preview must not raise an approval prompt")
+        if not res or not res.get("isError") or "preview failed" not in res["text"]:
+            fail(f"a failed preview must surface the preview tool error, got {res}")
+        sends_after = len([c for c in read_calls(calls_out) if c["name"] == "send"])
+        if sends_after != sends_before:
+            fail("a fail-closed send must never reach the server")
 
 
 async def scenario_no_integrations(state, shared_base):
@@ -288,7 +340,9 @@ def main():
     defs_dir = os.path.join(root, "defs")
     os.makedirs(defs_dir, exist_ok=True)
     with open(os.path.join(defs_dir, "github.json"), "w") as fh:
-        json.dump({"autoRun": ["get_repo"]}, fh)
+        json.dump(
+            {"autoRun": ["get_repo"], "confirmPreview": {"send": "send_preview"}}, fh
+        )
     enabled_path = os.path.join(root, "enabled.json")
     with open(enabled_path, "w") as fh:
         json.dump({"integrations": {"github": {"enabled": True}}}, fh)

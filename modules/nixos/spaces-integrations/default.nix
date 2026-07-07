@@ -162,6 +162,18 @@ let
           implicit "default" profile. The store is profile-keyed either way.
         '';
       };
+      confirmPreview = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = ''
+          Per-tool preview map: a confirm tool name -> the gateway-only preview
+          tool the gateway calls (same socket, same args) before raising the
+          approval prompt. The preview's output becomes the approval's untrusted
+          `context` (rendered as plain quoted text). A preview error/timeout
+          fails closed (the tool errors, no prompt). Preview tools listed here
+          are never child-callable and must never appear in `autoRun`.
+        '';
+      };
     };
   };
 
