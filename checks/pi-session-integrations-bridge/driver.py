@@ -71,6 +71,12 @@ def main() -> None:
                 return p
         return None
 
+    def signal():
+        for it in integrations():
+            if it.get("name") == "signal":
+                return it
+        return None
+
     try:
         if not wait_until(qs.ipc_ready, timeout_s=20):
             die("quickshell never bound the test:integrations IPC target")
@@ -136,8 +142,24 @@ def main() -> None:
         if not wait_until(lambda: profile("work") is None, timeout_s=15):
             die(f"profile 'work' never removed: {mail()!r}")
 
+        # Field-less integration (config={}, secrets={}) — the enable button is
+        # active with no profile: enable succeeds immediately (decision 9).
+        s = signal()
+        if not s:
+            die(f"signal integration missing from list: {integrations()!r}")
+        if s.get("config") or s.get("secrets"):
+            die(f"signal should declare no config/secret fields: {s!r}")
+        if s.get("enabled") is not False or s.get("profiles"):
+            die(f"signal should start disabled with no profiles: {s!r}")
+        ipc("enable", "signal")
+        if not wait_until(lambda: signal().get("enabled") is True, timeout_s=15):
+            die(f"field-less signal never enabled without a profile: {signal()!r}")
+        if not wait_until(lambda: ipc("lastError") == "", timeout_s=10):
+            die(f"lastError not cleared after field-less enable: {ipc('lastError')!r}")
+
         sys.stderr.write(
-            "PASS: list + enable-guard + set-field(config,secret) + complete + enable + disable + remove-profile\n"
+            "PASS: list + enable-guard + set-field(config,secret) + complete + "
+            "enable + disable + remove-profile + field-less enable\n"
         )
     finally:
         qs.stop()

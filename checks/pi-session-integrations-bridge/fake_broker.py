@@ -19,7 +19,9 @@ import socket
 import sys
 import threading
 
-# One multi-account integration exercising both config and secret fields.
+# One multi-account integration exercising both config and secret fields, plus
+# a field-less integration (config={}, secrets={}) that must enable with no
+# profile (spaces-integrationd decision 9 — signal-style manifest).
 STATE = {
     "mail": {
         "description": "Email (IMAP/SMTP)",
@@ -28,6 +30,14 @@ STATE = {
         "config": {"imap_host": {"description": "IMAP host", "required": True}},
         "secrets": {"password": {"description": "Password", "required": True}},
         # profile -> {"config": {field: value}, "secrets": {field: bool}}
+        "profiles": {},
+    },
+    "signal": {
+        "description": "Signal",
+        "multiProfile": False,
+        "enabled": False,
+        "config": {},
+        "secrets": {},
         "profiles": {},
     },
 }
@@ -113,7 +123,12 @@ def handle(req: dict) -> dict:
         info["profiles"].pop(req.get("profile") or "", None)
         return {"op": "ok"}
     if op == "enable":
-        if not any(_profile_complete(info, p) for p in info["profiles"]):
+        # A field-less integration (config={}, secrets={}) has no profile to
+        # complete — it enables straight away (mirrors the real broker).
+        fieldless = not info["config"] and not info["secrets"]
+        if not fieldless and not any(
+            _profile_complete(info, p) for p in info["profiles"]
+        ):
             return {"op": "error", "error": "no complete profile"}
         info["enabled"] = True
         return {"op": "ok"}

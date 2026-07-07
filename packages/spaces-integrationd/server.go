@@ -379,19 +379,26 @@ func (s *Server) enable(integration string) Ack {
 		return errAck("unknown integration: " + integration)
 	}
 
-	profiles, err := s.storeProfiles(d)
-	if err != nil {
-		return errAck("read store: " + err.Error())
-	}
-	complete := false
-	for _, p := range profiles {
-		if p.Complete {
-			complete = true
-			break
+	// A field-less definition (config={}, secrets={}) has no per-profile fields
+	// to complete and, correspondingly, no LoadCredential[Encrypted] sources
+	// (lib.nix emits none), so enable skips the completeness gate and the
+	// credential staging below. Definitions WITH fields still require at least
+	// one complete profile.
+	if len(d.Config) > 0 || len(d.Secrets) > 0 {
+		profiles, err := s.storeProfiles(d)
+		if err != nil {
+			return errAck("read store: " + err.Error())
 		}
-	}
-	if !complete {
-		return errAck("no complete profile; set the required fields first")
+		complete := false
+		for _, p := range profiles {
+			if p.Complete {
+				complete = true
+				break
+			}
+		}
+		if !complete {
+			return errAck("no complete profile; set the required fields first")
+		}
 	}
 
 	// The unit's LoadCredential[Encrypted] sources must exist at start.

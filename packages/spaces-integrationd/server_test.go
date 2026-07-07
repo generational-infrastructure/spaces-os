@@ -45,6 +45,17 @@ const githubDef = `{
   }
 }`
 
+const signalDef = `{
+  "name": "signal",
+  "description": "Signal",
+  "multiProfile": false,
+  "network": false,
+  "connectPorts": [],
+  "autoRun": ["threads"],
+  "config": {},
+  "secrets": {}
+}`
+
 func writeScript(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
@@ -200,6 +211,31 @@ func profileByName(gh map[string]any, name string) map[string]any {
 	return nil
 }
 
+// writeDef drops an extra definition file into the running server's defsDir.
+// Definitions are re-read per request, so the next op observes it.
+func (e *testEnv) writeDef(name, body string) {
+	e.t.Helper()
+	if err := os.WriteFile(filepath.Join(e.defsDir, name+".json"), []byte(body), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// infoByName returns the named IntegrationInfo from a `list` reply.
+func (e *testEnv) infoByName(name string) map[string]any {
+	e.t.Helper()
+	m := e.roundtrip(Request{Op: "list"})
+	e.wantOK(m)
+	ints, _ := m["integrations"].([]any)
+	for _, it := range ints {
+		im := it.(map[string]any)
+		if im["name"] == name {
+			return im
+		}
+	}
+	e.t.Fatalf("integration %q not in list %v", name, m["integrations"])
+	return nil
+}
+
 func TestPeerAllowedRejectsOtherUid(t *testing.T) {
 	if !peerAllowed(1000, 1000) {
 		t.Fatal("same uid must be allowed")
@@ -300,6 +336,44 @@ func TestEnableRequiresCompleteProfile(t *testing.T) {
 	// Setting the required secret completes it.
 	e.setField("github", "work", "token", "x")
 	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
+}
+
+// A field-less definition (config={}, secrets={}) — signal — has no profile to
+// complete and no LoadCredential* sources to stage, so enable must succeed with
+// no provisioning, skip credential staging, and list must show empty schemas.
+func TestEnableFieldlessDefinition(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalDef)
+
+	// (a) enable succeeds with no profile provisioned.
+	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "signal"}))
+	if !e.enabledState().Integrations["signal"].Enabled {
+		t.Fatal("want signal enabled in enabled.json")
+	}
+
+	// (b) no credential staging: a field-less manifest emits no LoadCredential*,
+	// so the broker must not create config.toml or a sealed secrets blob.
+	if _, err := os.Stat(filepath.Join(e.stateDir, "signal", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("field-less enable must not create config.toml (stat err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.stateDir, "signal", "secrets")); !os.IsNotExist(err) {
+		t.Fatalf("field-less enable must not create a secrets blob (stat err=%v)", err)
+	}
+
+	// (c) list shows empty schemas + the enabled state, no profiles.
+	info := e.infoByName("signal")
+	if info["enabled"] != true {
+		t.Fatalf("list must report signal enabled, got %v", info["enabled"])
+	}
+	if cfg := info["config"].([]any); len(cfg) != 0 {
+		t.Fatalf("field-less config schema must be empty, got %v", cfg)
+	}
+	if sec := info["secrets"].([]any); len(sec) != 0 {
+		t.Fatalf("field-less secret schema must be empty, got %v", sec)
+	}
+	if profs := info["profiles"].([]any); len(profs) != 0 {
+		t.Fatalf("field-less integration needs no profiles, got %v", profs)
+	}
 }
 
 func TestEnableStartsSocketUnit(t *testing.T) {
