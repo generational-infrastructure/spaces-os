@@ -269,7 +269,7 @@ def test_threads_unreachable_daemon_yields_onboarding_hint(tmp_path, monkeypatch
     h.daemon.close()  # ensure nothing is listening
     text, is_error = call("threads")
     assert is_error is True
-    assert "signal-cli link -n" in text
+    assert "Settings -> Integrations" in text
     assert "hello from bob" not in text
 
 
@@ -289,7 +289,7 @@ def test_every_tool_probes_daemon(tmp_path, monkeypatch):
     ]:
         text, is_error = integration_signal.call_tool(name, args)
         assert is_error is True, name
-        assert "signal-cli link -n" in text, name
+        assert "Settings -> Integrations" in text, name
 
 
 def test_no_linked_account_is_treated_as_unlinked(tmp_path, monkeypatch):
@@ -297,7 +297,7 @@ def test_no_linked_account_is_treated_as_unlinked(tmp_path, monkeypatch):
     try:
         text, is_error = call("threads")
         assert is_error is True
-        assert "signal-cli link -n" in text
+        assert "Settings -> Integrations" in text
     finally:
         h.daemon.close()
 

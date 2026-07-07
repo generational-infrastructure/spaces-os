@@ -46,9 +46,11 @@ ATTACHMENTS_DIR_ENV = "SPACES_SIGNAL_ATTACHMENTS_DIR"  # signal-cli attachment s
 # messages.db path comes from SPACES_SIGNAL_DB via dbmod.default_db_path().
 
 _ONBOARDING_HINT = (
-    "if signal-cli has never been linked on this host, run on your host "
-    'shell:\n  signal-cli link -n "spaces-$(hostname)"\n'
-    "and scan the printed tsdevice: URL with your phone's Signal app."
+    "signal is not linked on this host yet. link it from the panel: "
+    "Settings -> Integrations -> Signal -> Link device, then scan the QR "
+    "with your phone (Signal app -> Settings -> Linked devices).\n"
+    "(CLI fallback: run `signal-cli link -n \"spaces-$(hostname)\"` on the "
+    "host shell and scan the printed URL instead.)"
 )
 _UNLINKED_MSG = (
     "signal is not reachable (daemon down or no linked account).\n"

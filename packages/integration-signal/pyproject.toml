@@ -8,10 +8,11 @@ version = "0.1.0"
 description = "Signal MCP integration server (spaces integration)"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = ["spaces-integration-mcp", "spaces-signal-cli"]
+dependencies = ["spaces-integration-mcp", "spaces-signal-cli", "qrcode", "pillow"]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["integration_signal.py"]
+only-include = ["integration_signal.py", "integration_signal_setup.py"]
 
 [project.scripts]
 integration-signal = "integration_signal:main"
+integration-signal-setup = "integration_signal_setup:main"
