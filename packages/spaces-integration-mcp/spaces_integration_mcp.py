@@ -139,9 +139,10 @@ def make_server(
     server_version,
     records,
     *,
-    secret_field,
+    secret_field=None,
     multi_profile=True,
     error_label="tool",
+    require_profile=True,
 ):
     """Assemble an integration server from declarative tool records.
 
@@ -158,28 +159,39 @@ def make_server(
     (sha256 of `secret_field`, first 16 hex chars) that is callable but never
     advertised. Every failure is a tool error, never a crash.
 
+    A field-less integration (config={} + secrets={}, e.g. one driven entirely
+    by environment) passes `secret_field=None` (no fingerprint tool is
+    registered) and `require_profile=False`; then no profile is resolved and the
+    impl runs with `profile=None, vals={}`. This is the runtime half of the
+    broker's field-less enable (no credential staging => zero provisioned
+    profiles).
+
     Returns (tools, call_tool, main): the advertised tools/list payload, the
     dispatcher, and a ready process entry point.
     """
     by_name = {rec["name"]: rec for rec in records}
-    by_name[FINGERPRINT_TOOL] = {
-        "name": FINGERPRINT_TOOL,
-        "needs_fields": (secret_field,),
-        "impl": lambda args, profile, vals: (
-            hashlib.sha256(vals[secret_field].encode("utf-8")).hexdigest()[:16],
-            False,
-        ),
-    }
+    if secret_field is not None:
+        by_name[FINGERPRINT_TOOL] = {
+            "name": FINGERPRINT_TOOL,
+            "needs_fields": (secret_field,),
+            "impl": lambda args, profile, vals: (
+                hashlib.sha256(vals[secret_field].encode("utf-8")).hexdigest()[:16],
+                False,
+            ),
+        }
     tools = _advertised(records, multi_profile)
 
     def call_tool(name, arguments):
         rec = by_name.get(name)
         if rec is None:
             return f"unknown tool: {name}", True
-        profile, err = resolve_profile(arguments)
-        if err:
-            return err, True
-        vals = store_profile(profile)
+        if require_profile:
+            profile, err = resolve_profile(arguments)
+            if err:
+                return err, True
+            vals = store_profile(profile)
+        else:
+            profile, vals = None, {}
         for field in rec["needs_fields"]:
             if not vals.get(field):
                 return f"field '{field}' not set for profile '{profile}'", True

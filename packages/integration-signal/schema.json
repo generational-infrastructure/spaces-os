@@ -1,0 +1,15 @@
+{
+  "config": {},
+  "secrets": {},
+  "tools": [
+    "threads",
+    "read_thread",
+    "search",
+    "contacts",
+    "groups",
+    "note_to_self",
+    "send",
+    "fetch_attachment",
+    "send_preview"
+  ]
+}

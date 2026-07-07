@@ -356,3 +356,29 @@ def test_make_server_wraps_oserror(tmp_path, monkeypatch):
         "demo operation failed: OSError: disk gone",
         True,
     )
+
+
+def test_make_server_field_less_dispatches_without_profile(tmp_path, monkeypatch):
+    # config={} + secrets={} => the broker stages no credentials, so no profile
+    # is ever provisioned. require_profile=False lets the impl run anyway with
+    # profile=None, vals={} (the runtime half of the broker's field-less enable).
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path / "empty"))
+    records = [
+        {
+            "name": "ping",
+            "description": "pong",
+            "schema": {"properties": {}, "required": []},
+            "needs_fields": (),
+            "impl": lambda args, profile, vals: (f"{profile}:{vals}", False),
+        }
+    ]
+    tools, call_tool, _ = mcp.make_server(
+        "fl", "0", records, multi_profile=False, require_profile=False
+    )
+    assert call_tool("ping", {}) == ("None:{}", False)
+    # No secret_field => no hidden fingerprint tool registered or callable.
+    assert "secret_fingerprint" not in [t["name"] for t in tools]
+    assert call_tool("secret_fingerprint", {}) == (
+        "unknown tool: secret_fingerprint",
+        True,
+    )
