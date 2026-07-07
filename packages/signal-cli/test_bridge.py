@@ -1,9 +1,11 @@
-"""End-to-end tests for spaces_signal.bridge.
+"""Tests for spaces_signal.bridge (forwarder-only).
 
-Spawns a tiny in-process FakeSignalDaemon over a unix socket, points
-the bridge at it, and drives both the sandbox-facing enqueue socket
-and the panel-facing approval socket through real socket I/O. No
-signal-cli binary, no actual JVM.
+Spawns a tiny in-process FakeSignalDaemon over a unix socket, points the
+bridge at it, and verifies incoming envelopes are persisted into
+messages.db and disappearing messages are swept. Sending/approval moved to
+the integration-signal MCP server, so the bridge owns no sockets and speaks
+no send protocol — these tests exercise only the daemon → messages.db path.
+No signal-cli binary, no actual JVM.
 """
 
 from __future__ import annotations
@@ -25,22 +27,50 @@ from spaces_signal import db as dbmod
 # ── Fake signal-cli daemon ──────────────────────────────────────────
 
 
+class _Wake:
+    """socketpair wake so the fake daemon's accept select() exits
+    instantly on teardown instead of paying an accept-timeout."""
+
+    def __init__(self) -> None:
+        r, w = socket.socketpair()
+        r.setblocking(False)
+        self.read_end = r
+        self._write_end = w
+
+    def wake(self) -> None:
+        try:
+            self._write_end.send(b"\x01")
+        except OSError:
+            pass
+
+    def drain(self) -> None:
+        try:
+            while self.read_end.recv(64):
+                pass
+        except (BlockingIOError, OSError):
+            pass
+
+    def close(self) -> None:
+        for s in (self._write_end, self.read_end):
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
 class FakeSignalDaemon:
     """Minimal JSON-RPC server over a unix socket that speaks just
-    enough signal-cli to drive the bridge. Each test mutates
-    `accounts`, `groups`, `contacts` to shape what the daemon
-    advertises; `push_receive()` writes a `receive` notification to
-    any currently-subscribed connection.
+    enough signal-cli to drive the forwarder. Each test mutates
+    `accounts` to shape what the daemon advertises; `push_receive()`
+    writes a `receive` notification to any currently-subscribed
+    connection.
     """
 
     def __init__(self, sock_path: str) -> None:
         self.sock_path = sock_path
         self.accounts: list[dict] = []
-        self.groups: list[dict] = []
-        self.contacts: list[dict] = []
 
         self.subscribed_conns: list[socket.socket] = []
-        self.send_calls: list[dict] = []
         self.sync_requests: list[dict] = []
         self._lock = threading.Lock()
 
@@ -49,16 +79,12 @@ class FakeSignalDaemon:
         self._srv.listen(8)
 
         self._stop = threading.Event()
-        self._wake = bridge_mod._SelectWake()
+        self._wake = _Wake()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        # Interrupt the select() so the accept loop exits before we
-        # close its listening socket — same shutdown trick the
-        # production bridge uses, so tests don't pay an accept-timeout
-        # per teardown.
         self._wake.wake()
         try:
             self._srv.close()
@@ -138,10 +164,6 @@ class FakeSignalDaemon:
         error: dict | None = None
         if method == "listAccounts":
             result = self.accounts
-        elif method == "listGroups":
-            result = self.groups
-        elif method == "listContacts":
-            result = self.contacts
         elif method == "subscribeReceive":
             with self._lock:
                 if conn not in self.subscribed_conns:
@@ -151,9 +173,6 @@ class FakeSignalDaemon:
             with self._lock:
                 self.sync_requests.append(params)
             result = {}
-        elif method == "send":
-            self.send_calls.append(params)
-            result = {"timestamp": int(time.time() * 1000)}
         else:
             error = {"code": -32601, "message": f"unknown method {method}"}
         if rid is None:
@@ -178,38 +197,6 @@ def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> bool:
     return False
 
 
-def _socket_reachable(sock_path: str) -> bool:
-    """True iff a unix-socket listener on `sock_path` accepts a
-    connection. Used in place of `os.path.exists`, which is true the
-    moment bind() returns and can race the subsequent listen()."""
-    if not os.path.exists(sock_path):
-        return False
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(0.2)
-    try:
-        s.connect(sock_path)
-    except OSError:
-        return False
-    finally:
-        s.close()
-    return True
-
-
-def _send_request(sock_path: str, payload: dict, *, timeout: float = 5.0) -> dict:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    s.connect(sock_path)
-    try:
-        s.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-        f = s.makefile("r", encoding="utf-8", newline="\n")
-        line = f.readline()
-        if not line:
-            raise RuntimeError("socket closed before response")
-        return json.loads(line)
-    finally:
-        s.close()
-
-
 # ── fixture base ────────────────────────────────────────────────────
 
 
@@ -220,8 +207,6 @@ class BridgeHarness(unittest.TestCase):
         base = Path(self.tmp.name)
 
         self.daemon_sock = str(base / "signal.sock")
-        self.enqueue_sock = str(base / "enqueue.sock")
-        self.panel_sock = str(base / "panel.sock")
         self.db_path = base / "messages.db"
 
         self.daemon = FakeSignalDaemon(self.daemon_sock)
@@ -232,24 +217,16 @@ class BridgeHarness(unittest.TestCase):
             bridge_mod.BridgeConfig(
                 db_path=self.db_path,
                 daemon_socket=self.daemon_sock,
-                enqueue_socket=self.enqueue_sock,
-                panel_socket=self.panel_sock,
             ),
             accounts_refresh_seconds=60.0,
         )
         self.bridge.start()
         self.addCleanup(self.bridge.stop)
 
-        # Wait until both listener sockets are reachable (file exists
-        # AND listen() has finished — file-exists alone races against
-        # bind/listen on slower runners) and the bridge has pulled
-        # the account snapshot.
-        for sock_path in (self.enqueue_sock, self.panel_sock):
-            if not _wait_until(lambda p=sock_path: _socket_reachable(p)):
-                self.fail(f"socket {sock_path} never became reachable")
+        # Wait until the bridge has pulled the account snapshot and the
+        # receiver has subscribed before pushing envelopes.
         if not _wait_until(lambda: bool(self.bridge._accounts_snapshot())):
             self.fail("accounts never populated from listAccounts")
-        # Subscriber needs a beat to call subscribeReceive.
         if not _wait_until(lambda: len(self.daemon.subscribed_conns) >= 1):
             self.fail("bridge never subscribed")
 
@@ -357,355 +334,6 @@ class TestReceiver(BridgeHarness):
         self.assertEqual(before, after)
 
 
-class TestEnqueueSelfSend(BridgeHarness):
-    def test_self_send_dispatches_without_pending(self) -> None:
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15550000001", "body": "note to self"},
-        )
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("to_self"))
-        # signal-cli `send` should have been called with our message.
-        self.assertTrue(_wait_until(lambda: bool(self.daemon.send_calls), timeout=3))
-        self.assertEqual(self.daemon.send_calls[0]["message"], "note to self")
-        # No pending row.
-        pending = dbmod.list_pending(dbmod.connect(self.db_path))
-        self.assertEqual(pending, [])
-
-    def test_self_send_by_uuid_also_bypasses(self) -> None:
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "acct-uuid", "body": "x"},
-        )
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("to_self"))
-
-    def test_self_send_with_literal_self_dispatches_to_first_account(self) -> None:
-        # The sandbox agent can't see the user's own uuid/number
-        # (those aren't in `signal contacts`), so it MUST be able to
-        # write `signal send self "..."` and have the bridge resolve
-        # `self` to its own linked account.
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "self", "body": "note via alias"},
-        )
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("to_self"))
-        self.assertTrue(_wait_until(lambda: bool(self.daemon.send_calls), timeout=3))
-        call = self.daemon.send_calls[0]
-        self.assertEqual(call["message"], "note via alias")
-        # Bridge MUST translate "self" before hitting signal-cli — the
-        # daemon has no "self" alias and would reject the literal.
-        target = call.get("recipient") or call.get("username") or []
-        self.assertEqual(target, ["+15550000001"])
-        # No pending row — note-to-self never gates on the user.
-        pending = dbmod.list_pending(dbmod.connect(self.db_path))
-        self.assertEqual(pending, [])
-
-    def test_self_send_literal_self_case_insensitive(self) -> None:
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "SELF", "body": "shout"},
-        )
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("to_self"))
-
-    def test_self_send_literal_self_with_no_linked_account_errors(self) -> None:
-        # Strip the daemon's account, refresh the bridge cache, and
-        # then ask for a self-send. The bridge has no identity to
-        # resolve "self" against — refuse rather than dispatch
-        # nothing.
-        self.daemon.accounts = []
-        self.bridge._refresh_accounts()
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "self", "body": "no account"},
-        )
-        self.assertFalse(resp["ok"])
-        self.assertIn("no linked Signal account", resp["error"])
-
-
-class TestEnqueueOtherRecipient(BridgeHarness):
-    def test_non_self_returns_pending_token(self) -> None:
-        self.daemon.contacts = [
-            {"uuid": "uuid-bob", "number": "+15559998888", "name": "Bob"}
-        ]
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "hi bob"},
-        )
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("pending"))
-        self.assertIn("token", resp)
-        # display_name resolved from contacts.
-        self.assertEqual(resp["display_name"], "Bob")
-        # signal-cli `send` was NOT called.
-        self.assertEqual(self.daemon.send_calls, [])
-        # Pending row exists.
-        pending = dbmod.list_pending(dbmod.connect(self.db_path))
-        self.assertEqual(len(pending), 1)
-        self.assertEqual(pending[0]["recipient"], "+15559998888")
-        self.assertEqual(pending[0]["body"], "hi bob")
-
-    def test_missing_to_or_body_returns_error(self) -> None:
-        resp = _send_request(self.enqueue_sock, {"op": "send", "to": "+1"})
-        self.assertFalse(resp["ok"])
-        self.assertIn("error", resp)
-
-    def test_unknown_op_rejected(self) -> None:
-        resp = _send_request(self.enqueue_sock, {"op": "frobnicate"})
-        self.assertFalse(resp["ok"])
-
-
-class TestEnqueueDisplayName(BridgeHarness):
-    """Display-name handling is panel-visible: an attacker who
-    controls their Signal display name (BIDI override, zero-width
-    chars, terminal control codes) could otherwise spoof the
-    visible recipient on the approval card. The bridge must:
-      1. strip Unicode control / format chars before storing or
-         echoing the name back, and
-      2. always return the raw `recipient` alongside the friendly
-         name so the CLI can show both."""
-
-    def test_response_carries_recipient_verbatim(self) -> None:
-        self.daemon.contacts = [
-            {"uuid": "u-bob", "number": "+15559998888", "name": "Bob"}
-        ]
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "hi"},
-        )
-        self.assertEqual(resp["recipient"], "+15559998888")
-
-    def test_display_name_strips_bidi_override(self) -> None:
-        # U+202E RIGHT-TO-LEFT OVERRIDE inserted mid-name.
-        self.daemon.contacts = [
-            {"uuid": "u-evil", "number": "+1666", "name": "Al\u202eice"}
-        ]
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+1666", "body": "x"},
-        )
-        self.assertEqual(resp["display_name"], "Alice")
-
-    def test_display_name_strips_zero_width(self) -> None:
-        # U+200B ZERO WIDTH SPACE and U+200D ZERO WIDTH JOINER.
-        self.daemon.contacts = [
-            {"uuid": "u-eve", "number": "+1777", "name": "Ev\u200be\u200d"}
-        ]
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+1777", "body": "x"},
-        )
-        self.assertEqual(resp["display_name"], "Eve")
-
-    def test_display_name_falls_back_when_all_chars_stripped(self) -> None:
-        # Pathological name made entirely of control chars: fall back
-        # to the recipient so the panel doesn't render an empty card.
-        self.daemon.contacts = [
-            {"uuid": "u-x", "number": "+1888", "name": "\u200b\u200d\u202e"}
-        ]
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+1888", "body": "x"},
-        )
-        self.assertEqual(resp["display_name"], "+1888")
-
-
-class TestEnqueueDaemonProxy(BridgeHarness):
-    """Bridge proxies listContacts/listGroups so the sandbox never
-    touches the daemon socket directly."""
-
-    def test_contacts_op_returns_aggregated_list(self) -> None:
-        self.daemon.contacts = [
-            {"uuid": "u-bob", "number": "+1888", "name": "Bob"},
-            {"uuid": "u-carol", "number": "+1777", "name": "Carol"},
-        ]
-        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
-        self.assertTrue(resp["ok"])
-        names = sorted(c.get("name") for c in resp["contacts"])
-        self.assertEqual(names, ["Bob", "Carol"])
-
-    def test_groups_op_returns_aggregated_list(self) -> None:
-        self.daemon.groups = [
-            {"id": "GROUP=1", "name": "Crew", "members": [1, 2]},
-        ]
-        resp = _send_request(self.enqueue_sock, {"op": "groups"})
-        self.assertTrue(resp["ok"])
-        self.assertEqual(len(resp["groups"]), 1)
-        self.assertEqual(resp["groups"][0]["name"], "Crew")
-
-    def test_contacts_op_empty_when_daemon_empty(self) -> None:
-        self.daemon.contacts = []
-        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
-        self.assertTrue(resp["ok"])
-        self.assertEqual(resp["contacts"], [])
-
-    def test_contacts_op_errors_when_no_account(self) -> None:
-        self.daemon.accounts = []
-        self.bridge._refresh_accounts()
-        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
-        self.assertFalse(resp["ok"])
-        self.assertIn("no linked Signal account", resp["error"])
-
-
-class TestPanelDecision(BridgeHarness):
-    def _enqueue(self, to: str = "+15559998888", body: str = "x") -> str:
-        resp = _send_request(self.enqueue_sock, {"op": "send", "to": to, "body": body})
-        self.assertTrue(resp["ok"])
-        self.assertTrue(resp.get("pending"))
-        return resp["token"]
-
-    def test_list_returns_pending(self) -> None:
-        self._enqueue(body="m1")
-        self._enqueue(body="m2")
-        resp = _send_request(self.panel_sock, {"op": "list"})
-        self.assertTrue(resp["ok"])
-        self.assertEqual(len(resp["pending"]), 2)
-        bodies = {p["body"] for p in resp["pending"]}
-        self.assertEqual(bodies, {"m1", "m2"})
-
-    def test_approve_dispatches_and_marks_sent(self) -> None:
-        token = self._enqueue(body="approved-msg")
-        resp = _send_request(self.panel_sock, {"op": "approve", "token": token})
-        self.assertTrue(resp["ok"])
-        self.assertEqual(resp["state"], "sent")
-        # daemon was called.
-        self.assertTrue(
-            _wait_until(
-                lambda: any(
-                    c.get("message") == "approved-msg" for c in self.daemon.send_calls
-                ),
-                timeout=3,
-            )
-        )
-        # DB updated.
-        row = dbmod.get_pending(dbmod.connect(self.db_path), token)
-        self.assertEqual(row["state"], "sent")
-
-    def test_deny_marks_denied_and_skips_dispatch(self) -> None:
-        token = self._enqueue(body="denied-msg")
-        resp = _send_request(self.panel_sock, {"op": "deny", "token": token})
-        self.assertTrue(resp["ok"])
-        self.assertEqual(resp["state"], "denied")
-        # daemon NOT called for this message.
-        time.sleep(0.2)
-        self.assertFalse(
-            any(c.get("message") == "denied-msg" for c in self.daemon.send_calls)
-        )
-        row = dbmod.get_pending(dbmod.connect(self.db_path), token)
-        self.assertEqual(row["state"], "denied")
-
-    def test_approve_unknown_token_errors(self) -> None:
-        resp = _send_request(self.panel_sock, {"op": "approve", "token": "bogus"})
-        self.assertFalse(resp["ok"])
-        self.assertIn("unknown", resp["error"])
-
-    def test_double_decide_rejected(self) -> None:
-        token = self._enqueue()
-        first = _send_request(self.panel_sock, {"op": "approve", "token": token})
-        self.assertTrue(first["ok"])
-        second = _send_request(self.panel_sock, {"op": "deny", "token": token})
-        self.assertFalse(second["ok"])
-        # Should mention current state for the panel to render usefully.
-        self.assertIn("already", second["error"])
-
-
-class TestPanelDecisionRace(BridgeHarness):
-    """Two concurrent approvals on the same token must dispatch the
-    underlying `send` exactly once. The pre-fix flow read the row,
-    checked state, dispatched, then wrote — a classic TOCTOU. Two
-    parallel approvers could both pass the state check and both
-    dispatch, double-sending the message."""
-
-    def test_concurrent_approve_dispatches_once(self) -> None:
-        # Queue one pending send.
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "race-msg"},
-        )
-        token = resp["token"]
-
-        # Fire N parallel approvals.
-        N = 8
-        results: list[dict] = []
-        results_lock = threading.Lock()
-
-        def approve() -> None:
-            r = _send_request(
-                self.panel_sock, {"op": "approve", "token": token}, timeout=10.0
-            )
-            with results_lock:
-                results.append(r)
-
-        threads = [threading.Thread(target=approve) for _ in range(N)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        winners = [r for r in results if r.get("ok")]
-        losers = [r for r in results if not r.get("ok")]
-        self.assertEqual(
-            len(winners), 1, f"expected exactly one approver to win, got {results!r}"
-        )
-        self.assertEqual(len(losers), N - 1)
-
-        # signal-cli `send` invoked exactly once.
-        sends = [c for c in self.daemon.send_calls if c.get("message") == "race-msg"]
-        self.assertEqual(len(sends), 1, f"send must be dispatched once, got {sends!r}")
-
-        # Row ends up in `sent` state.
-        check_db = dbmod.connect(self.db_path)
-        try:
-            row = dbmod.get_pending(check_db, token)
-        finally:
-            check_db.close()
-        self.assertEqual(row["state"], "sent")
-
-    def test_concurrent_approve_deny_dispatches_at_most_once(self) -> None:
-        # An approve and a deny race on the same token. claim_pending
-        # makes the decision atomic, so exactly one decider wins and a
-        # winning deny means the message is never dispatched. The atomic
-        # claim itself is proven deterministically in
-        # test_db.test_claim_pending_second_claim_loses; this is the
-        # end-to-end check over the panel socket, looped to widen the
-        # odds of hitting the both-passed-the-pre-check window.
-        check = dbmod.connect(self.db_path)
-        self.addCleanup(check.close)
-        for i in range(16):
-            body = f"race-{i}"
-            token = _send_request(
-                self.enqueue_sock,
-                {"op": "send", "to": "+15559998888", "body": body},
-            )["token"]
-
-            out: dict[str, dict] = {}
-
-            def decide(op: str, token: str = token, out: dict = out) -> None:
-                out[op] = _send_request(self.panel_sock, {"op": op, "token": token})
-
-            threads = [
-                threading.Thread(target=decide, args=("approve",)),
-                threading.Thread(target=decide, args=("deny",)),
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            winners = [op for op in ("approve", "deny") if out[op].get("ok")]
-            self.assertEqual(len(winners), 1, f"exactly one winner: {out!r}")
-            sends = [c for c in self.daemon.send_calls if c.get("message") == body]
-            state = dbmod.get_pending(check, token)["state"]
-            if winners[0] == "deny":
-                self.assertEqual(sends, [], "a denied send MUST NOT be dispatched")
-                self.assertEqual(state, "denied")
-            else:
-                self.assertEqual(len(sends), 1, "approved send dispatched once")
-                self.assertEqual(state, "sent")
-
-
 class TestMessageExpiry(BridgeHarness):
     """Disappearing messages must actually leave messages.db. The read
     paths filter expired rows, but without the bridge's periodic sweep
@@ -789,8 +417,6 @@ class TestMessageExpiryScheduled(unittest.TestCase):
             bridge_mod.BridgeConfig(
                 db_path=db_path,
                 daemon_socket=str(base / "signal.sock"),
-                enqueue_socket=str(base / "enqueue.sock"),
-                panel_socket=str(base / "panel.sock"),
             ),
             accounts_refresh_seconds=60.0,
             expire_interval_seconds=0.05,
@@ -806,328 +432,10 @@ class TestMessageExpiryScheduled(unittest.TestCase):
         self.assertTrue(_wait_until(expired_gone, timeout=3))
 
 
-class TestPendingCapAndTTL(BridgeHarness):
-    """Approval-panel flood guards: an agent can't stack unbounded
-    pending cards, and stale undecided ones auto-expire so they can't be
-    approved much later with surprising effect."""
-
-    def test_outstanding_pending_is_capped(self) -> None:
-        orig = bridge_mod.MAX_PENDING_SENDS
-        bridge_mod.MAX_PENDING_SENDS = 3
-        self.addCleanup(setattr, bridge_mod, "MAX_PENDING_SENDS", orig)
-        for i in range(3):
-            r = _send_request(
-                self.enqueue_sock,
-                {"op": "send", "to": "+15559998888", "body": f"m{i}"},
-            )
-            self.assertTrue(r.get("pending"), r)
-        overflow = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "overflow"},
-        )
-        self.assertFalse(overflow["ok"])
-        self.assertIn("too many pending", overflow["error"])
-
-    def test_self_send_not_capped(self) -> None:
-        # Self-sends dispatch immediately and never queue, so the
-        # backlog cap must not refuse them.
-        orig = bridge_mod.MAX_PENDING_SENDS
-        bridge_mod.MAX_PENDING_SENDS = 1
-        self.addCleanup(setattr, bridge_mod, "MAX_PENDING_SENDS", orig)
-        r = _send_request(
-            self.enqueue_sock, {"op": "send", "to": "+15559998888", "body": "p"}
-        )
-        self.assertTrue(r.get("pending"), r)
-        r = _send_request(
-            self.enqueue_sock, {"op": "send", "to": "+15550000001", "body": "note"}
-        )
-        self.assertTrue(r.get("to_self"), r)
-
-    def test_stale_pending_expired_by_sweep(self) -> None:
-        old = dbmod.now_ms() - (bridge_mod.PENDING_TTL_SECONDS * 1000 + 60_000)
-        with self.bridge._db_lock:
-            self.bridge.db.execute(
-                "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
-                " VALUES ('stale', ?, '+15559998888', 'old', 'pending')",
-                (old,),
-            )
-            dbmod.insert_pending(
-                self.bridge.db, token="fresh", recipient="+15559998888", body="new"
-            )
-        self.bridge._expire_once()
-        self.assertEqual(dbmod.get_pending(self.bridge.db, "stale")["state"], "expired")
-        self.assertEqual(dbmod.get_pending(self.bridge.db, "fresh")["state"], "pending")
-
-
-class TestSocketPeerCred(BridgeHarness):
-    """Defence-in-depth: only same-uid peers may talk to the bridge
-    sockets. The 0600 socket mode already blocks other users; the
-    SO_PEERCRED check is the belt to that brace."""
-
-    def test_peer_uid_reads_local_uid(self) -> None:
-        a, b = socket.socketpair()
-        self.addCleanup(a.close)
-        self.addCleanup(b.close)
-        self.assertEqual(bridge_mod._peer_uid(a), os.getuid())
-
-    def test_same_uid_peer_is_served(self) -> None:
-        # Non-regression: a same-uid client (the normal case, including
-        # the sandboxed agent which runs as the user) still gets served.
-        resp = _send_request(self.enqueue_sock, {"op": "contacts"})
-        self.assertIn("ok", resp)
-
-    def test_mismatched_uid_peer_is_rejected(self) -> None:
-        orig = bridge_mod._peer_uid
-        bridge_mod._peer_uid = lambda conn: os.getuid() + 1
-        self.addCleanup(setattr, bridge_mod, "_peer_uid", orig)
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(3.0)
-        s.connect(self.enqueue_sock)
-        self.addCleanup(s.close)
-        try:
-            s.sendall(b'{"op": "contacts"}\n')
-        except OSError:
-            pass  # bridge may have already closed the conn
-        f = s.makefile("r")
-        try:
-            line = f.readline()
-        except OSError:
-            line = ""  # connection reset by the bridge == rejected
-        self.assertEqual(line, "", "mismatched-uid peer must be closed unserved")
-
-
-class TestEnqueueResourceLimits(BridgeHarness):
-    """Cheap DoS guards: a malicious sandbox or bug-pinned client
-    must not be able to OOM the bridge by streaming a single
-    unbounded line, nor stash a giant body that signal-cli would
-    reject downstream after we've already paid the storage cost."""
-
-    def test_oversize_line_drops_connection_bridge_stays_up(self) -> None:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(5.0)
-        s.connect(self.enqueue_sock)
-        big = b"x" * (2 * 1024 * 1024)  # 2 MiB, no newline
-        try:
-            s.sendall(big)
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass  # bridge closed us, that's the desired outcome
-        finally:
-            s.close()
-        # Bridge stayed alive — fresh conn works.
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15550000001", "body": "still alive"},
-        )
-        self.assertTrue(resp["ok"])
-
-    def test_oversize_body_rejected_before_enqueue(self) -> None:
-        body = "x" * (65 * 1024)  # 65 KiB
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": body},
-        )
-        self.assertFalse(resp["ok"])
-        self.assertIn("body too large", resp["error"])
-        # No pending row created.
-        with self.bridge._db_lock:
-            pending = dbmod.list_pending(self.bridge.db)
-        self.assertEqual(pending, [])
-
-
-class _PanelSubscriber:
-    """Persistent panel-side conn that captures every event the bridge
-    pushes via `op:"added"` / `op:"removed"`. Used by subscribe tests
-    to verify the bridge actually broadcasts state mutations.
-    """
-
-    def __init__(self, sock_path: str) -> None:
-        self.events: list[dict] = []
-        self._stop = threading.Event()
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.settimeout(5.0)
-        self._sock.connect(sock_path)
-        self._sock.sendall((json.dumps({"op": "subscribe"}) + "\n").encode("utf-8"))
-        self._reader = threading.Thread(target=self._run, daemon=True)
-        self._reader.start()
-
-    def send(self, payload: dict) -> None:
-        self._sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-
-    def close(self) -> None:
-        self._stop.set()
-        try:
-            self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
-        self._reader.join(timeout=2.0)
-
-    def _run(self) -> None:
-        f = self._sock.makefile("r", encoding="utf-8", newline="\n")
-        while not self._stop.is_set():
-            try:
-                line = f.readline()
-            except OSError:
-                return
-            if not line:
-                return
-            try:
-                self.events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-
-class TestPanelSubscribe(BridgeHarness):
-    def _subscribe(self) -> "_PanelSubscriber":
-        sub = _PanelSubscriber(self.panel_sock)
-        self.addCleanup(sub.close)
-        # Wait for the initial snapshot.
-        self.assertTrue(
-            _wait_until(
-                lambda: any(e.get("op") == "snapshot" for e in sub.events),
-                timeout=3,
-            )
-        )
-        return sub
-
-    def test_subscribe_initial_snapshot_carries_existing_pending(self) -> None:
-        _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "preexisting"},
-        )
-        sub = self._subscribe()
-        snapshot = [e for e in sub.events if e.get("op") == "snapshot"][0]
-        self.assertEqual(len(snapshot["pending"]), 1)
-        self.assertEqual(snapshot["pending"][0]["body"], "preexisting")
-
-    def test_subscribe_receives_added_when_new_enqueue_arrives(self) -> None:
-        sub = self._subscribe()
-        before = len(sub.events)
-        _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "live-add"},
-        )
-        self.assertTrue(
-            _wait_until(
-                lambda: any(
-                    e.get("op") == "added"
-                    and e.get("request", {}).get("body") == "live-add"
-                    for e in sub.events[before:]
-                ),
-                timeout=3,
-            )
-        )
-
-    def test_subscribe_receives_removed_on_approve(self) -> None:
-        sub = self._subscribe()
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "to-approve"},
-        )
-        token = resp["token"]
-        before = len(sub.events)
-        # Approve on a separate conn — the subscribe conn must still
-        # receive the broadcast.
-        _send_request(self.panel_sock, {"op": "approve", "token": token})
-        self.assertTrue(
-            _wait_until(
-                lambda: any(
-                    e.get("op") == "removed"
-                    and e.get("token") == token
-                    and e.get("state") == "sent"
-                    for e in sub.events[before:]
-                ),
-                timeout=3,
-            )
-        )
-
-    def test_subscribe_receives_removed_on_deny(self) -> None:
-        sub = self._subscribe()
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "to-deny"},
-        )
-        token = resp["token"]
-        before = len(sub.events)
-        _send_request(self.panel_sock, {"op": "deny", "token": token})
-        self.assertTrue(
-            _wait_until(
-                lambda: any(
-                    e.get("op") == "removed"
-                    and e.get("token") == token
-                    and e.get("state") == "denied"
-                    for e in sub.events[before:]
-                ),
-                timeout=3,
-            )
-        )
-
-    def test_subscribed_conn_can_also_approve(self) -> None:
-        sub = self._subscribe()
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "via-sub-approve"},
-        )
-        token = resp["token"]
-        before = len(sub.events)
-        # Send approve on the SAME socket the subscriber owns.
-        sub.send({"op": "approve", "token": token})
-        self.assertTrue(
-            _wait_until(
-                lambda: any(
-                    e.get("op") == "removed" and e.get("token") == token
-                    for e in sub.events[before:]
-                ),
-                timeout=3,
-            )
-        )
-        # Decision response also arrives back on the same conn.
-        self.assertTrue(
-            any(e.get("op") == "decision" and e.get("ok") for e in sub.events[before:])
-        )
-
-    def test_unsubscribe_stops_receiving_broadcasts(self) -> None:
-        sub = self._subscribe()
-        sub.close()
-        # Give the bridge a beat to notice the closed conn.
-        time.sleep(0.2)
-        # A subsequent enqueue must still complete (it just won't
-        # broadcast to anyone).
-        resp = _send_request(
-            self.enqueue_sock,
-            {"op": "send", "to": "+15559998888", "body": "after-unsub"},
-        )
-        self.assertTrue(resp["ok"])
-
-
 # ── pure helpers (no harness) ───────────────────────────────────────
 
 
-class TestClassifyAndSelf(unittest.TestCase):
-    def test_classify_recipient(self) -> None:
-        cases = [
-            ("+15551234", "number"),
-            ("abcdef01-2345-6789-abcd-ef0123456789", "uuid"),
-            ("alice.42", "username"),
-            ("AfL/co87TsyfTv4FqgJfcF6rNWoRkO2CYLybn83tfTU=", "group"),
-        ]
-        for value, want in cases:
-            with self.subTest(value=value):
-                self.assertEqual(bridge_mod.classify_recipient(value), want)
-
-    def test_is_self_recipient_matches_uuid_and_number(self) -> None:
-        accounts = [
-            {"uuid": "acct-uuid", "number": "+15550000001"},
-            {"uuid": "second-uuid", "number": "+15550000002"},
-        ]
-        self.assertTrue(bridge_mod.is_self_recipient("acct-uuid", accounts))
-        self.assertTrue(bridge_mod.is_self_recipient("+15550000002", accounts))
-        self.assertFalse(bridge_mod.is_self_recipient("+15559998888", accounts))
-        self.assertFalse(bridge_mod.is_self_recipient("other-uuid", accounts))
-
+class TestEnvelopeToMessage(unittest.TestCase):
     def test_envelope_to_message_basic_dm(self) -> None:
         out = bridge_mod.envelope_to_message(
             {
@@ -1274,8 +582,6 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         daemon_sock = str(base / "signal.sock")
-        enqueue_sock = str(base / "enqueue.sock")
-        panel_sock = str(base / "panel.sock")
         db_path = base / "messages.db"
 
         daemon = FakeSignalDaemon(daemon_sock)
@@ -1289,8 +595,6 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
             bridge_mod.BridgeConfig(
                 db_path=db_path,
                 daemon_socket=daemon_sock,
-                enqueue_socket=enqueue_sock,
-                panel_socket=panel_sock,
             ),
             accounts_refresh_seconds=60.0,
         )
@@ -1304,34 +608,18 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
         self.assertEqual(accounts_requested, ["+1111", "+2222"])
 
 
-class TestSocketPathDefaults(unittest.TestCase):
-    """Path conventions that couple this module to signal-cli.nix.
-
-    The pi-chat sandbox bind-mounts `$XDG_RUNTIME_DIR/spaces-signal/sandbox`
-    (see modules/nixos/signal-cli.nix). The defaults below MUST keep
-    the enqueue socket *inside* that subdir (so the agent in the
-    sandbox can reach it through the bind-mount) and the panel
-    socket *outside* it (so a prompt-injected agent cannot mint
-    its own approvals). If you change one side without the other,
-    `signal threads` either says "infrastructure not running" forever
-    or — worse — the sandbox can talk to the approval channel.
-    """
+class TestDaemonSocketDefault(unittest.TestCase):
+    """The daemon socket default couples this module to signal-cli.nix,
+    whose RuntimeDirectory=signal-cli exposes the JSON-RPC socket at
+    `$XDG_RUNTIME_DIR/signal-cli/socket`."""
 
     def setUp(self) -> None:
         self._saved = {
             k: os.environ.get(k)
-            for k in (
-                "XDG_RUNTIME_DIR",
-                "SPACES_SIGNAL_ENQUEUE_SOCKET",
-                "SPACES_SIGNAL_PANEL_SOCKET",
-            )
+            for k in ("XDG_RUNTIME_DIR", "SPACES_SIGNAL_DAEMON_SOCKET")
         }
         os.environ["XDG_RUNTIME_DIR"] = "/run/user/1234"
-        for k in (
-            "SPACES_SIGNAL_ENQUEUE_SOCKET",
-            "SPACES_SIGNAL_PANEL_SOCKET",
-        ):
-            os.environ.pop(k, None)
+        os.environ.pop("SPACES_SIGNAL_DAEMON_SOCKET", None)
 
     def tearDown(self) -> None:
         for k, v in self._saved.items():
@@ -1340,71 +628,15 @@ class TestSocketPathDefaults(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def test_enqueue_default_lives_inside_sandbox_subdir(self) -> None:
+    def test_daemon_default_matches_signal_cli_socket(self) -> None:
         self.assertEqual(
-            bridge_mod._default_enqueue_socket(),
-            "/run/user/1234/spaces-signal/sandbox/enqueue.sock",
+            bridge_mod._default_daemon_socket(),
+            "/run/user/1234/signal-cli/socket",
         )
 
-    def test_panel_default_lives_outside_sandbox_subdir(self) -> None:
-        # Panel must NOT be under `.../spaces-signal/sandbox/`; a
-        # sibling of the sandbox dir is fine, anything below it is
-        # a security regression.
-        panel = bridge_mod._default_panel_socket()
-        self.assertEqual(panel, "/run/user/1234/spaces-signal/panel.sock")
-        self.assertFalse(
-            panel.startswith("/run/user/1234/spaces-signal/sandbox/"),
-            f"panel socket leaked into sandbox-bound dir: {panel}",
-        )
-
-    def test_env_override_wins_for_enqueue(self) -> None:
-        os.environ["SPACES_SIGNAL_ENQUEUE_SOCKET"] = "/custom/enq.sock"
-        self.assertEqual(bridge_mod._default_enqueue_socket(), "/custom/enq.sock")
-
-    def test_env_override_wins_for_panel(self) -> None:
-        os.environ["SPACES_SIGNAL_PANEL_SOCKET"] = "/custom/pan.sock"
-        self.assertEqual(bridge_mod._default_panel_socket(), "/custom/pan.sock")
-
-
-class TestServeSocketCreatesParentDir(unittest.TestCase):
-    """Bridge binds inside `%t/spaces-signal/sandbox/`, a dir created
-    by user-tmpfiles in a deployed system. For ad-hoc runs and tests
-    that aren't going through systemd, the bridge must still cope
-    with a missing parent — otherwise it dies on first start and the
-    Restart=always loop spins forever.
-    """
-
-    def test_bind_creates_missing_parent(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        base = Path(tmp.name)
-        daemon_sock = str(base / "signal.sock")
-        nested = base / "spaces-signal" / "sandbox"
-        enqueue_sock = str(nested / "enqueue.sock")
-        panel_sock = str(base / "spaces-signal" / "panel.sock")
-        db_path = base / "messages.db"
-
-        self.assertFalse(nested.exists(), "test precondition: nested dir missing")
-
-        daemon = FakeSignalDaemon(daemon_sock)
-        self.addCleanup(daemon.stop)
-
-        bridge = bridge_mod.Bridge(
-            bridge_mod.BridgeConfig(
-                db_path=db_path,
-                daemon_socket=daemon_sock,
-                enqueue_socket=enqueue_sock,
-                panel_socket=panel_sock,
-            ),
-            accounts_refresh_seconds=60.0,
-        )
-        bridge.start()
-        self.addCleanup(bridge.stop)
-
-        if not _wait_until(lambda: os.path.exists(enqueue_sock)):
-            self.fail("bridge never bound enqueue socket inside missing parent dir")
-        if not _wait_until(lambda: os.path.exists(panel_sock)):
-            self.fail("bridge never bound panel socket inside missing parent dir")
+    def test_env_override_wins_for_daemon(self) -> None:
+        os.environ["SPACES_SIGNAL_DAEMON_SOCKET"] = "/custom/daemon.sock"
+        self.assertEqual(bridge_mod._default_daemon_socket(), "/custom/daemon.sock")
 
 
 if __name__ == "__main__":

@@ -5,17 +5,15 @@ build-backend = "hatchling.build"
 [project]
 name = "spaces-signal-cli"
 version = "0.1.0"
-description = "Signal skill for the spaces AI agent (CLI + bridge daemon)"
+description = "Signal daemon→messages.db forwarder for the spaces AI agent"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-# `signal` is the agent-facing CLI invoked from inside the pi-chat
-# sandbox. `spaces-signal-bridge` is the host-side long-lived service
-# that subscribes to signal-cli, persists messages, and brokers the
-# enqueue/approve flow.
-signal = "spaces_signal.cli:main"
+# `spaces-signal-bridge` is the host-side long-lived service that
+# subscribes to signal-cli and persists incoming messages into the
+# store the integration-signal MCP server reads.
 spaces-signal-bridge = "spaces_signal.bridge:main"
 
 [tool.hatch.build.targets.wheel]

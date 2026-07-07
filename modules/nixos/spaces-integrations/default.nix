@@ -174,6 +174,17 @@ let
           are never child-callable and must never appear in `autoRun`.
         '';
       };
+      environment = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = ''
+          Extra environment variables for the MCP server unit, folded into
+          serviceConfig.Environment alongside SPACES_INTEGRATION_SHARED_DIR.
+          Values may carry systemd `%t`/`%h` specifiers (expanded by systemd).
+          Used e.g. by signal to point the server at the signal-cli daemon
+          socket + message store the host grants via `extraPaths`.
+        '';
+      };
     };
   };
 

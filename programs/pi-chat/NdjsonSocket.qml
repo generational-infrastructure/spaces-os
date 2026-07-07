@@ -2,9 +2,9 @@
 //
 // Every pi-chat socket peer speaks NDJSON over AF_UNIX, but with three
 // wire conventions. Instead of each consumer hand-rolling its own
-// Socket + reconnect Timer + SplitParser + JSON.parse (four bespoke
-// copies used to live in SignalConfirm, PiChatBackend's skill-config
-// sidecar, IntegrationsBridge and OpenUrlListener), this component
+// Socket + reconnect Timer + SplitParser + JSON.parse (three bespoke
+// copies used to live in PiChatBackend's skill-config sidecar,
+// IntegrationsBridge and OpenUrlListener), this component
 // owns all connection-lifecycle edge cases — reconnect backoff, the
 // bounce-to-reconnect idiom, backoff reset on success, one-shot
 // done-guards, reply timeouts, stale-socket unlink — in one place.

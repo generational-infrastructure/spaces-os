@@ -1,22 +1,16 @@
-"""SQLite schema + helpers shared by the signal CLI and bridge.
+"""SQLite schema + helpers shared by the bridge (forwarder) and the
+integration-signal read path.
 
 The store lives at $SPACES_SIGNAL_DB (default
-~/.local/state/spaces/signal/messages.db). Two tables:
+~/.local/state/spaces/signal/messages.db). One table:
 
 * `messages` — append-only inbox. Idempotent on `(uid)`; the bridge
   may legitimately replay the same envelope (signal-cli ack semantics)
   and the dedup prevents double-counting in thread reads.
 
-* `pending_sends` — outbound sends the agent queued via the bridge's
-  enqueue socket that require the human to approve through the chat
-  panel. The bridge owns this table outright: it INSERTs the row and
-  owns every state transition. The sandbox-side CLI never writes here
-  — it opens the store read-only — so a prompt-injected agent cannot
-  forge an 'approved'/'sent' row to fake an approval.
-
-Both tables store timestamps as integer ms-since-epoch (matching the
-Signal protocol envelope timestamps) so the agent never has to
-think about timezones — UTC ISO conversion happens at the print layer.
+Timestamps are integer ms-since-epoch (matching the Signal protocol
+envelope timestamps) so the reader never has to think about timezones —
+UTC ISO conversion happens at the print layer.
 """
 
 from __future__ import annotations
@@ -26,7 +20,6 @@ import os
 import sqlite3
 import time
 from pathlib import Path
-from typing import Iterable
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -49,23 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread_ts
   ON messages(thread_id, ts_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_ts
   ON messages(ts_ms DESC);
-
-CREATE TABLE IF NOT EXISTS pending_sends (
-  token        TEXT PRIMARY KEY,
-  created_at   INTEGER NOT NULL,
-  account_uuid TEXT,
-  recipient    TEXT NOT NULL,
-  display_name TEXT,
-  body         TEXT NOT NULL,
-  state        TEXT NOT NULL,
-  decision_at  INTEGER,
-  error        TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_pending_state
-  ON pending_sends(state, created_at);
 """
-
-VALID_STATES = frozenset({"pending", "approved", "sent", "denied", "failed", "expired"})
 
 
 def default_db_path() -> Path:
@@ -340,123 +317,6 @@ def list_threads(db: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
     """
     rows = db.execute(sql, (now_ms(), now_ms(), int(limit))).fetchall()
     return [dict(r) for r in rows]
-
-
-def insert_pending(
-    db: sqlite3.Connection,
-    *,
-    token: str,
-    recipient: str,
-    body: str,
-    display_name: str | None = None,
-    account_uuid: str | None = None,
-) -> None:
-    db.execute(
-        """INSERT INTO pending_sends
-           (token, created_at, account_uuid, recipient, display_name, body, state)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-        (token, now_ms(), account_uuid, recipient, display_name, body),
-    )
-
-
-def list_pending(
-    db: sqlite3.Connection, *, states: Iterable[str] = ("pending",)
-) -> list[dict]:
-    state_list = list(states)
-    if not state_list:
-        return []
-    placeholders = ",".join("?" * len(state_list))
-    rows = db.execute(
-        f"SELECT * FROM pending_sends WHERE state IN ({placeholders})"
-        f" ORDER BY created_at ASC",
-        state_list,
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def count_pending(db: sqlite3.Connection) -> int:
-    """Number of sends still awaiting a human decision."""
-    row = db.execute(
-        "SELECT COUNT(*) AS n FROM pending_sends WHERE state = 'pending'"
-    ).fetchone()
-    return int(row["n"])
-
-
-def expire_pending(db: sqlite3.Connection, *, older_than_ms: int) -> list[str]:
-    """Mark still-'pending' rows created before `older_than_ms` as
-    'expired' (never decided in time). Returns the tokens expired so the
-    caller can drop their cards from the panel.
-
-    Callers MUST hold the bridge db_lock so the SELECT and UPDATE are
-    atomic against a concurrent approve/deny — otherwise a row decided
-    between the two could be wrongly reported expired.
-    """
-    rows = db.execute(
-        "SELECT token FROM pending_sends WHERE state = 'pending' AND created_at < ?",
-        (older_than_ms,),
-    ).fetchall()
-    tokens = [r["token"] for r in rows]
-    if tokens:
-        db.execute(
-            "UPDATE pending_sends SET state = 'expired', decision_at = ?"
-            " WHERE state = 'pending' AND created_at < ?",
-            (now_ms(), older_than_ms),
-        )
-    return tokens
-
-
-def get_pending(db: sqlite3.Connection, token: str) -> dict | None:
-    row = db.execute("SELECT * FROM pending_sends WHERE token = ?", (token,)).fetchone()
-    return dict(row) if row else None
-
-
-def claim_pending(db: sqlite3.Connection, token: str, *, state: str) -> bool:
-    """Atomically claim a still-`pending` row, moving it to a decided
-    state ('approved' or 'denied'). Returns True iff *this* caller won
-    the claim — the row existed and was still 'pending'. Concurrent
-    deciders (a second approve, or an approve racing a deny) get False
-    and MUST NOT act on the row.
-
-    This is the approval gate's serialization point. The older
-    `mark_pending(state != target)` guard only blocked re-applying the
-    *same* state; it still let an already-approved (or even 'sent')
-    row be flipped to 'denied' and vice versa, so a deny racing an
-    approve could report success while signal-cli actually dispatched
-    the message. Claiming strictly from 'pending' closes that race:
-    exactly one of {approve, deny} can win.
-    """
-    if state not in ("approved", "denied"):
-        raise ValueError(f"claim_pending: state must be approved/denied, got {state!r}")
-    cur = db.execute(
-        """UPDATE pending_sends
-           SET state = ?, decision_at = ?
-           WHERE token = ? AND state = 'pending'""",
-        (state, now_ms(), token),
-    )
-    return cur.rowcount == 1
-
-
-def mark_pending(
-    db: sqlite3.Connection,
-    token: str,
-    *,
-    state: str,
-    error: str | None = None,
-) -> bool:
-    """Set a terminal state (sent/failed) on a row already claimed via
-    `claim_pending`. Idempotent: returns True iff the row existed and
-    the state actually changed. NOT a claim — callers that need to win
-    an exclusive pending→decided transition MUST use `claim_pending`.
-    """
-    if state not in VALID_STATES:
-        raise ValueError(f"mark_pending: invalid state {state!r}")
-    cur = db.execute(
-        """UPDATE pending_sends
-           SET state = ?, decision_at = ?, error = ?
-           WHERE token = ? AND state != ?""",
-        (state, now_ms(), error, token, state),
-    )
-    return cur.rowcount == 1
 
 
 def expire_messages(db: sqlite3.Connection) -> int:

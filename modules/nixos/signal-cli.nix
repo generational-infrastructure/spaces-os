@@ -47,29 +47,6 @@ let
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/spaces/signal";
 
-  # Signal runtime layout under $XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR ==
-  # %t in user-systemd specifier-speak):
-  #
-  #   %t/spaces-signal/                  (parent, host-only)
-  #     ├── sandbox/                     (granted into the pi-chat sandbox)
-  #     │     └── enqueue.sock           (sandbox ↔ bridge: agent sends)
-  #     └── panel.sock                   (bridge ↔ chat panel: approval)
-  #
-  # The pi-chat sandbox is granted the inner `sandbox/` directory (the
-  # whole dir, not individual files); sockets the bridge later creates
-  # inside it are reachable from the sandbox automatically — the grant
-  # is on the directory, not its current contents — so we don't depend
-  # on the bridge being up at sandbox spawn time. Both dirs are created
-  # unconditionally by the user-tmpfiles rules below; they stay empty on
-  # unlinked systems.
-  #
-  # `panel.sock` deliberately lives one level *outside* the granted
-  # directory: that's the security boundary. A prompt-injected agent can
-  # write into enqueue.sock but cannot reach panel.sock to mint its own
-  # approval.
-  runtimeRoot = "spaces-signal";
-  runtimeSandboxSubdir = "${runtimeRoot}/sandbox";
-
   # systemd condition + path-unit glob. signal-cli writes per-account
   # state into ~/.local/share/signal-cli/data/<account-id>{,.d}; the
   # exact <account-id> naming varies by signal-cli version (older
@@ -104,51 +81,39 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        # The whole point of this module is to back the Signal skill
-        # the agent invokes through the pi-chat sandbox. Without
-        # pi-chat enabled, the sandboxAllowedPaths we publish below are dead
-        # weight and the user almost certainly misconfigured.
-        assertion = config.services.pi-chat.enable;
+        # The whole point of this module is to feed messages.db for the
+        # integration-signal MCP server, which pi-chat wires up. Without
+        # pi-chat enabled, the daemon + forwarder run but nothing consumes
+        # the store — the user almost certainly misconfigured.
+        # `or false` keeps the failure a clean assertion (with the message
+        # below) rather than an uncatchable "attribute 'pi-chat' missing"
+        # when the pi-chat module isn't imported at all.
+        assertion = config.services.pi-chat.enable or false;
         message = ''
           services.spaces-signal.enable = true requires services.pi-chat.enable = true.
 
-          The signal-cli daemon exists to back the Signal skill the
-          agent invokes inside the pi-chat sandbox. If you want
-          signal-cli without pi-chat, install pkgs.signal-cli and
-          manage the daemon yourself.
+          The signal-cli daemon + bridge exist to feed the message store
+          the integration-signal MCP server (enabled through pi-chat)
+          reads. If you want signal-cli without pi-chat, install
+          pkgs.signal-cli and manage the daemon yourself.
         '';
       }
     ];
 
     # signal-cli on PATH so the user can run the one-time link/register
     # flow and ad-hoc debugging commands (listGroups, listContacts, …)
-    # against the same data dir the daemon uses. signalCliPkg also goes
-    # on PATH so the user can drive the `signal` CLI from a regular
-    # shell (debugging, scripting) against the same bridge sockets the
-    # sandbox uses.
-    environment.systemPackages = [
-      cfg.package
-      signalCliPkg
-    ];
+    # against the same data dir the daemon uses (plan decision 14; the
+    # agent-facing surface moved to the integration-signal MCP server).
+    environment.systemPackages = [ cfg.package ];
 
     systemd.user.tmpfiles.rules = [
       # identity dir: 0700 so per-device keys are not world-readable.
       # signal-cli will create it itself on first link; we pre-create
       # so the mode is correct from the start.
       "d %h/${identityRel} 0700 - - -"
-      # spaces-side store dir: holds messages.db (the bridge writes it
-      # from outside; the agent's `signal` CLI gets a read-only grant).
+      # spaces-side store dir: holds messages.db, written here by the bridge
+      # and read (mode=ro) by the integration-signal MCP server.
       "d %h/${storeRel} 0700 - - -"
-      # Signal runtime dirs. Both created unconditionally at session
-      # start, so the pi-chat sandbox can be granted the inner dir as a
-      # mandatory path even before the user has linked a Signal account.
-      # The bridge later creates the sockets inside; the grant is on the
-      # directory, so new entries are reachable from both sides without
-      # the sandbox having to be respawned. The parent dir is host-only
-      # — that's where panel.sock lives, kept out of the sandbox so a
-      # prompt-injected agent can't mint its own send approvals.
-      "d %t/${runtimeRoot} 0700 - - -"
-      "d %t/${runtimeSandboxSubdir} 0700 - - -"
     ];
 
     # Daemon unit. Condition-gated on the account dir so a fresh
@@ -188,14 +153,12 @@ in
       };
     };
 
-    # Bridge: subscribes to the daemon, persists envelopes into
-    # messages.db, and brokers the enqueue/approve flow over two
-    # separate sockets. The enqueue socket's dir is granted to the
-    # pi-chat sandbox; the panel socket is NOT — that split is the
-    # security boundary that keeps prompt-injected sends from
-    # auto-approving themselves.
+    # Bridge: subscribes to the signal-cli daemon and forwards every
+    # incoming envelope into messages.db. Send + approval now live in the
+    # integration-signal MCP server (gateway confirm), so the bridge owns
+    # no sockets — it is purely a daemon → messages.db forwarder.
     systemd.user.services.spaces-signal-bridge = {
-      description = "spaces signal bridge (forwarder + send broker)";
+      description = "spaces signal bridge (signal-cli daemon → messages.db forwarder)";
       # wantedBy includes the daemon service so path-activation
       # propagates: when the daemon is started by the path unit on
       # first link, systemd pulls the bridge in too. The
@@ -236,55 +199,5 @@ in
       };
     };
 
-    # Sandbox-facing surface. **Daemon socket is deliberately absent.**
-    # The bridge owns the only JSON-RPC client to signal-cli; routing
-    # contacts/groups/send through the bridge keeps the human approval
-    # gate as the single chokepoint. Exposing the daemon socket into
-    # the sandbox would let a prompt-injected agent call `send`
-    # directly and bypass the gate entirely.
-    #
-    # The message store is `ro`: the bridge writes from outside the
-    # sandbox via direct filesystem access, the sandbox can only read.
-    # That stops a compromised agent from forging inbound messages or
-    # rewriting `pending_sends.state = 'sent'` to fake approval.
-    services.pi-chat.sandboxAllowedPaths = [
-      {
-        source = "%h/${storeRel}";
-        mode = "ro";
-      }
-      {
-        source = "%h/${identityRel}/attachments";
-        # signal-cli only creates this dir once it has received the first
-        # attachment, so it may be missing; pi-landlock-exec skips an absent
-        # grant non-fatally.
-        mode = "ro";
-      }
-      {
-        # The inner sandbox-visible dir, not a socket file: see the
-        # layout comment near `runtimeRoot` at the top of this module.
-        # Mandatory grant — the tmpfiles rules guarantee the source
-        # exists at sandbox spawn time. The bridge later creates
-        # enqueue.sock inside it; that socket is reachable from the
-        # sandbox automatically because the grant is on the directory,
-        # not its current contents. Critically: panel.sock lives one
-        # level *up* and is therefore never exposed here.
-        source = "%t/${runtimeSandboxSubdir}";
-        mode = "rw";
-      }
-    ];
-
-    # The agent-facing `signal` CLI resolves messages.db from
-    # $SPACES_SIGNAL_DB (db.default_db_path), falling back to a
-    # $HOME-relative path. Inside the sandbox $HOME is the private
-    # per-session agent dir, not the login home, so that fallback would
-    # miss the store granted read-only above. Publish the absolute host
-    # path — %h expands to the login home in the daemon unit's
-    # Environment=, matching the RO bind source.
-    services.pi-chat.sandboxEnv.SPACES_SIGNAL_DB = "%h/${storeRel}/messages.db";
-
-    # Skip the bash-confirm prompt for `signal …` — the bridge already
-    # gates non-self-sends at panel.sock (unreachable from the
-    # sandbox), and the read-only subcommands have nothing to gate.
-    services.pi-chat.bashConfirm.allowPatterns = [ "^signal(\\s|$)" ];
   };
 }

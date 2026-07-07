@@ -1,6 +1,6 @@
 # Contract test for NdjsonSocket.qml — the one shared unix-socket
-# adapter behind SignalConfirm, PiChatBackend's skill-config sidecar,
-# IntegrationsBridge and OpenUrlListener.
+# adapter behind PiChatBackend's skill-config sidecar, IntegrationsBridge
+# and OpenUrlListener.
 #
 # Drives both client modes against in-driver python socket fixtures:
 #   subscribe — hello line on connect, line-buffered JSON delivery,

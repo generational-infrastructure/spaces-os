@@ -10,10 +10,9 @@ pkgs.python3Packages.buildPythonApplication {
   pytestFlags = [
     "test_db.py"
     "test_bridge.py"
-    "test_cli.py"
   ];
   meta = {
-    description = "Signal skill for the spaces AI agent (CLI + bridge daemon)";
-    mainProgram = "signal";
+    description = "Signal daemon→messages.db forwarder for the spaces AI agent";
+    mainProgram = "spaces-signal-bridge";
   };
 }

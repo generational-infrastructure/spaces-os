@@ -124,12 +124,6 @@ let
   # All skills (built-ins + user-supplied via cfg.skills), merged
   # into one linked-farm so the plugin can pass a single dir or pi
   # can read each one by absolute path from settings.json.
-  #
-  # The signal skill follows services.spaces-signal.enable (which in
-  # turn defaults to services.pi-chat.enable). When opted out, the
-  # SKILL.md does not reach the agent — it advertises a CLI the
-  # sandbox can't actually reach, so dropping it avoids confusing
-  # tool calls.
   builtinSkills = {
     datetime = "${skillsDir}/datetime";
     location = "${skillsDir}/location";
@@ -139,9 +133,6 @@ let
     skill-config = "${skillsDir}/skill-config";
     google = "${skillsDir}/google";
     wikidata = "${skillsDir}/wikidata";
-  }
-  // lib.optionalAttrs (config.services.spaces-signal.enable or false) {
-    signal = "${skillsDir}/signal";
   };
   allSkills = builtinSkills // cfg.skills;
 
@@ -481,14 +472,9 @@ in
       default = [ ];
       example = lib.literalExpression ''
         [
-          # The signal skill (see modules/nixos/signal-cli.nix): message
-          # store + attachments read-only, and the bridge's sandbox
-          # runtime dir read-write (enqueue.sock appears inside it). The
-          # signal-cli daemon socket and panel.sock are deliberately NOT
-          # exposed — that split is the send-approval gate's boundary.
-          { source = "%h/.local/state/spaces/signal"; mode = "ro"; }
-          { source = "%h/.local/share/signal-cli/attachments"; mode = "ro"; }
-          { source = "%t/spaces-signal/sandbox"; mode = "rw"; }
+          # A skill's host-side data read-only, plus a scratch dir it writes.
+          { source = "%h/.local/state/spaces/my-skill"; mode = "ro"; }
+          { source = "%t/my-skill/scratch"; mode = "rw"; }
         ]
       '';
       description = ''

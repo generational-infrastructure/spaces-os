@@ -35,7 +35,7 @@ class DbBase(unittest.TestCase):
 
 
 class TestSchema(DbBase):
-    def test_schema_creates_messages_and_pending_tables(self) -> None:
+    def test_schema_creates_messages_table(self) -> None:
         names = {
             r[0]
             for r in self.db.execute(
@@ -43,7 +43,6 @@ class TestSchema(DbBase):
             )
         }
         self.assertIn("messages", names)
-        self.assertIn("pending_sends", names)
 
     def test_default_db_path_honours_env(self) -> None:
         with mock.patch.dict(os.environ, {"SPACES_SIGNAL_DB": "/x/y.db"}):
@@ -213,136 +212,12 @@ class TestListThreads(DbBase):
         self.assertEqual(previews["group-X"]["message_count"], 1)
 
 
-class TestPendingSends(DbBase):
-    def test_insert_and_list(self) -> None:
-        dbmod.insert_pending(
-            self.db,
-            token="tok1",
-            recipient="+15551234",
-            body="hi",
-            display_name="Bob",
-        )
-        rows = dbmod.list_pending(self.db)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["state"], "pending")
-        self.assertEqual(rows[0]["display_name"], "Bob")
-
-    def test_get_pending_by_token(self) -> None:
-        dbmod.insert_pending(self.db, token="tok2", recipient="+15551234", body="x")
-        row = dbmod.get_pending(self.db, "tok2")
-        self.assertIsNotNone(row)
-        self.assertEqual(row["recipient"], "+15551234")
-
-    def test_get_pending_missing_returns_none(self) -> None:
-        self.assertIsNone(dbmod.get_pending(self.db, "nope"))
-
-    def test_mark_pending_changes_state(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        self.assertTrue(dbmod.mark_pending(self.db, "t", state="approved"))
-        row = dbmod.get_pending(self.db, "t")
-        self.assertEqual(row["state"], "approved")
-        self.assertIsNotNone(row["decision_at"])
-
-    def test_mark_pending_returns_false_when_unchanged(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        self.assertTrue(dbmod.mark_pending(self.db, "t", state="approved"))
-        # Setting the same state again is a no-op.
-        self.assertFalse(dbmod.mark_pending(self.db, "t", state="approved"))
-
-    def test_mark_pending_records_error_on_failure(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        dbmod.mark_pending(self.db, "t", state="failed", error="signal-cli refused")
-        row = dbmod.get_pending(self.db, "t")
-        self.assertEqual(row["state"], "failed")
-        self.assertEqual(row["error"], "signal-cli refused")
-
-    def test_invalid_state_rejected(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        with self.assertRaises(ValueError):
-            dbmod.mark_pending(self.db, "t", state="not-a-state")
-
-    def test_claim_pending_wins_from_pending(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        self.assertTrue(dbmod.claim_pending(self.db, "t", state="approved"))
-        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "approved")
-
-    def test_claim_pending_second_claim_loses(self) -> None:
-        # Once a row leaves 'pending', no further claim can win — this
-        # is what stops a deny from "cancelling" an already-approved
-        # send while signal-cli dispatches it anyway.
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        self.assertTrue(dbmod.claim_pending(self.db, "t", state="approved"))
-        self.assertFalse(dbmod.claim_pending(self.db, "t", state="denied"))
-        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "approved")
-
-    def test_claim_pending_cannot_flip_sent_to_denied(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        dbmod.claim_pending(self.db, "t", state="approved")
-        dbmod.mark_pending(self.db, "t", state="sent")
-        self.assertFalse(dbmod.claim_pending(self.db, "t", state="denied"))
-        self.assertEqual(dbmod.get_pending(self.db, "t")["state"], "sent")
-
-    def test_claim_pending_rejects_terminal_state(self) -> None:
-        dbmod.insert_pending(self.db, token="t", recipient="+1", body="x")
-        with self.assertRaises(ValueError):
-            dbmod.claim_pending(self.db, "t", state="sent")
-
-    def test_claim_pending_unknown_token_returns_false(self) -> None:
-        self.assertFalse(dbmod.claim_pending(self.db, "nope", state="approved"))
-
-    def test_list_pending_filters_by_state(self) -> None:
-        dbmod.insert_pending(self.db, token="a", recipient="+1", body="x")
-        dbmod.insert_pending(self.db, token="b", recipient="+2", body="y")
-        dbmod.mark_pending(self.db, "b", state="approved")
-        pending = {r["token"] for r in dbmod.list_pending(self.db)}
-        approved = {
-            r["token"] for r in dbmod.list_pending(self.db, states=["approved"])
-        }
-        self.assertEqual(pending, {"a"})
-        self.assertEqual(approved, {"b"})
-
-    def test_count_pending(self) -> None:
-        self.assertEqual(dbmod.count_pending(self.db), 0)
-        dbmod.insert_pending(self.db, token="a", recipient="+1", body="x")
-        dbmod.insert_pending(self.db, token="b", recipient="+2", body="y")
-        dbmod.claim_pending(self.db, "b", state="approved")
-        # Only the still-pending row counts toward the cap.
-        self.assertEqual(dbmod.count_pending(self.db), 1)
-
-    def test_expire_pending_marks_old_only(self) -> None:
-        now = dbmod.now_ms()
-        self.db.execute(
-            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
-            " VALUES ('old', ?, '+1', 'm', 'pending')",
-            (now - 10_000,),
-        )
-        self.db.execute(
-            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
-            " VALUES ('new', ?, '+2', 'm', 'pending')",
-            (now,),
-        )
-        tokens = dbmod.expire_pending(self.db, older_than_ms=now - 5_000)
-        self.assertEqual(tokens, ["old"])
-        self.assertEqual(dbmod.get_pending(self.db, "old")["state"], "expired")
-        self.assertEqual(dbmod.get_pending(self.db, "new")["state"], "pending")
-
-    def test_expire_pending_ignores_already_decided(self) -> None:
-        now = dbmod.now_ms()
-        self.db.execute(
-            "INSERT INTO pending_sends (token, created_at, recipient, body, state)"
-            " VALUES ('appr', ?, '+1', 'm', 'approved')",
-            (now - 10_000,),
-        )
-        self.assertEqual(dbmod.expire_pending(self.db, older_than_ms=now), [])
-        self.assertEqual(dbmod.get_pending(self.db, "appr")["state"], "approved")
-
-
 class TestConnectReadonly(unittest.TestCase):
-    """The sandbox-side `signal` CLI MUST open the DB read-only.
+    """The integration-signal read path MUST open the DB read-only.
     Any write attempt — INSERT, UPDATE, DELETE, CREATE — must be
-    rejected at the SQLite layer, so a prompt-injected agent
-    cannot forge inbound messages or flip pending_sends to 'sent'
-    without panel approval.
+    rejected at the SQLite layer, so a prompt-injected agent cannot
+    forge inbound messages through the store it shares with the
+    forwarder bridge.
     """
 
     def setUp(self) -> None:

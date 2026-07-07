@@ -96,6 +96,55 @@ in
           "message_read"
         ];
       };
+
+      # Migrated from the signal skill: the signal-cli daemon over the
+      # panel-enabled, field-less store (no config/secrets — linking is the
+      # out-of-band `signal-cli link` QR flow). Read/list tools auto-run;
+      # `send` confirms with a rendered `send_preview`. No network: the
+      # signal-cli daemon owns the internet, so the integration only reaches
+      # the daemon socket + the local message store granted via extraPaths.
+      signal = {
+        description = "Signal";
+        command = exe "integration-signal";
+        network = false;
+        connectPorts = [ ];
+        inherit (fieldsOf "signal") config secrets;
+        autoRun = [
+          "threads"
+          "read_thread"
+          "search"
+          "contacts"
+          "groups"
+          "note_to_self"
+          "fetch_attachment"
+        ];
+        confirmPreview.send = "send_preview";
+        # The server reads these at start (integration_signal.py); values carry
+        # systemd %t/%h specifiers, resolved identically to the extraPaths grants.
+        environment = {
+          SPACES_SIGNAL_DAEMON_SOCKET = "%t/signal-cli/socket";
+          SPACES_SIGNAL_ATTACHMENTS_DIR = "%h/.local/share/signal-cli/attachments";
+          SPACES_SIGNAL_DB = "%h/.local/state/spaces/signal/messages.db";
+        };
+        extraPaths = [
+          {
+            # signal-cli daemon JSON-RPC socket dir (rw to connect the AF_UNIX socket).
+            source = "%t/signal-cli";
+            mode = "rw";
+          }
+          {
+            # messages.db store — rw only for the WAL -wal/-shm side-files; the
+            # server opens the DB mode=ro (decision 8).
+            source = "%h/.local/state/spaces/signal";
+            mode = "rw";
+          }
+          {
+            # signal-cli attachment store — read-only; fetch_attachment copies out.
+            source = "%h/.local/share/signal-cli/attachments";
+            mode = "ro";
+          }
+        ];
+      };
     };
   };
 }

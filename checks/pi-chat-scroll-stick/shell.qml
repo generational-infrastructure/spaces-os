@@ -50,10 +50,6 @@ QtObject {
     property var sessionsList: []
     property string activeSessionId: ""
     property var executors: []
-    property var signalPendingSends: []
-    property bool signalBridgeConnected: false
-    function signalApprove(_t) {}
-    function signalDeny(_t) {}
     function newSession() {}
   }
 

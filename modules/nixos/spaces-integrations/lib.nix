@@ -120,7 +120,10 @@ in
           ExecStart = "${landlockExec} --json ${policyPath} -- ${manifest.command}";
           # The CLI folds $SPACES_INTEGRATION_SHARED_DIR into the policy's rw set
           # (lowerIntegrationPolicy), and the server reads it as its clone target.
-          Environment = [ "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}" ];
+          Environment = [
+            "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}"
+          ]
+          ++ lib.mapAttrsToList (k: v: "${k}=${v}") manifest.environment;
           RuntimeDirectory = unitName;
           StateDirectory = unitName;
           # The broker delivers the whole store as two fixed credentials:

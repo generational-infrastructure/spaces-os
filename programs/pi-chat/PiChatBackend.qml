@@ -97,22 +97,6 @@ Item {
   }
   readonly property string skillConfigSockPath: runtimeDir + "/spaces-skill-config.sock"
   readonly property string openUrlSockPath: runtimeDir + "/spaces-pi-open-url.sock"
-  readonly property string signalPanelSockPath: runtimeDir + "/spaces-signal/panel.sock"
-
-  // Bridge between the spaces-signal panel socket and the chat UI.
-  // The panel sits *outside* the pi-chat sandbox, so it (not the
-  // agent) is the only thing that can mint approvals on outbound
-  // Signal sends. `pending` and `approve(token)` / `deny(token)`
-  // are surfaced to Panel.qml through this object.
-  SignalConfirm {
-    id: signalConfirm
-    sockPath: root.signalPanelSockPath
-    active: true
-  }
-  readonly property var signalPendingSends: signalConfirm.pending
-  readonly property bool signalBridgeConnected: signalConfirm.connected
-  function signalApprove(token) { signalConfirm.approve(token); }
-  function signalDeny(token) { signalConfirm.deny(token); }
 
   // Multi-homing: the panel attaches to every configured executor at once and
   // each PiSession routes over the one its entry is pinned to (design stage 4).

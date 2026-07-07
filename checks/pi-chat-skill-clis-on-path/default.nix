@@ -21,8 +21,8 @@
 let
   inherit (inputs.nixpkgs) lib;
 
-  # Default spaces shape: the bundle auto-enables pi-chat and (via
-  # pi-chat's own dep) signal-cli. Both default-on; nothing extra to set.
+  # Default spaces shape: the bundle auto-enables pi-chat; nothing extra
+  # to set.
   system = inputs.self.lib.mkEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
@@ -39,7 +39,6 @@ let
   # Skills that don't shell out (location reads a file; datetime uses
   # the system `date`) are intentionally absent.
   expected = {
-    signal = [ "signal" ];
     notifications = [ "notifications" ];
     google = [ "google-cli" ];
     maps = [ "osm-cli" ];

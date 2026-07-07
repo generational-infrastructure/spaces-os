@@ -43,9 +43,7 @@ def main():
     try:
 
         def ipc_ready():
-            return qs.ipc_ready("test:panel-width") and qs.ipc_ready(
-                "test:signal-banner"
-            )
+            return qs.ipc_ready("test:panel-width")
 
         if not wait_until(ipc_ready, timeout_s=20):
             die("quickshell never bound the test IPC targets")
@@ -94,27 +92,6 @@ def main():
             f"PASS: panel implicitWidth={implicit:.0f} width={laid:.0f} (both <= 480)\n"
         )
 
-        # THE REGRESSION: the pending-Signal approval banner is owned by
-        # PiChatBackend (signalPendingSends), not by the active session.
-        # When the banner binds to `chat` (= backend.chat) instead of
-        # `backend`, the cards never render and the user can't approve a
-        # send the agent enqueued. The stub backend in shell.qml exposes
-        # exactly one pending send off the backend; the banner must see it.
-        count = ipc_call("bannerCount", target="test:signal-banner")
-        if count == "no-banner":
-            die("signal banner Rectangle not found in the Panel tree")
-        if count != "1":
-            die(
-                f"signal banner items={count}, expected 1 — banner not reading "
-                "backend.signalPendingSends"
-            )
-        visible = ipc_call("bannerVisible", target="test:signal-banner")
-        if visible != "true":
-            die(
-                f"signal banner visible={visible!r}, expected 'true' — "
-                "pending send enqueued but no approval card shown"
-            )
-        sys.stderr.write("PASS: signal banner renders backend pending sends\n")
     finally:
         qs.stop()
 

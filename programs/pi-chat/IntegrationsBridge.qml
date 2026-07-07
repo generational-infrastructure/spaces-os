@@ -2,8 +2,8 @@
 // (spaces-integrationd) on $XDG_RUNTIME_DIR/spaces-integrations.sock.
 //
 // The broker speaks one JSON request per connection, one JSON reply, then
-// closes (see packages/spaces-integrationd/protocol.go). So unlike the
-// long-lived SignalConfirm subscriber, every op here is an NdjsonSocket
+// closes (see packages/spaces-integrationd/protocol.go). So unlike a
+// long-lived subscriber connection, every op here is an NdjsonSocket
 // one-shot request: fresh connection, one request line, single reply,
 // teardown. `list` refreshes `integrations`; `set-secret`/`enable`/`disable`
 // mutate then trigger a re-list so the form reflects the new state.
