@@ -277,6 +277,20 @@ func TestListEmptyState(t *testing.T) {
 	}
 }
 
+// list must surface each definition's setup flag so the panel can gate its
+// Set up / Link button: a def with setup:true reports "setup": true, one
+// without the flag reports "setup": false.
+func TestListReportsSetupFlag(t *testing.T) {
+	e := newTestEnv(t, 0)
+	if gh := e.githubInfo(); gh["setup"] != false {
+		t.Fatalf("want github setup=false, got %v", gh["setup"])
+	}
+	e.writeDef("signal", signalSetupDef)
+	if sig := e.infoByName("signal"); sig["setup"] != true {
+		t.Fatalf("want signal setup=true, got %v", sig["setup"])
+	}
+}
+
 func TestSetFieldStoresConfigPlainAndSecretSealed(t *testing.T) {
 	e := newTestEnv(t, 0)
 	e.setField("github", "work", "owner", "acme")

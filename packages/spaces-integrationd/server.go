@@ -470,6 +470,7 @@ func (s *Server) list() any {
 			Config:       fieldInfos(d.Config),
 			Secrets:      fieldInfos(d.Secrets),
 			Profiles:     profiles,
+			Setup:        d.Setup,
 		})
 	}
 	return ListReply{Op: "ok", Integrations: infos}

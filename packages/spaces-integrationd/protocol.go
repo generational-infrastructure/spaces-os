@@ -57,6 +57,7 @@ type IntegrationInfo struct {
 	Config       []FieldInfo   `json:"config"`   // schema (sorted by name)
 	Secrets      []FieldInfo   `json:"secrets"`  // schema (sorted by name)
 	Profiles     []ProfileInfo `json:"profiles"` // provisioned accounts
+	Setup        bool          `json:"setup"`    // definition exposes a setup flow
 }
 
 type FieldInfo struct {
