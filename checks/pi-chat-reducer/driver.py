@@ -227,6 +227,127 @@ def main() -> None:
         # Empty import is an identity on messages.
         noop = call("importHistory", {"state": live, "piMessages": []})
         check("importHistory empty identity", noop["messages"], live["messages"])
+        # ── importHistory: re-import over retained bubbles is identity ──
+        # A panel that kept its bubbles across an idle stop (window
+        # closed → session reaped → reopened) re-attaches and replays
+        # get_messages; the history is already on screen and must not
+        # be prepended a second time.
+
+        turn = [
+            {
+                "type": "message_start",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "old question"}],
+                },
+            },
+            {"type": "agent_start"},
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_start"}},
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_delta", "delta": "old answer"},
+            },
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_end", "content": "old answer"},
+            },
+            {"type": "agent_end"},
+        ]
+        turn_hist = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "old question"}],
+                "timestamp": 111,
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "old answer"}]},
+        ]
+        retained = call("replay", {"events": turn})["state"]
+        reimport = call("importHistory", {"state": retained, "piMessages": turn_hist})
+        check(
+            "importHistory reattach identity",
+            reimport["messages"],
+            retained["messages"],
+        )
+
+        # Same, with the assistant message split across two text blocks:
+        # the live fold renders one bubble per block while the history
+        # payload joins the blocks into one entry. The projections must
+        # still be recognized as the same conversation.
+        split = call(
+            "replay",
+            {
+                "events": [
+                    turn[0],
+                    {"type": "agent_start"},
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": "text_start"},
+                    },
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": "text_end",
+                            "content": "part one",
+                        },
+                    },
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": "text_start"},
+                    },
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": "text_end",
+                            "content": "part two",
+                        },
+                    },
+                    {"type": "agent_end"},
+                ]
+            },
+        )["state"]
+        split_hist = [
+            turn_hist[0],
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "part one"},
+                    {"type": "text", "text": "part two"},
+                ],
+            },
+        ]
+        split_re = call("importHistory", {"state": split, "piMessages": split_hist})
+        check(
+            "importHistory split-bubble identity",
+            split_re["messages"],
+            split["messages"],
+        )
+
+        # Retained conversation plus a fresh optimistic prompt sent
+        # before the get_messages response landed: history is a prefix
+        # of what's shown — still nothing to prepend.
+        retained_plus = call(
+            "replay",
+            {
+                "events": turn
+                + [
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "follow-up"}],
+                        },
+                    },
+                ]
+            },
+        )["state"]
+        plus_re = call(
+            "importHistory", {"state": retained_plus, "piMessages": turn_hist}
+        )
+        check(
+            "importHistory prefix identity",
+            plus_re["messages"],
+            retained_plus["messages"],
+        )
 
         if failures:
             die("reducer mismatches:\n  " + "\n  ".join(failures))

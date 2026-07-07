@@ -271,7 +271,11 @@ function _approvalRequest(s, ev, now, effects) {
 
 // Fold a get_messages history payload (pi AgentMessages) into panel
 // bubbles, prepended before whatever is already live. Text parts are
-// joined; tool-call-only and malformed entries are skipped.
+// joined; tool-call-only and malformed entries are skipped. A replay
+// whose conversation is already on screen — the panel kept its bubbles
+// across an idle stop (window closed → reap → reopen), or the daemon's
+// attach-time event replay rebuilt the same turns — is dropped instead
+// of prepended, or every bubble would render twice.
 function importHistory(state, piMessages, now) {
   if (!Array.isArray(piMessages)) return state;
   const out = [];
@@ -288,9 +292,50 @@ function importHistory(state, piMessages, now) {
     out.push(m.role === "user" ? Msg.user(id, text, ts, "") : Msg.assistant(id, text, ts));
   }
   if (out.length === 0) return state;
+  if (_historyRepresented(state.messages, out)) return state;
   const s = Object.assign({}, state);
   s.messages = out.concat(s.messages);
   return s;
+}
+
+// True when the imported history carries nothing the panel isn't
+// already showing. Compared through a plain-chat projection: only
+// user/assistant prose counts (thinking, tool notices, and cards never
+// appear in the daemon's history) and consecutive same-role texts join
+// with "\n" — the live fold renders one bubble per text block while
+// importHistory folds a whole AgentMessage into one, so run-joining is
+// what makes the two granularities comparable. History already shown ⇔
+// its runs are a prefix of the live runs; the last history run may
+// itself be a text-prefix of the matching live run (the live side keeps
+// growing while the get_messages response is in flight). On any
+// mismatch we fall back to prepending — never drop unseen turns.
+function _historyRepresented(existing, imported) {
+  const h = _chatRuns(imported);
+  const s = _chatRuns(existing);
+  if (h.length === 0 || h.length > s.length) return false;
+  for (let i = 0; i < h.length; i++) {
+    if (s[i].role !== h[i].role) return false;
+    if (s[i].text === h[i].text) continue;
+    if (i === h.length - 1 && s[i].text.indexOf(h[i].text + "\n") === 0) continue;
+    return false;
+  }
+  return true;
+}
+
+// Project bubbles into (role, text) runs of plain chat prose:
+// non-prose bubbles are skipped, consecutive same-role texts join
+// with "\n".
+function _chatRuns(messages) {
+  const runs = [];
+  for (const m of messages) {
+    if (!Msg.isPlain(m)) continue;
+    const text = (m.text || "").trim();
+    if (!text) continue;
+    const last = runs.length > 0 ? runs[runs.length - 1] : null;
+    if (last && last.role === m.from) last.text += "\n" + text;
+    else runs.push({ role: m.from, text: text });
+  }
+  return runs;
 }
 
 // Append a user bubble from a pi message_start event when it didn't
