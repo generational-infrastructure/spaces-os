@@ -14,8 +14,9 @@ package main
 // docs/agent-integrations-skill-migration-plan.md.
 
 // client -> daemon. Op is one of "list", "set-field", "remove-profile",
-// "enable", "disable". Integration is required for everything but "list";
-// Profile for set-field/remove-profile; Field/Value only for set-field.
+// "enable", "disable", "setup". Integration is required for everything but
+// "list"; Profile for set-field/remove-profile; Field/Value only for set-field.
+// "setup" keeps the connection open and streams SetupEvent NDJSON lines.
 type Request struct {
 	Op          string `json:"op"`
 	Integration string `json:"integration,omitempty"`
@@ -29,6 +30,17 @@ type Request struct {
 type Ack struct {
 	Op    string `json:"op"`              // "ok" | "error"
 	Error string `json:"error,omitempty"` // populated on op=="error"
+}
+
+// SetupEvent is one NDJSON line on the long-lived setup channel (broker ->
+// panel). The broker relays the helper's lines verbatim and only ever
+// synthesises the "error" variant itself (validation/transport failures). The
+// event vocabulary is the minimal docs/agent-integrations-design.md §5.5
+// subset — qr | message | done | error; the richer typed requests (text-prompt,
+// secret-field, open-url, confirm, progress) are to be completed later.
+type SetupEvent struct {
+	Event string `json:"event"`
+	Error string `json:"error,omitempty"`
 }
 
 // daemon -> client, reply to "list".
@@ -72,6 +84,12 @@ type Definition struct {
 	MultiProfile bool                   `json:"multiProfile"`
 	Config       map[string]FieldSchema `json:"config"`
 	Secrets      map[string]FieldSchema `json:"secrets"`
+	// setup=true when the manifest defines a setup command (lib.nix emits it):
+	// the panel gates its Link/Setup button on it and the broker gates the
+	// `setup` op on it. extraServices are the full user unit names the broker
+	// try-restarts after a successful setup so a fresh link/state is picked up.
+	Setup         bool     `json:"setup"`
+	ExtraServices []string `json:"extraServices"`
 }
 
 type FieldSchema struct {

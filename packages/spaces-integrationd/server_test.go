@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testEnv wires a real unix-socket server against temp dirs and stub commands.
@@ -23,11 +25,13 @@ import (
 // round-trips faithfully while a sealed blob is still observably not
 // plaintext.
 type testEnv struct {
-	t         *testing.T
-	sock      string
-	defsDir   string
-	stateDir  string
-	sysctlLog string
+	t           *testing.T
+	srv         *Server
+	sock        string
+	defsDir     string
+	stateDir    string
+	sysctlLog   string
+	runtimeRoot string
 }
 
 const githubDef = `{
@@ -78,6 +82,14 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 	defsDir := filepath.Join(dir, "defs")
 	stateDir := filepath.Join(dir, "state")
 	runtimeDir := filepath.Join(dir, "run")
+	// The setup sockets live at %t/spaces-integration-<name>-setup.sock; %t in
+	// the tests is a short MkdirTemp dir so the AF_UNIX path stays under the
+	// ~108-byte sun_path limit (t.TempDir() encodes the long test name).
+	runtimeRoot, err := os.MkdirTemp("", "sr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(runtimeRoot) })
 	for _, d := range []string{defsDir, stateDir, runtimeDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -103,10 +115,10 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	srv := NewServer(defsDir, stateDir, runtimeDir,
+	srv := NewServer(defsDir, stateDir, runtimeDir, runtimeRoot,
 		[]string{credsEnc}, []string{credsDec}, []string{sysctl}, []string{"skill-config"})
 	go srv.Serve(l)
-	return &testEnv{t: t, sock: sock, defsDir: defsDir, stateDir: stateDir, sysctlLog: sysctlLog}
+	return &testEnv{t: t, srv: srv, sock: sock, defsDir: defsDir, stateDir: stateDir, sysctlLog: sysctlLog, runtimeRoot: runtimeRoot}
 }
 
 // roundtripRaw sends one raw line and returns the single reply line parsed into
@@ -503,4 +515,366 @@ func TestMalformedJSON(t *testing.T) {
 	e.wantError(e.roundtrip(Request{Op: "frobnicate"}), "unknown op")
 	// Server survived all of the above.
 	e.wantOK(e.roundtrip(Request{Op: "list"}))
+}
+
+// signalSetupDef is the signal definition with the setup channel enabled: it
+// exercises the new Definition.Setup / .ExtraServices fields and the `setup` op.
+const signalSetupDef = `{
+  "name": "signal",
+  "description": "Signal",
+  "multiProfile": false,
+  "network": false,
+  "connectPorts": [],
+  "autoRun": ["threads"],
+  "config": {},
+  "secrets": {},
+  "setup": true,
+  "extraServices": ["spaces-signal-cli.service", "spaces-signal-bridge.service"]
+}`
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// writeEnabled overwrites enabled.json directly so a test can set the run state
+// without going through the broker's enable path (which would start units).
+func (e *testEnv) writeEnabled(st EnabledState) {
+	e.t.Helper()
+	data, err := json.Marshal(st)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.MkdirAll(e.stateDir, 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.stateDir, "enabled.json"), data, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// startSetupHelper listens on the twin setup socket for one integration and,
+// on the first connection, runs handler (scripting the NDJSON a real setup
+// helper would emit). The broker dials this socket after `systemctl start`.
+func (e *testEnv) startSetupHelper(integration string, handler func(conn net.Conn)) net.Listener {
+	e.t.Helper()
+	path := filepath.Join(e.runtimeRoot, "spaces-integration-"+integration+"-setup.sock")
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		handler(conn)
+	}()
+	return ln
+}
+
+// openSetup dials the broker, sends a setup request, and returns the live
+// connection plus a reader streaming the event lines.
+func (e *testEnv) openSetup(integration string) (net.Conn, *bufio.Reader) {
+	e.t.Helper()
+	conn, err := net.Dial("unix", e.sock)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	req, err := json.Marshal(Request{Op: "setup", Integration: integration})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		e.t.Fatal(err)
+	}
+	return conn, bufio.NewReader(conn)
+}
+
+// readEvent reads one NDJSON event line off a setup stream.
+func (e *testEnv) readEvent(r *bufio.Reader) map[string]any {
+	e.t.Helper()
+	line, err := r.ReadBytes('\n')
+	if len(line) == 0 && err != nil {
+		e.t.Fatalf("read event: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(line), &m); err != nil {
+		e.t.Fatalf("parse event %q: %v", line, err)
+	}
+	return m
+}
+
+// waitSystemctl polls the systemctl log until pred holds (the broker finishes a
+// setup stream asynchronously) or a short deadline elapses.
+func (e *testEnv) waitSystemctl(pred func([]string) bool) []string {
+	e.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls := e.systemctlCalls()
+		if pred(calls) {
+			return calls
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("timeout waiting for systemctl; got %v", calls)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func hasPrefixIn(calls []string, prefix string) bool {
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDefinitionParsesSetupFields(t *testing.T) {
+	var d Definition
+	if err := json.Unmarshal([]byte(signalSetupDef), &d); err != nil {
+		t.Fatal(err)
+	}
+	if !d.Setup {
+		t.Fatal("want Setup=true")
+	}
+	want := []string{"spaces-signal-cli.service", "spaces-signal-bridge.service"}
+	if !equalStrings(d.ExtraServices, want) {
+		t.Fatalf("want ExtraServices %v, got %v", want, d.ExtraServices)
+	}
+	// A definition without the fields defaults to false/nil.
+	var g Definition
+	if err := json.Unmarshal([]byte(githubDef), &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.Setup || g.ExtraServices != nil {
+		t.Fatalf("want zero-value setup fields, got Setup=%v ExtraServices=%v", g.Setup, g.ExtraServices)
+	}
+}
+
+func TestReconcileStartsEnabledDefined(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalDef)
+	// github is defined too, but is NOT enabled -> not started. signal is both.
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	e.srv.ReconcileEnabled()
+	if calls := e.systemctlCalls(); !equalStrings(calls, []string{"start spaces-integration-signal.socket"}) {
+		t.Fatalf("want only signal socket started, got %v", calls)
+	}
+}
+
+func TestReconcileSkipsEnabledUndefined(t *testing.T) {
+	e := newTestEnv(t, 0)
+	// "ghost" is enabled in state but has no definition file -> skipped.
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"ghost": {Enabled: true}}})
+	e.srv.ReconcileEnabled()
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("an undefined integration must not be started, got %v", calls)
+	}
+}
+
+func TestReconcileIgnoresDisabled(t *testing.T) {
+	e := newTestEnv(t, 0)
+	// github IS defined (newTestEnv) but disabled -> untouched.
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"github": {Enabled: false}}})
+	e.srv.ReconcileEnabled()
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("a disabled integration must not be started, got %v", calls)
+	}
+}
+
+func TestReconcileContinuesAfterFailure(t *testing.T) {
+	e := newTestEnv(t, 1) // systemctl stub always fails
+	e.writeDef("signal", signalDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{
+		"github": {Enabled: true},
+		"signal": {Enabled: true},
+	}})
+	e.srv.ReconcileEnabled()
+	want := []string{
+		"start spaces-integration-github.socket",
+		"start spaces-integration-signal.socket",
+	}
+	if calls := e.systemctlCalls(); !equalStrings(calls, want) {
+		t.Fatalf("a failure on one must not block the next; want %v, got %v", want, calls)
+	}
+}
+
+func TestSetupHappyPath(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+
+	qr := `{"event":"qr","uri":"sgnl://linkdevice?x=1","png":"UE5HAAo="}`
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(qr + "\n"))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+
+	ev1 := e.readEvent(r)
+	if ev1["event"] != "qr" || ev1["uri"] != "sgnl://linkdevice?x=1" || ev1["png"] != "UE5HAAo=" {
+		t.Fatalf("want qr relayed verbatim, got %v", ev1)
+	}
+	ev2 := e.readEvent(r)
+	if ev2["event"] != "done" {
+		t.Fatalf("want done, got %v", ev2)
+	}
+	// After a done event the broker closes the connection.
+	if _, err := r.ReadBytes('\n'); err == nil {
+		t.Fatal("broker must close the connection after done")
+	}
+	want := []string{
+		"start spaces-integration-signal-setup.socket",
+		"try-restart spaces-integration-signal.service spaces-signal-cli.service spaces-signal-bridge.service",
+		"stop spaces-integration-signal-setup.service spaces-integration-signal-setup.socket",
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 3 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("want systemctl order %v, got %v", want, calls)
+	}
+}
+
+func TestSetupNotEnabled(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef) // has setup, but not enabled
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+	ev := e.readEvent(r)
+	if ev["event"] != "error" || !strings.Contains(ev["error"].(string), "not enabled") {
+		t.Fatalf("want a not-enabled error event, got %v", ev)
+	}
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("no unit must start before validation passes, got %v", calls)
+	}
+	if _, err := r.ReadBytes('\n'); err == nil {
+		t.Fatal("broker must close after the error event")
+	}
+}
+
+func TestSetupDefWithoutSetup(t *testing.T) {
+	e := newTestEnv(t, 0)
+	// github is enabled but its definition exposes no setup flow.
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"github": {Enabled: true}}})
+	conn, r := e.openSetup("github")
+	defer conn.Close()
+	ev := e.readEvent(r)
+	if ev["event"] != "error" || !strings.Contains(ev["error"].(string), "setup") {
+		t.Fatalf("want a no-setup error event, got %v", ev)
+	}
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("no unit must start for a setup-less integration, got %v", calls)
+	}
+}
+
+func TestSetupHelperErrorNoRestart(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"message","text":"waiting for phone"}` + "\n"))
+		conn.Write([]byte(`{"event":"error","error":"link timeout"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+	m1 := e.readEvent(r)
+	if m1["event"] != "message" || m1["text"] != "waiting for phone" {
+		t.Fatalf("want message relayed verbatim, got %v", m1)
+	}
+	m2 := e.readEvent(r)
+	if m2["event"] != "error" || m2["error"] != "link timeout" {
+		t.Fatalf("want error relayed verbatim, got %v", m2)
+	}
+	if _, err := r.ReadBytes('\n'); err == nil {
+		t.Fatal("broker must close after the helper error")
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return hasPrefixIn(c, "stop ") })
+	if hasPrefixIn(calls, "try-restart") {
+		t.Fatalf("a helper error must not try-restart, got %v", calls)
+	}
+	want := []string{
+		"start spaces-integration-signal-setup.socket",
+		"stop spaces-integration-signal-setup.service spaces-integration-signal-setup.socket",
+	}
+	if !equalStrings(calls, want) {
+		t.Fatalf("want %v, got %v", want, calls)
+	}
+}
+
+func TestSetupClientDisconnectStopsUnits(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	release := make(chan struct{})
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"qr","uri":"u","png":"p"}` + "\n"))
+		<-release // stay open until the test releases it
+	})
+	defer ln.Close()
+	defer close(release)
+
+	conn, r := e.openSetup("signal")
+	if ev := e.readEvent(r); ev["event"] != "qr" {
+		t.Fatalf("want qr, got %v", ev)
+	}
+	// Client disconnects mid-stream.
+	conn.Close()
+
+	want := []string{
+		"start spaces-integration-signal-setup.socket",
+		"stop spaces-integration-signal-setup.service spaces-integration-signal-setup.socket",
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 2 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("client disconnect must stop the setup units and never try-restart, got %v", calls)
+	}
+}
+
+func TestSetupConcurrentListSucceeds(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	release := make(chan struct{})
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"qr","uri":"u","png":"p"}` + "\n"))
+		<-release
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+	if ev := e.readEvent(r); ev["event"] != "qr" {
+		t.Fatalf("want qr, got %v", ev)
+	}
+
+	// While the setup stream is open (helper blocked), a list must still
+	// succeed — the broker must not hold s.mu during streaming.
+	info := e.infoByName("signal")
+	if info["enabled"] != true {
+		t.Fatalf("list during an open setup stream must work, got %v", info)
+	}
+
+	close(release) // let the helper finish so the stream drains cleanly
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
+	}
 }

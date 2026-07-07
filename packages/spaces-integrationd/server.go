@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Integration and profile names build filesystem paths and systemd unit names;
@@ -40,6 +42,7 @@ type Server struct {
 	defsDir      string
 	stateDir     string
 	runtimeDir   string
+	runtimeRoot  string
 	selfUid      uint32
 	credsEncrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
 	credsDecrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
@@ -48,11 +51,12 @@ type Server struct {
 	mu           sync.Mutex
 }
 
-func NewServer(defsDir, stateDir, runtimeDir string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
+func NewServer(defsDir, stateDir, runtimeDir, runtimeRoot string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
 	return &Server{
 		defsDir:      defsDir,
 		stateDir:     stateDir,
 		runtimeDir:   runtimeDir,
+		runtimeRoot:  runtimeRoot,
 		selfUid:      uint32(os.Getuid()),
 		credsEncrypt: credsEncrypt,
 		credsDecrypt: credsDecrypt,
@@ -100,7 +104,19 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 		return
 	}
-	_ = enc.Encode(s.dispatch(raw))
+	var req Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		_ = enc.Encode(Ack{Op: "error", Error: "malformed request"})
+		return
+	}
+	// "setup" is the one op that is not request/reply: it takes over the
+	// connection and streams NDJSON events until the flow ends, so it never
+	// goes through dispatch (which stays a pure one-shot switch).
+	if req.Op == "setup" {
+		s.setup(conn, req.Integration)
+		return
+	}
+	_ = enc.Encode(s.dispatch(req))
 }
 
 // peerAllowed authorises a connection: only the broker's own uid. A sibling
@@ -130,11 +146,7 @@ func (s *Server) checkPeer(conn *net.UnixConn) error {
 	return nil
 }
 
-func (s *Server) dispatch(raw json.RawMessage) any {
-	var req Request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return Ack{Op: "error", Error: "malformed request"}
-	}
+func (s *Server) dispatch(req Request) any {
 	switch req.Op {
 	case "list":
 		return s.list()
@@ -148,6 +160,204 @@ func (s *Server) dispatch(raw json.RawMessage) any {
 		return s.disable(req.Integration)
 	default:
 		return Ack{Op: "error", Error: "unknown op: " + req.Op}
+	}
+}
+
+// setup dial retry: `systemctl start ...-setup.socket` returns before the
+// socket is necessarily accepting (socket activation), so the broker retries
+// the connect briefly.
+const (
+	setupDialAttempts = 100
+	setupDialInterval = 50 * time.Millisecond
+)
+
+// ReconcileEnabled restores the GUI-chosen run state at startup: for every
+// integration enabled.json marks on AND that still has a definition, start its
+// .socket unit. START ONLY — reconcile never stops anything (a unit the GUI
+// never enabled is left untouched). Per-integration failures are logged, never
+// fatal, and never block the remaining integrations.
+func (s *Server) ReconcileEnabled() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defs := s.loadDefs()
+	st := s.loadState()
+	names := make([]string, 0, len(st.Integrations))
+	for name := range st.Integrations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !st.Integrations[name].Enabled {
+			continue
+		}
+		if _, ok := defs[name]; !ok {
+			log.Printf("reconcile: skip %s (no definition)", name)
+			continue
+		}
+		unit := fmt.Sprintf("spaces-integration-%s.socket", name)
+		if msg, err := s.runSystemctl("start", unit); err != nil {
+			log.Printf("reconcile: start %s: %s", unit, msg)
+		}
+	}
+}
+
+// setupSocketPath is the twin setup unit's %t/spaces-integration-<name>-setup.sock.
+func (s *Server) setupSocketPath(integration string) string {
+	return filepath.Join(s.runtimeRoot, fmt.Sprintf("spaces-integration-%s-setup.sock", integration))
+}
+
+// setup drives the sandboxed setup channel for one integration. Unlike every
+// other op it returns no Ack: it takes over the client connection and relays
+// the setup helper's NDJSON events verbatim until the flow ends (helper
+// done/error, helper EOF, or client disconnect), then closes both sides and
+// stops the transient setup units. It never holds s.mu while streaming, so
+// list/enable stay responsive during a long device-linking flow.
+func (s *Server) setup(conn net.Conn, integration string) {
+	enc := json.NewEncoder(conn)
+	fail := func(msg string) { _ = enc.Encode(SetupEvent{Event: "error", Error: msg}) }
+
+	if !namePattern.MatchString(integration) {
+		fail("invalid integration name")
+		return
+	}
+	d, err := s.prepareSetup(integration)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+
+	setupSock := fmt.Sprintf("spaces-integration-%s-setup.socket", integration)
+	setupSvc := fmt.Sprintf("spaces-integration-%s-setup.service", integration)
+	if msg, err := s.runSystemctl("start", setupSock); err != nil {
+		fail("systemctl start failed: " + msg)
+		return
+	}
+	// The setup units may now be live: always stop them on the way out
+	// (best-effort). Deferred, so it runs after any post-`done` try-restart.
+	defer func() {
+		if msg, err := s.runSystemctl("stop", setupSvc, setupSock); err != nil {
+			log.Printf("systemctl stop %s %s: %s", setupSvc, setupSock, msg)
+		}
+	}()
+
+	hc, err := s.dialSetup(integration)
+	if err != nil {
+		fail("connect setup helper: " + err.Error())
+		return
+	}
+	defer hc.Close()
+
+	if s.relay(conn, hc) {
+		s.postSetupRestart(integration, d.ExtraServices)
+	}
+}
+
+// prepareSetup validates a setup request and stages the credential store files,
+// all under s.mu, then returns the definition so the caller can stream without
+// the lock. Validation mirrors the contract: the integration must exist, expose
+// a setup flow, and be enabled.
+func (s *Server) prepareSetup(integration string) (Definition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	defs := s.loadDefs()
+	d, ok := defs[integration]
+	if !ok {
+		return Definition{}, fmt.Errorf("unknown integration: %s", integration)
+	}
+	if !d.Setup {
+		return Definition{}, fmt.Errorf("integration %s has no setup flow", integration)
+	}
+	if !s.loadState().Integrations[integration].Enabled {
+		return Definition{}, fmt.Errorf("integration %s is not enabled", integration)
+	}
+	// The setup service loads the same LoadCredential[Encrypted] sources as the
+	// main service, so they must exist at start (same staging as enable).
+	if len(d.Config) > 0 {
+		if err := ensureFile(s.configFile(integration)); err != nil {
+			return Definition{}, fmt.Errorf("config store: %w", err)
+		}
+	}
+	if len(d.Secrets) > 0 {
+		if _, err := os.Stat(s.sealedSecrets(integration)); errors.Is(err, os.ErrNotExist) {
+			if err := s.sealEmpty(integration); err != nil {
+				return Definition{}, fmt.Errorf("secrets store: %w", err)
+			}
+		}
+	}
+	return d, nil
+}
+
+// dialSetup connects to the twin setup unit's socket, retrying briefly to ride
+// out the gap between `systemctl start ...-setup.socket` returning and the
+// socket accepting (socket activation).
+func (s *Server) dialSetup(integration string) (net.Conn, error) {
+	path := s.setupSocketPath(integration)
+	var lastErr error
+	for range setupDialAttempts {
+		c, err := net.Dial("unix", path)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		time.Sleep(setupDialInterval)
+	}
+	return nil, lastErr
+}
+
+// relay copies the helper's NDJSON lines to the client verbatim (one line per
+// event) until the first done/error event, helper EOF, or client disconnect. It
+// returns true iff a `done` event was seen, so the caller bounces services only
+// on success.
+//
+// The setup event vocabulary is the minimal docs/agent-integrations-design.md
+// §5.5 subset — qr/message/done/error; the richer typed requests (text-prompt,
+// secret-field, open-url, confirm, progress) are to be completed later per that
+// section.
+func (s *Server) relay(client, helper net.Conn) bool {
+	// Watch the client for disconnect: only a read error means it is gone
+	// (stray bytes such as a trailing newline are drained, never treated as a
+	// disconnect). Closing the helper then unblocks the read loop below.
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			if _, err := client.Read(buf); err != nil {
+				helper.Close()
+				return
+			}
+		}
+	}()
+
+	r := bufio.NewReaderSize(helper, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			if _, werr := client.Write(line); werr != nil {
+				return false // client gone: stop, do not restart.
+			}
+			var ev SetupEvent
+			if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
+				switch ev.Event {
+				case "done":
+					return true
+				case "error":
+					return false
+				}
+			}
+		}
+		if err != nil {
+			return false // helper EOF/closed without a terminal event.
+		}
+	}
+}
+
+// postSetupRestart bounces the integration's own service plus every extra
+// service after a successful setup so a freshly-linked account/state is picked
+// up. Best-effort: try-restart no-ops inactive units and a failure is logged.
+func (s *Server) postSetupRestart(integration string, extraServices []string) {
+	units := append([]string{fmt.Sprintf("spaces-integration-%s.service", integration)}, extraServices...)
+	if msg, err := s.runSystemctl("try-restart", units...); err != nil {
+		log.Printf("systemctl try-restart %v: %s", units, msg)
 	}
 }
 

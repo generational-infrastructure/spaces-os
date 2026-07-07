@@ -104,7 +104,9 @@ func main() {
 		l.Close()
 	}()
 
-	srv := NewServer(defsDir, stateDir, runtimeDir, credsEncrypt, credsDecrypt, systemctl, skillConfig)
+	srv := NewServer(defsDir, stateDir, runtimeDir, filepath.Dir(socketPath), credsEncrypt, credsDecrypt, systemctl, skillConfig)
 	log.Printf("listening on %s (defs=%s state=%s)", socketPath, defsDir, stateDir)
+	// Restore the GUI-chosen run state (start-only) before accepting clients.
+	srv.ReconcileEnabled()
 	srv.Serve(l)
 }
