@@ -3,7 +3,7 @@
 
 Spins up an offscreen quickshell with shell.qml (which mounts the real
 OpenUrlListener pointing at a temp socket), then exercises the socket
-the way `google-cli` would inside the pi sandbox: write one JSON line
+the way a sandboxed skill would inside the pi sandbox: write one JSON line
 per URL.
 
 Cases covered:

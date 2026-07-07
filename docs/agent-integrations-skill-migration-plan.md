@@ -3,7 +3,7 @@
 **Status:** IMPLEMENTED (2026-07-01). The three secret-bearing skills (`email`,
 `calendar`, `contacts`) now run as sandboxed MCP integrations on the unified,
 host+tpm2-sealed profile store; `skill-config` is relocated behind the wall as
-the store engine (still used unchanged by the agent-facing `google`/`signal`
+the store engine (still used unchanged by the agent-facing `signal`
 skills). Built on Option 3 (blob-credential store; TPM-at-rest parity with
 GitHub). Read [agent-integrations-design.md](./agent-integrations-design.md) for
 the architecture; this doc records the plan and what shipped.
@@ -21,7 +21,7 @@ full mail/caldav/contacts e2e against real servers.
 
 **Scope delivered:** three multi-account integrations end to end, the unified
 store + broker rework, the panel, and the cutover. **Not** in scope (unchanged):
-`google` (OAuth), `signal` (QR channel), and deleting the `skill-config` binary.
+`signal` (QR channel) and deleting the `skill-config` binary.
 
 ## The core realization
 
@@ -177,8 +177,8 @@ decrypt-to-edit; confirm it works user-scoped before building on it.
   `skills/{email,calendar,contacts}` markdown, their `builtinSkills` entries,
   and the `skill-config` bash-confirm allowlist entry — so the agent can no
   longer run `skill-config` in its own domain.
-- Deleting the `skill-config` binary itself waits until `google`/`signal` also
-  migrate (they still use the old agent-facing path).
+- Deleting the `skill-config` binary itself waits until `signal` also
+  migrates (it still uses the old agent-facing path).
 
 ## The steps
 
@@ -252,7 +252,7 @@ on the new tools: `message_send`/`put`/`delete` prompt; reads auto-run.
 - Delete `skills/{email,calendar,contacts}` and the wrapper packages (keep
   himalaya, the raw Go `contacts-cli`, curl as integration deps).
 - **Keep** the `skill-config` binary + `skill-config-daemon` logic (now inside
-  the broker / integration read path); full deletion waits on google/signal.
+  the broker / integration read path); full deletion waits on signal.
 
 ## Testing posture
 - Cheap focused checks only (`AGENTS.md`): per-integration pytest, broker Go
@@ -283,6 +283,6 @@ on the new tools: `message_send`/`put`/`delete` prompt; reads auto-run.
 ## Deferred (out of this plan)
 - Agent-*proposed* provisioning/enable (req-11, §5.6) — the panel/user drives
   provisioning; the agent may trigger a prompt but never enables.
-- `google` (OAuth) and `signal` (QR channel) migrations; deleting the
+- `signal` (QR channel) migration; deleting the
   `skill-config` binary.
 - Per-host network proxy (§3F); custom-port accounts beyond the manifest set.

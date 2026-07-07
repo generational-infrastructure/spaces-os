@@ -57,8 +57,7 @@ takes it from there.
 - 📅 **Calendar & contacts** — "What's on for Thursday?" · "Add lunch with
   Sam at 1pm" — over your own CalDAV / CardDAV (Nextcloud, Fastmail,
   Radicale, iCloud…).
-- ✉️ **Email** — read, search, summarise and draft over plain IMAP/SMTP,
-  or your Gmail and Google Calendar.
+- ✉️ **Email** — read, search, summarise and draft over plain IMAP/SMTP.
 - 💬 **Signal** — catch up on messages and reply. Messages to other people
   only leave once you tap **Send** in the panel.
 - 🗺️ **Maps & places** — find what's nearby and get directions, with your

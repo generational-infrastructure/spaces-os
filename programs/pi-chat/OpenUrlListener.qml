@@ -4,7 +4,7 @@
 // pi-chat runs each agent inside a systemd-run sandbox (ProtectHome=
 // tmpfs + private namespaces), so anything the agent spawns can't
 // reach the user's Firefox profile / DBus session. Skills that need
-// to open a browser tab (google-cli auth, OAuth flows, …) connect to
+// to open a browser tab (OAuth flows, external links, …) connect to
 // the socket this component owns and write a single JSON line;
 // NdjsonSocket handles the server + line framing, we validate the URL
 // and call `openUrlSink(url)` here, in the user session where Qt has

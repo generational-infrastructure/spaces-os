@@ -40,7 +40,6 @@ let
   # the system `date`) are intentionally absent.
   expected = {
     notifications = [ "notifications" ];
-    google = [ "google-cli" ];
     maps = [ "osm-cli" ];
     wikidata = [ "wikidata-cli" ];
     wikipedia = [ "wikipedia-cli" ];

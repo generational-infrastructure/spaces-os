@@ -220,7 +220,7 @@ def main() -> None:
             131,
             {
                 "instance": "sess-9",
-                "skill": "google-cli",
+                "skill": "signal",
                 "profile": "default",
                 "field": "api_key",
                 "secret": True,
@@ -237,7 +237,7 @@ def main() -> None:
                 "state": "sent",
                 "type": "prompt",
                 "promptInstance": "sess-9",
-                "promptSkill": "google-cli",
+                "promptSkill": "signal",
                 "promptProfile": "default",
                 "promptField": "api_key",
                 "promptSecret": True,

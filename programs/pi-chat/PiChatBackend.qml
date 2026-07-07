@@ -804,7 +804,7 @@ Item {
 
   // ── open-url socket ──────────────────────────────────────────────
   // The pi sandbox can't reach the user's browser. Sandboxed skills
-  // (google-cli auth, future OAuth flows) write `{"url":"…"}\n` to
+  // (OAuth flows, external links) write `{"url":"…"}\n` to
   // this socket; OpenUrlListener opens it in the real user session.
   OpenUrlListener {
     sockPath: root.openUrlSockPath

@@ -106,7 +106,7 @@ def test_env_schema_malformed_schema_file_errors(tmp_path):
 
 
 def test_skill_md_mode_unchanged(tmp_path):
-    # The agent-facing path (google/signal) must keep working: schema from
+    # The agent-facing path (signal) must keep working: schema from
     # SKILL.md, store under the state dir's skill-config/.
     skilldir = tmp_path / "state" / "skills-defs" / "calendar"
     skilldir.mkdir(parents=True)
