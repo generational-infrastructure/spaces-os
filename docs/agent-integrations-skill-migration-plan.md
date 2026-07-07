@@ -245,7 +245,7 @@ on the new tools: `message_send`/`put`/`delete` prompt; reads auto-run.
 
 ### Step 7 — Cutover / removal
 - Declare the three integrations where GitHub is declared
-  (`hosts/test-machine/integrations.nix`).
+  (`modules/nixos/spaces-integrations/defaults.nix`).
 - Remove agent-facing exposure: `builtinSkills.{email,calendar,contacts}`,
   the `mail`/`caldav`/`contacts` wrapper packages + PATH placement, and the
   `skill-config` bash-confirm allowlist entry.

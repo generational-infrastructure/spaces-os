@@ -20,7 +20,6 @@ in
   # No-op under pure eval. Shared with checks/test-machine.nix.
   imports = [
     ./openrouter.nix
-    ./integrations.nix
   ];
 
   networking.hostName = "test-machine";

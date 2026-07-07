@@ -94,72 +94,126 @@ in
           autoRun
           confirmPreview
           multiProfile
+          extraServices
           ;
+        # setup: true iff a twin setup unit exists — the panel gates its
+        # Link/Setup button on this. extraServices rides verbatim so the broker
+        # can restart the backing daemons after a successful setup.
+        setup = manifest.setup != null;
         config = lib.mapAttrs (_: c: { inherit (c) description required; }) manifest.config;
         secrets = lib.mapAttrs (_: s: { inherit (s) description required; }) manifest.secrets;
         socket = "%t/${unitName}.sock";
       };
       definitionFile = jsonFormat.generate "${unitName}.json" definition;
 
-      serviceUnit = {
-        description = "Spaces integration: ${manifest.description} (Landlock-confined MCP server)";
-        # Socket-activated; no wantedBy. The broker owns the socket lifecycle:
-        # it `systemctl --user start`s this integration's .socket on enable.
-        serviceConfig = {
-          Type = "exec";
-          # Lower the per-user policy, then exec the server confined. The CLI
-          # reads $STATE_DIRECTORY / $CREDENTIALS_DIRECTORY (set by the dirs
-          # below) from the env and writes the landlockconfig doc to %t.
-          # mkdir the shared dir first (idempotent; the agent session mkdirs the
-          # same path too) so it exists before pi-landlock-exec — Landlock skips
-          # a missing path, which would silently drop the grant.
-          ExecStartPre = [
-            "${pkgs.coreutils}/bin/mkdir -p ${sharedDir}"
-            "${landlockPolicyCli} --spec ${policySpecFile} --out ${policyPath}"
-          ];
-          ExecStart = "${landlockExec} --json ${policyPath} -- ${manifest.command}";
-          # The CLI folds $SPACES_INTEGRATION_SHARED_DIR into the policy's rw set
-          # (lowerIntegrationPolicy), and the server reads it as its clone target.
-          Environment = [
-            "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}"
-          ]
-          ++ lib.mapAttrsToList (k: v: "${k}=${v}") manifest.environment;
-          RuntimeDirectory = unitName;
-          StateDirectory = unitName;
-          # The broker delivers the whole store as two fixed credentials:
-          # `config` (plaintext rows, ro) and `secrets` (host+tpm2 blob,
-          # decrypted ro), each in a private mount the agent's Landlock domain
-          # never grants. Profiles live inside, so the credential set never grows
-          # with accounts. Each is emitted only when the manifest declares fields
-          # of that kind.
-          LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml";
-          LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
-          # Coarse egress gate: AF_INET(6) only when the manifest opts in; the
-          # passed activation socket is always AF_UNIX. Landlock netPort refines
-          # WHICH ports when network is on.
-          RestrictAddressFamilies = if manifest.network then "AF_UNIX AF_INET AF_INET6" else "AF_UNIX";
-          # Same-uid hardening bouquet (mirrors sandbox.ts landlockHardeningProps
-          # + the shared seccomp denylist): closes the kernel objects Landlock
-          # leaves exposed between same-uid sibling domains.
-          NoNewPrivileges = true;
-          RestrictSUIDSGID = true;
-          LockPersonality = true;
-          RestrictNamespaces = true;
-          ProtectKernelTunables = true;
-          ProtectKernelModules = true;
-          ProtectKernelLogs = true;
-          ProtectControlGroups = true;
-          ProtectClock = true;
-          ProtectProc = "invisible";
-          SystemCallArchitectures = "native";
-          SystemCallFilter = [
-            "@system-service"
-            "~${lib.concatStringsSep " " denySyscalls}"
-          ];
-          SystemCallErrorNumber = "EPERM";
-          MemoryHigh = memoryHigh;
+      # One shared serviceConfig builder. The main MCP server and (when
+      # manifest.setup != null) the twin setup unit run the SAME sandbox — same
+      # Landlock policy spec/path machinery, same seccomp/hardening bouquet, same
+      # RestrictAddressFamilies, same Environment (incl. SPACES_INTEGRATION_SHARED_DIR),
+      # same LoadCredential[Encrypted], same MemoryHigh — differing ONLY in the
+      # ExecStart command, so the setup channel can never drift from the server's
+      # confinement.
+      mkServiceUnit =
+        {
+          description,
+          execCommand,
+        }:
+        {
+          inherit description;
+          # Socket-activated; no wantedBy. The broker owns the socket lifecycle:
+          # it `systemctl --user start`s this integration's .socket on enable.
+          serviceConfig = {
+            Type = "exec";
+            # Lower the per-user policy, then exec the command confined. The CLI
+            # reads $STATE_DIRECTORY / $CREDENTIALS_DIRECTORY (set by the dirs
+            # below) from the env and writes the landlockconfig doc to %t.
+            # mkdir the shared dir first (idempotent; the agent session mkdirs the
+            # same path too) so it exists before pi-landlock-exec — Landlock skips
+            # a missing path, which would silently drop the grant.
+            ExecStartPre = [
+              "${pkgs.coreutils}/bin/mkdir -p ${sharedDir}"
+              "${landlockPolicyCli} --spec ${policySpecFile} --out ${policyPath}"
+            ];
+            ExecStart = "${landlockExec} --json ${policyPath} -- ${execCommand}";
+            # The CLI folds $SPACES_INTEGRATION_SHARED_DIR into the policy's rw set
+            # (lowerIntegrationPolicy), and the server reads it as its clone target.
+            Environment = [
+              "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}"
+            ]
+            ++ lib.mapAttrsToList (k: v: "${k}=${v}") manifest.environment;
+            RuntimeDirectory = unitName;
+            StateDirectory = unitName;
+            # The broker delivers the whole store as two fixed credentials:
+            # `config` (plaintext rows, ro) and `secrets` (host+tpm2 blob,
+            # decrypted ro), each in a private mount the agent's Landlock domain
+            # never grants. Profiles live inside, so the credential set never grows
+            # with accounts. Each is emitted only when the manifest declares fields
+            # of that kind.
+            LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml";
+            LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
+            # Coarse egress gate: AF_INET(6) only when the manifest opts in; the
+            # passed activation socket is always AF_UNIX. Landlock netPort refines
+            # WHICH ports when network is on.
+            RestrictAddressFamilies = if manifest.network then "AF_UNIX AF_INET AF_INET6" else "AF_UNIX";
+            # Same-uid hardening bouquet (mirrors sandbox.ts landlockHardeningProps
+            # + the shared seccomp denylist): closes the kernel objects Landlock
+            # leaves exposed between same-uid sibling domains.
+            NoNewPrivileges = true;
+            RestrictSUIDSGID = true;
+            LockPersonality = true;
+            RestrictNamespaces = true;
+            ProtectKernelTunables = true;
+            ProtectKernelModules = true;
+            ProtectKernelLogs = true;
+            ProtectControlGroups = true;
+            ProtectClock = true;
+            ProtectProc = "invisible";
+            SystemCallArchitectures = "native";
+            SystemCallFilter = [
+              "@system-service"
+              "~${lib.concatStringsSep " " denySyscalls}"
+            ];
+            SystemCallErrorNumber = "EPERM";
+            MemoryHigh = memoryHigh;
+          };
         };
+
+      serviceUnit = mkServiceUnit {
+        description = "Spaces integration: ${manifest.description} (Landlock-confined MCP server)";
+        execCommand = manifest.command;
       };
+
+      hasSetup = manifest.setup != null;
+      setupUnitName = "${unitName}-setup";
+
+      # Twin setup unit (design §5.5, sandboxed setup channel). Identical sandbox
+      # to the main service — only the ExecStart command differs. The broker
+      # activates the socket, connects, and relays the helper's NDJSON events to
+      # the panel. The event vocabulary the helper emits is the MINIMAL SUBSET of
+      # docs/agent-integrations-design.md §5.5 — qr / message / done / error; the
+      # richer typed requests in that section (text-prompt, secret-field,
+      # open-url, confirm, progress) are to be completed later per §5.5.
+      setupServiceUnit =
+        if hasSetup then
+          mkServiceUnit {
+            description = "Spaces integration setup: ${manifest.description} (Landlock-confined setup channel)";
+            execCommand = manifest.setup;
+          }
+        else
+          null;
+
+      setupSocketUnit =
+        if hasSetup then
+          {
+            description = "Spaces integration setup socket: ${manifest.description}";
+            # No wantedBy: the broker starts this on demand during the setup flow.
+            socketConfig = {
+              ListenStream = "%t/${setupUnitName}.sock";
+              SocketMode = "0600";
+            };
+          }
+        else
+          null;
 
       socketUnit = {
         description = "Spaces integration socket: ${manifest.description}";
@@ -167,6 +221,13 @@ in
           ListenStream = "%t/${unitName}.sock";
           SocketMode = "0600";
         };
+      }
+      // lib.optionalAttrs (manifest.extraServices != [ ]) {
+        # Starting this socket pulls in the integration's backing daemons; the
+        # spaces-integrations module injects the reverse PartOf onto each so a
+        # GUI disable (socket stop) tears them down too.
+        wants = manifest.extraServices;
+        after = manifest.extraServices;
       };
     in
     {
@@ -174,6 +235,10 @@ in
         unitName
         serviceUnit
         socketUnit
+        setupUnitName
+        setupServiceUnit
+        setupSocketUnit
+        hasSetup
         policySpec
         policySpecFile
         definition

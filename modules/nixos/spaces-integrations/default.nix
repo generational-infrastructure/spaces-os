@@ -185,6 +185,30 @@ let
           socket + message store the host grants via `extraPaths`.
         '';
       };
+      extraServices = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Full user service unit names (incl. `.service`) that back this
+          integration and share its GUI lifecycle. The integration's `.socket`
+          gains `Wants=`/`After=` each; the spaces-integrations module injects
+          `PartOf=spaces-integration-<name>.socket` onto each so a GUI disable
+          (socket stop) tears the backing daemons down too. Used e.g. by signal
+          to bind the signal-cli daemon + bridge to the Signal integration.
+        '';
+      };
+      setup = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Setup command line (like `command`: whitespace-split by systemd, no
+          shell). When non-null lib.nix emits a twin
+          `spaces-integration-<name>-setup.{service,socket}` pair — an IDENTICAL
+          sandbox to the main server, only the ExecStart differs — that the
+          broker activates to stream the setup helper's NDJSON events to the
+          panel (design §5.5). Used e.g. by signal for GUI QR device-linking.
+        '';
+      };
     };
   };
 
@@ -200,8 +224,37 @@ let
       inherit (cfg) memoryHigh;
     }
   ) cfg.integrations;
+
+  # Twin setup service/socket for every integration that declares `setup`.
+  setupServices = lib.concatMapAttrs (
+    _: i: lib.optionalAttrs (i.setupServiceUnit != null) { ${i.setupUnitName} = i.setupServiceUnit; }
+  ) built;
+  setupSockets = lib.concatMapAttrs (
+    _: i: lib.optionalAttrs (i.setupSocketUnit != null) { ${i.setupUnitName} = i.setupSocketUnit; }
+  ) built;
+
+  # Reverse edge of each integration's `extraServices`: inject
+  # PartOf=spaces-integration-<name>.socket into the backing units (owned by
+  # OTHER modules, e.g. signal-cli) so stopping the socket stops them. mkMerge
+  # keeps this composable with those modules' own unitConfig.
+  extraServicesPartOf = lib.mkMerge (
+    lib.concatLists (
+      lib.mapAttrsToList (
+        name: manifest:
+        map (svc: {
+          ${lib.removeSuffix ".service" svc}.unitConfig.PartOf = [ "spaces-integration-${name}.socket" ];
+        }) manifest.extraServices
+      ) cfg.integrations
+    )
+  );
 in
 {
+  # Every consumer of the module gets the 5 default integrations (github,
+  # caldav, contacts, mail, signal). Each field is individually mkDefault, so a
+  # host can override one sub-option without losing the rest, and may still
+  # declare EXTRA integrations alongside them.
+  imports = [ (import ./defaults.nix { inherit inputs; }) ];
+
   options.services.spaces-integrations = {
     enable = lib.mkEnableOption "agent integrations: per-user, Landlock-confined MCP servers behind the supervisor gateway";
 
@@ -239,9 +292,11 @@ in
     # The broker runs whenever integrations are enabled (even with none declared
     # yet): it owns enable/disable + secret provisioning over
     # %t/spaces-integrations.sock and starts/stops each integration's socket.
-    systemd.user.services =
+    systemd.user.services = lib.mkMerge [
       (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.serviceUnit) built)
-      // {
+      setupServices
+      extraServicesPartOf
+      {
         spaces-integrationd = {
           description = "Spaces integrations broker (enable + secret provisioning over %t/spaces-integrations.sock)";
           wantedBy = [ "default.target" ];
@@ -284,9 +339,13 @@ in
             SystemCallArchitectures = "native";
           };
         };
-      };
+      }
+    ];
 
-    systemd.user.sockets = lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.socketUnit) built;
+    systemd.user.sockets = lib.mkMerge [
+      (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.socketUnit) built)
+      setupSockets
+    ];
 
     environment.etc = lib.mapAttrs' (
       name: i: lib.nameValuePair "spaces-integrations/${name}.json" { source = i.definitionFile; }

@@ -1,9 +1,10 @@
 # Contract for the migrated skill integrations (mail / caldav / contacts),
 # docs/agent-integrations-skill-migration-plan.md.
 #
-# Evaluates the REAL host declarations (hosts/test-machine/integrations.nix)
-# through the spaces-integrations module and asserts, per integration, the
-# world-readable definition the broker + gateway + panel consume:
+# Evaluates the DEFAULT manifests the spaces-integrations module now ships
+# (modules/nixos/spaces-integrations/defaults.nix — no host import) and asserts,
+# per integration, the world-readable definition the broker + gateway + panel
+# consume:
 #   - config + secrets field schema matches the server's expectations;
 #   - the autoRun allowlist is READ-ONLY tools only (writes stay confirm-per-call
 #     — the design's send/put/delete approval gate);
@@ -22,7 +23,6 @@ let
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces-integrations
-      ../../hosts/test-machine/integrations.nix
       { networking.hostName = "migrated-defs-fixture"; }
     ];
   };

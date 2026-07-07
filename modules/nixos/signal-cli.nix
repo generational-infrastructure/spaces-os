@@ -24,14 +24,14 @@
 #   ~/.local/share/signal-cli/                     (signal-cli identity state — created by `signal-cli link`)
 #   ~/.local/state/spaces/signal/                  (spaces-side store: message DB + forwarder state)
 #
-# Linking flow (one-time, must be done by the human; the agent never
-# runs this):
-#   $ signal-cli link -n "spaces-$(hostname)"
-#   <scan the printed tsdevice:/?... URL with primary Signal device>
-#   $ systemctl --user restart spaces-signal-cli
-#
-# After linking, signal-cli's data dir holds the linked-device keys
-# and the daemon will see every message the primary device sees.
+# Linking flow: device-linking now happens through the panel — Settings →
+# Integrations → Signal → the Link/Setup flow — which drives the daemon's
+# `startLink`/`finishLink` JSON-RPC over the sandboxed setup channel (agent
+# integrations design §5.5) and renders the QR in the GUI. The daemon therefore
+# runs UNLINKED (no account gate): `startLink` must work before any device
+# exists, and once linked the daemon sees every message the primary device
+# sees. The `signal-cli link -n "spaces-$(hostname)"` CLI stays available for
+# manual/debug linking against the same data dir.
 { inputs, ... }:
 {
   config,
@@ -46,15 +46,6 @@ let
 
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/spaces/signal";
-
-  # systemd condition + path-unit glob. signal-cli writes per-account
-  # state into ~/.local/share/signal-cli/data/<account-id>{,.d}; the
-  # exact <account-id> naming varies by signal-cli version (older
-  # builds use `+<phone-number>`, newer ones use opaque numeric IDs),
-  # but the `.d/` per-account directory is created in both cases
-  # only after a successful link/register. accounts.json exists from
-  # first run with an empty array, so it can't be the signal.
-  linkedAccountGlob = "%h/${identityRel}/data/*.d";
 in
 {
   options.services.spaces-signal = {
@@ -116,18 +107,14 @@ in
       "d %h/${storeRel} 0700 - - -"
     ];
 
-    # Daemon unit. Condition-gated on the account dir so a fresh
-    # system without a linked Signal device doesn't spin up a JVM
-    # at every login — the unit reports `condition: skipped` and
-    # exits 0 immediately. Once the user runs `signal-cli link`,
-    # the path-activation unit below triggers this service and the
-    # condition passes on every subsequent login.
+    # Daemon unit. No wantedBy/Condition: the daemon must run UNLINKED so the
+    # panel setup flow can drive `startLink` over its JSON-RPC socket, and its
+    # lifecycle is owned by the Signal integration socket (Wants=/After= +
+    # PartOf, wired by the spaces-integrations module) — GUI enable starts it,
+    # GUI disable stops it.
     systemd.user.services.spaces-signal-cli = {
       description = "signal-cli daemon (spaces AI agent Signal backend)";
-      wantedBy = [ "default.target" ];
       after = [ "default.target" ];
-
-      unitConfig.ConditionPathExistsGlob = linkedAccountGlob;
 
       serviceConfig = {
         # `exec` so systemd reports ready when the JVM has actually
@@ -159,22 +146,14 @@ in
     # no sockets — it is purely a daemon → messages.db forwarder.
     systemd.user.services.spaces-signal-bridge = {
       description = "spaces signal bridge (signal-cli daemon → messages.db forwarder)";
-      # wantedBy includes the daemon service so path-activation
-      # propagates: when the daemon is started by the path unit on
-      # first link, systemd pulls the bridge in too. The
-      # default.target entry covers the normal login start-up path
-      # for already-linked systems.
-      wantedBy = [
-        "default.target"
-        "spaces-signal-cli.service"
-      ];
+      # No wantedBy: the bridge follows the daemon (requires + after below),
+      # which the Signal integration socket pulls in on GUI enable. It runs
+      # unlinked too — it just idles subscribed until an account appears.
       after = [
         "default.target"
         "spaces-signal-cli.service"
       ];
       requires = [ "spaces-signal-cli.service" ];
-
-      unitConfig.ConditionPathExistsGlob = linkedAccountGlob;
 
       serviceConfig = {
         Type = "exec";
@@ -183,21 +162,5 @@ in
         RestartSec = 3;
       };
     };
-
-    # Path-activation: signal-cli's `link` (and `register`) write
-    # the account file into ~/.local/share/signal-cli/data/+<phone>;
-    # this unit watches for that and triggers the daemon
-    # automatically on first link. Without it the user would have
-    # to run `systemctl --user start spaces-signal-cli` themselves.
-    # The bridge follows via wantedBy on the daemon above.
-    systemd.user.paths.spaces-signal-link = {
-      description = "Trigger signal-cli daemon when a Signal account is linked";
-      wantedBy = [ "default.target" ];
-      pathConfig = {
-        PathExistsGlob = linkedAccountGlob;
-        Unit = "spaces-signal-cli.service";
-      };
-    };
-
   };
 }

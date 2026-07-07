@@ -116,8 +116,9 @@ handling are unchanged; the QR link flow stays manual (out of scope).
     (per decision 8), `%h/.local/share/signal-cli/attachments` (ro). Signal
     manifest: `network=false`, `connectPorts=[]` (first no-network
     integration; the daemon does the internet).
-13. **Enablement**: declared in `hosts/test-machine/integrations.nix` like
-    the others; the user enables once in the panel; NO auto-enable (req-11).
+13. **Enablement**: shipped as a module default in
+    `modules/nixos/spaces-integrations/defaults.nix` (all 5 integrations); the
+    user enables once in the panel; NO auto-enable (req-11).
     `services.spaces-signal` keeps managing daemon+bridge units (inert until
     linked).
 14. **Agent `signal` CLI deleted** (`spaces_signal/cli.py` + tests + bin
@@ -164,7 +165,7 @@ Delete enqueue/panel listeners + `pending_sends` + TTL/caps from
 stay green.
 
 ### Step 6 — Cutover
-Declare in `hosts/test-machine/integrations.nix` (autoRun split per
+Declare as a module default in `modules/nixos/spaces-integrations/defaults.nix` (autoRun split per
 decision 1, `confirmPreview.send = "send_preview"`); strip from
 `signal-cli.nix`: `sandboxAllowedPaths`, `sandboxEnv`, bash-confirm
 `^signal(\s|$)`, `signalCliPkg` from systemPackages; drop

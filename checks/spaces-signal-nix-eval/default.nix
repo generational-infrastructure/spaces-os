@@ -1,32 +1,41 @@
 # Cheap nix-eval contract for the spaces-signal NixOS module.
 #
-# spaces-signal is now a pure daemon → messages.db forwarder: signal-cli
-# runs as a JSON-RPC daemon and spaces-signal-bridge subscribes and
-# persists envelopes into ~/.local/state/spaces/signal/messages.db, which
-# the integration-signal MCP server reads. There is no agent-facing CLI,
-# skill, sandbox bind, or send-approval socket left in this module — that
-# surface moved to the integration (hosts/test-machine/integrations.nix).
+# spaces-signal is a pure daemon → messages.db forwarder: signal-cli runs as a
+# JSON-RPC daemon and spaces-signal-bridge subscribes and persists envelopes
+# into ~/.local/state/spaces/signal/messages.db, which the integration-signal
+# MCP server reads.
+#
+# Lifecycle is now GUI-only: whether the daemon + bridge run is decided by
+# enabling/disabling the Signal integration through the panel/broker, NOT by
+# nix. So the daemon + bridge:
+#   - carry NO wantedBy (no nix-driven autostart at login);
+#   - carry NO ConditionPathExistsGlob (the daemon must run UNLINKED so the
+#     panel setup flow's startLink JSON-RPC works before any device exists);
+#   - are pulled in by the Signal integration socket (Wants=/After=) and torn
+#     down with it (PartOf=spaces-integration-signal.socket, injected by the
+#     spaces-integrations module from the signal manifest's extraServices);
+# and the old spaces-signal-link path unit is GONE.
 #
 # Verifies:
-#   1. Enabling services.spaces-signal materialises the spaces-signal-cli
-#      daemon unit (ExecStart daemon args; RuntimeDirectory + mode).
-#   2. The spaces-signal-bridge forwarder unit runs the bridge binary,
-#      requires/orders after the daemon, and restarts.
-#   3. The store dir is created unconditionally by user-tmpfiles, and NO
-#      signal skill reaches the pi-chat skills-defs farm (the skill is gone).
-#   4. Both units carry ConditionPathExistsGlob so they no-op until the
-#      user runs `signal-cli link`; a systemd.user.paths unit triggers the
-#      daemon on first link and the bridge follows via wantedBy.
-#   5. Enabling spaces-signal without pi-chat trips the module assertion.
-#   6. An explicit enable = false strips every spaces-signal-* user unit.
+#   1. daemon unit shape (ExecStart daemon args; RuntimeDirectory + mode; Type;
+#      Restart) and it carries NO wantedBy / NO Condition.
+#   2. bridge forwarder unit runs the bridge binary, requires/orders after the
+#      daemon, restarts, and carries NO wantedBy / NO Condition.
+#   3. both units carry PartOf=spaces-integration-signal.socket (GUI lifecycle).
+#   4. the spaces-signal-link path unit no longer exists.
+#   5. the store dir is created unconditionally by user-tmpfiles, and NO signal
+#      skill reaches the pi-chat skills-defs farm (the skill is gone).
+#   6. enabling spaces-signal without pi-chat trips the module assertion.
+#   7. an explicit enable = false strips every spaces-signal-* user unit.
 #
 # Pure nix eval. ~3-5s.
 { pkgs, inputs, ... }:
 let
   inherit (inputs.nixpkgs) lib;
   baseModules = [
-    # spaces -> pi-chat imports the signal-cli module transitively, so the
-    # eval here exercises the same import graph spaces users get.
+    # spaces -> pi-chat imports the signal-cli AND spaces-integrations modules
+    # transitively, so the eval here exercises the same import graph (and the
+    # PartOf injection) spaces users get.
     inputs.self.nixosModules.spaces
   ];
 
@@ -37,8 +46,9 @@ let
       modules = extra;
     };
 
-  # Default deployment shape: spaces (auto-enables pi-chat) plus an
-  # explicit `enable = true` on spaces-signal.
+  # Default deployment shape: spaces (auto-enables pi-chat, which enables
+  # spaces-integrations with the default signal integration) plus an explicit
+  # `enable = true` on spaces-signal.
   enabledSystem = mkSystem (
     baseModules
     ++ [
@@ -49,20 +59,23 @@ let
     ]
   );
 
-  # Opt-out path: explicit `enable = false`. Must leave NO spaces-signal-*
-  # user units.
+  # Opt-out path: explicit `enable = false`. spaces-integrations is disabled too
+  # so its extraServices PartOf injection can't leave a phantom spaces-signal-cli
+  # behind — this isolates spaces-signal's own mkIf, which must leave NO
+  # spaces-signal-* user units.
   disabledSystem = mkSystem (
     baseModules
     ++ [
       {
         networking.hostName = "signal-disabled";
         services.spaces-signal.enable = false;
+        services.spaces-integrations.enable = false;
       }
     ]
   );
 
-  # No spaces / pi-chat in the import chain — spaces-signal alone should
-  # trip its own assertion.
+  # No spaces / pi-chat in the import chain — spaces-signal alone should trip
+  # its own assertion.
   brokenSystem = mkSystem [
     inputs.self.nixosModules.signal-cli
     {
@@ -77,7 +90,6 @@ let
 
   service = enabledSystem.config.systemd.user.services.spaces-signal-cli;
   bridge = enabledSystem.config.systemd.user.services.spaces-signal-bridge;
-  pathUnit = enabledSystem.config.systemd.user.paths.spaces-signal-link;
 in
 pkgs.runCommand "spaces-signal-nix-eval-test"
   {
@@ -86,29 +98,24 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     runtimeDirMode = service.serviceConfig.RuntimeDirectoryMode or "";
     serviceType = service.serviceConfig.Type or "";
     restart = service.serviceConfig.Restart or "";
-    wantedBy = lib.concatStringsSep " " service.wantedBy;
+    wantedBy = lib.concatStringsSep " " (service.wantedBy or [ ]);
+    partOf = lib.concatStringsSep " " (lib.toList (service.unitConfig.PartOf or [ ]));
+    condition = lib.concatStringsSep " " (lib.toList (service.unitConfig.ConditionPathExistsGlob or [ ]));
     bridgeExecStart = bridge.serviceConfig.ExecStart;
     bridgeRequires = lib.concatStringsSep " " (bridge.requires or [ ]);
     bridgeAfter = lib.concatStringsSep " " (bridge.after or [ ]);
     bridgeRestart = bridge.serviceConfig.Restart or "";
+    bridgeWantedBy = lib.concatStringsSep " " (bridge.wantedBy or [ ]);
+    bridgePartOf = lib.concatStringsSep " " (lib.toList (bridge.unitConfig.PartOf or [ ]));
+    bridgeCondition = lib.concatStringsSep " " (lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ]));
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
     enabledTmpfiles = lib.concatStringsSep "\n" enabledSystem.config.systemd.user.tmpfiles.rules;
-    # Condition that gates both user units. Empty when not set, which makes
-    # the assertion below fail clearly instead of silently matching.
-    serviceCondition = lib.concatStringsSep " " (
-      lib.toList (service.unitConfig.ConditionPathExistsGlob or [ ])
-    );
-    bridgeCondition = lib.concatStringsSep " " (
-      lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ])
-    );
-    # Path-activation unit: starts the daemon when an account dir first
-    # appears under ~/.local/share/signal-cli/data/.
-    pathExistsGlob = lib.concatStringsSep " " (lib.toList (pathUnit.pathConfig.PathExistsGlob or [ ]));
-    pathUnitTarget = pathUnit.pathConfig.Unit or "";
-    pathUnitWantedBy = lib.concatStringsSep " " (pathUnit.wantedBy or [ ]);
-    # Bridge follows daemon: when the daemon is path-triggered, the bridge
-    # must start too. wantedBy on the unit edge does that.
-    bridgeWantedBy = lib.concatStringsSep " " (bridge.wantedBy or [ ]);
+    # The old path-activation unit must no longer exist anywhere.
+    hasPathUnit =
+      if builtins.hasAttr "spaces-signal-link" (enabledSystem.config.systemd.user.paths or { }) then
+        "yes"
+      else
+        "no";
     # When the user opts out, spaces-signal-cli must NOT be declared at all
     # (not "declared but disabled"). Empty string = absent.
     disabledHasSignalUnits =
@@ -122,7 +129,7 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
 
     fail() { echo "FAIL: $*" >&2; exit 1; }
 
-    # ── 1. daemon unit shape ─────────────────────────────────────────
+    # ── 1. daemon unit shape + GUI-only lifecycle ────────────────────
     case "$execStart" in
       *"signal-cli daemon"*) ;;
       *) fail "ExecStart does not invoke 'signal-cli daemon': $execStart" ;;
@@ -140,12 +147,11 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     [ "$serviceType"    = "exec" ]       || fail "service Type must be 'exec', got '$serviceType'"
     [ "$restart"        = "always" ]     || fail "Restart must be 'always', got '$restart'"
 
-    case " $wantedBy " in
-      *" default.target "*) ;;
-      *) fail "unit must be wantedBy=default.target, got '$wantedBy'" ;;
-    esac
+    # GUI owns the lifecycle: no nix autostart, no link-gate condition.
+    [ -z "$wantedBy" ]  || fail "daemon must carry NO wantedBy (GUI-only lifecycle), got '$wantedBy'"
+    [ -z "$condition" ] || fail "daemon must carry NO ConditionPathExistsGlob (must run unlinked), got '$condition'"
 
-    # ── 2. bridge (forwarder) unit shape ─────────────────────────────
+    # ── 2. bridge (forwarder) unit shape + GUI-only lifecycle ────────
     case "$bridgeExecStart" in
       */bin/spaces-signal-bridge) ;;
       *) fail "bridge ExecStart must be /…/bin/spaces-signal-bridge, got '$bridgeExecStart'" ;;
@@ -159,10 +165,30 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       *) fail "bridge must come after spaces-signal-cli.service, got '$bridgeAfter'" ;;
     esac
     [ "$bridgeRestart" = "always" ] || fail "bridge Restart must be 'always', got '$bridgeRestart'"
+    [ -z "$bridgeWantedBy" ]  || fail "bridge must carry NO wantedBy (GUI-only lifecycle), got '$bridgeWantedBy'"
+    [ -z "$bridgeCondition" ] || fail "bridge must carry NO ConditionPathExistsGlob, got '$bridgeCondition'"
 
-    # ── 3. store dir created unconditionally; NO signal skill farmed ──
-    # The bridge writes messages.db here and the integration reads it, so
-    # the dir must exist even on hosts that never linked Signal.
+    # ── 3. both units bound to the Signal integration socket ─────────
+    # PartOf=spaces-integration-signal.socket, injected by the
+    # spaces-integrations module from the signal manifest's extraServices, so a
+    # GUI disable (socket stop) tears the daemon + bridge down too.
+    partof='spaces-integration-signal.socket'
+    case " $partOf " in
+      *" $partof "*) ;;
+      *) fail "daemon must be PartOf=$partof (GUI lifecycle), got '$partOf'" ;;
+    esac
+    case " $bridgePartOf " in
+      *" $partof "*) ;;
+      *) fail "bridge must be PartOf=$partof (GUI lifecycle), got '$bridgePartOf'" ;;
+    esac
+
+    # ── 4. the old path-activation unit is gone ──────────────────────
+    [ "$hasPathUnit" = "no" ] \
+      || fail "spaces-signal-link path unit still exists; linking moved to the GUI setup flow."
+
+    # ── 5. store dir created unconditionally; NO signal skill farmed ──
+    # The bridge writes messages.db here and the integration reads it, so the
+    # dir must exist even on hosts that never linked Signal.
     case "$enabledTmpfiles" in
       *"d %h/.local/state/spaces/signal 0700"*) ;;
       *) fail "user-tmpfiles must create %h/.local/state/spaces/signal 0700 unconditionally: $enabledTmpfiles" ;;
@@ -172,30 +198,6 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     case "$enabledTmpfiles" in
       *"/skills-defs/signal "*) fail "signal skill still reaches pi-chat skills-defs — it was removed in the integration migration." ;;
       *) ;;
-    esac
-
-    # ── 4. ConditionPathExistsGlob gates both units until first link ──
-    # Without this the daemon spins a JVM at every login for nothing on
-    # fresh systems; with it, login does not start signal-cli until an
-    # account dir appears.
-    expectedGlob='%h/.local/share/signal-cli/data/*.d'
-    [ "$serviceCondition" = "$expectedGlob" ] \
-      || fail "daemon ConditionPathExistsGlob must be '$expectedGlob', got '$serviceCondition'"
-    [ "$bridgeCondition" = "$expectedGlob" ] \
-      || fail "bridge ConditionPathExistsGlob must be '$expectedGlob', got '$bridgeCondition'"
-
-    # ── 5. path-unit auto-starts the daemon on first link; bridge follows ─
-    [ "$pathExistsGlob" = "$expectedGlob" ] \
-      || fail "path-unit PathExistsGlob must be '$expectedGlob', got '$pathExistsGlob'"
-    [ "$pathUnitTarget" = "spaces-signal-cli.service" ] \
-      || fail "path-unit must target spaces-signal-cli.service, got '$pathUnitTarget'"
-    case " $pathUnitWantedBy " in
-      *" default.target "*) ;;
-      *) fail "path-unit must be wantedBy=default.target so login arms it, got '$pathUnitWantedBy'" ;;
-    esac
-    case " $bridgeWantedBy " in
-      *" spaces-signal-cli.service "*) ;;
-      *) fail "bridge must be wantedBy=spaces-signal-cli.service (so path-activation propagates), got '$bridgeWantedBy'" ;;
     esac
 
     # ── 6. opt-out strips every spaces-signal-* user unit ────────────

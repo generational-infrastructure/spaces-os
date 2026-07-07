@@ -1,6 +1,7 @@
 # Pins the schema single-sourcing contract between the integration packages
-# and the host manifest (hosts/test-machine/integrations.nix). For EVERY
-# integration the host declares:
+# and the DEFAULT manifests the spaces-integrations module now ships
+# (modules/nixos/spaces-integrations/defaults.nix). For EVERY default
+# integration:
 #   - the evaluated definition's config/secrets field schema equals the
 #     schema.json its package exports (packages/integration-<name>/schema.json,
 #     kept in sync with the Python module by that package's own pytest);
@@ -8,7 +9,8 @@
 #     renamed or removed tool can never leave a stale allowlist entry behind.
 #
 # Pure nix-eval: schema.json is read from the flake source tree and the
-# manifest is lowered through the spaces-integrations module; no server build.
+# manifests are lowered through the spaces-integrations module (defaults now
+# come with the module — no host import); no server build.
 { pkgs, inputs, ... }:
 let
   inherit (inputs.nixpkgs) lib;
@@ -21,7 +23,6 @@ let
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces-integrations
-      ../../hosts/test-machine/integrations.nix
       { networking.hostName = "schema-sync-fixture"; }
     ];
   };
