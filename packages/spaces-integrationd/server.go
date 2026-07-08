@@ -116,7 +116,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	// connection and streams NDJSON events until the flow ends, so it never
 	// goes through dispatch (which stays a pure one-shot switch).
 	if req.Op == "setup" {
-		s.setup(conn, req.Integration)
+		s.setup(conn, req.Integration, req.Action)
 		return
 	}
 	_ = enc.Encode(s.dispatch(req))
@@ -156,7 +156,7 @@ func (s *Server) dispatch(req Request) any {
 	case "set-field":
 		return s.setField(req.Integration, req.Profile, req.Field, req.Value)
 	case "remove-profile":
-		return s.removeProfile(req.Integration, req.Profile)
+		return s.removeProfileDispatch(req.Integration, req.Profile)
 	case "enable":
 		return s.enable(req.Integration)
 	case "disable":
@@ -211,11 +211,12 @@ func (s *Server) setupSocketPath(integration string) string {
 
 // setup drives the sandboxed setup channel for one integration. Unlike every
 // other op it returns no Ack: it takes over the client connection and relays
-// the setup helper's NDJSON events verbatim until the flow ends (helper
-// done/error, helper EOF, or client disconnect), then closes both sides and
-// stops the transient setup units. It never holds s.mu while streaming, so
-// list/enable stay responsive during a long device-linking flow.
-func (s *Server) setup(conn net.Conn, integration string) {
+// the setup helper's NDJSON events (both directions) until the flow ends
+// (helper done/error, helper EOF, or client disconnect), then closes both
+// sides and stops the transient setup units. setupPark vendor daemons are
+// stopped for the duration and started again on the way out. It never holds
+// s.mu while streaming, so list/enable stay responsive during a long flow.
+func (s *Server) setup(conn net.Conn, integration, action string) {
 	enc := json.NewEncoder(conn)
 	fail := func(msg string) { _ = enc.Encode(SetupEvent{Event: "error", Error: msg}) }
 
@@ -228,6 +229,15 @@ func (s *Server) setup(conn net.Conn, integration string) {
 		fail(err.Error())
 		return
 	}
+	if action == "" {
+		action = "link"
+	}
+
+	// Park single-instance vendor daemons before the setup units start; unpark
+	// on the way out. Registered first so it runs LAST — after the post-`done`
+	// try-restart and after the setup units stop.
+	s.parkSetup(d.SetupPark)
+	defer s.unparkSetup(d.SetupPark)
 
 	setupSock := setupSocketUnit(integration)
 	setupSvc := setupServiceUnit(integration)
@@ -250,7 +260,12 @@ func (s *Server) setup(conn net.Conn, integration string) {
 	}
 	defer hc.Close()
 
-	if s.relay(conn, hc) {
+	// The action line is the first byte the helper sees. Best-effort: a helper
+	// that never reads it (signal) ignores it, and a dead helper is caught by
+	// the relay's EOF, so a write error here is not fatal.
+	s.writeSetupAction(hc, action, "")
+
+	if s.relay(conn, hc, integration) {
 		s.postSetupRestart(integration, d.ExtraServices)
 	}
 }
@@ -320,38 +335,57 @@ func (s *Server) dialSetup(integration string) (net.Conn, error) {
 	return nil, lastErr
 }
 
-// relay copies the helper's NDJSON lines to the client verbatim (one line per
-// event) until the first done/error event, helper EOF, or client disconnect. It
-// returns true iff a `done` event was seen, so the caller bounces services only
-// on success.
+// relay copies NDJSON lines between the panel and the helper until the flow
+// ends (helper done/error, helper EOF, or panel disconnect), returning true iff
+// a `done` event was seen so the caller bounces services only on success.
 //
-// The setup event vocabulary is the minimal docs/agent-integrations-design.md
-// §5.5 subset — qr/message/done/error; the richer typed requests (text-prompt,
-// secret-field, open-url, confirm, progress) are to be completed later per that
-// section.
-func (s *Server) relay(client, helper net.Conn) bool {
-	// Watch the client for disconnect: only a read error means it is gone
-	// (stray bytes such as a trailing newline are drained, never treated as a
-	// disconnect). Closing the helper then unblocks the read loop below.
+// Panel -> helper: every line is forwarded verbatim (the v2 reply channel, e.g.
+// {"value":...} answering a text-field/secret-field prompt). Helper -> panel:
+// every line is relayed verbatim EXCEPT `set-field`, which is broker-consumed —
+// executed via the setField path and never relayed (its value must not reach
+// the panel). A setField failure synthesises an error event to the panel and
+// aborts (fail closed). Unknown future events keep flowing to the panel.
+func (s *Server) relay(client, helper net.Conn, integration string) bool {
+	// Forward panel lines to the helper; a read error means the panel is gone,
+	// so close the helper to unblock the loop below and tear the flow down.
 	go func() {
-		buf := make([]byte, 512)
+		cr := bufio.NewReaderSize(client, 1<<20)
 		for {
-			if _, err := client.Read(buf); err != nil {
-				helper.Close()
-				return
+			line, err := cr.ReadBytes('\n')
+			if len(line) > 0 {
+				if _, werr := helper.Write(line); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
 			}
 		}
+		helper.Close()
 	}()
 
 	r := bufio.NewReaderSize(helper, 1<<20)
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
-			if _, werr := client.Write(line); werr != nil {
-				return false // client gone: stop, do not restart.
-			}
 			var ev SetupEvent
-			if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
+			parsed := json.Unmarshal(bytes.TrimSpace(line), &ev) == nil
+			if parsed && ev.Event == "set-field" {
+				// Broker-consumed: execute the store write, never relay it. Fail
+				// closed on a setField error.
+				if ack := s.setField(integration, ev.Profile, ev.Field, ev.Value); ack.Op != "ok" {
+					_ = json.NewEncoder(client).Encode(SetupEvent{Event: "error", Error: ack.Error})
+					return false
+				}
+				if err != nil {
+					return false // helper EOF right after the set-field line.
+				}
+				continue
+			}
+			if _, werr := client.Write(line); werr != nil {
+				return false // panel gone: stop, do not restart.
+			}
+			if parsed {
 				switch ev.Event {
 				case "done":
 					return true
@@ -373,6 +407,151 @@ func (s *Server) postSetupRestart(integration string, extraServices []string) {
 	units := append([]string{serviceUnit(integration)}, extraServices...)
 	if msg, err := s.runSystemctl("try-restart", units...); err != nil {
 		log.Printf("systemctl try-restart %v: %s", units, msg)
+	}
+}
+
+// setupAction is the single NDJSON line the broker writes to the helper right
+// after connecting: which mode to run (link | remove) and, for remove, the
+// target profile.
+type setupAction struct {
+	Action  string `json:"action"`
+	Profile string `json:"profile,omitempty"`
+}
+
+// writeSetupAction writes the one action line. Best-effort by contract: helpers
+// that never read the connection ignore it, so a write error is logged, not
+// surfaced (a genuinely dead helper is caught by the relay/consume EOF).
+func (s *Server) writeSetupAction(w io.Writer, action, profile string) {
+	if err := json.NewEncoder(w).Encode(setupAction{Action: action, Profile: profile}); err != nil {
+		log.Printf("write setup action %q: %v", action, err)
+	}
+}
+
+// parkSetup stops the single-instance vendor daemons a setup flow must displace
+// so the sandboxed helper can spawn its own transient instance. Best-effort: a
+// failure is logged and an already-stopped unit no-ops.
+func (s *Server) parkSetup(units []string) {
+	if len(units) == 0 {
+		return
+	}
+	if msg, err := s.runSystemctl("stop", units...); err != nil {
+		log.Printf("systemctl stop %v: %s", units, msg)
+	}
+}
+
+// unparkSetup restarts the parked vendor daemons after a setup flow. `start`
+// (not try-restart): a stopped unit would no-op under try-restart, and the
+// units are ConditionPathExists-gated so a pre-onboarding start is inert.
+func (s *Server) unparkSetup(units []string) {
+	if len(units) == 0 {
+		return
+	}
+	if msg, err := s.runSystemctl("start", units...); err != nil {
+		log.Printf("systemctl start %v: %s", units, msg)
+	}
+}
+
+// removeProfileDispatch routes op:"remove-profile". A setup-bearing integration
+// first drives its helper's vendor removal (vendor state first, then the store
+// row, so the two stay atomic); everything else takes the plain store-only path
+// unchanged.
+func (s *Server) removeProfileDispatch(integration, profile string) Ack {
+	if !namePattern.MatchString(integration) {
+		return errAck("invalid integration name")
+	}
+	if !namePattern.MatchString(profile) {
+		return errAck("invalid profile name")
+	}
+	s.mu.Lock()
+	d, ok := s.loadDefs()[integration]
+	s.mu.Unlock()
+	if ok && d.Setup {
+		return s.removeProfileWithHelper(integration, profile, d)
+	}
+	return s.removeProfile(integration, profile)
+}
+
+// removeProfileWithHelper drives the setup helper in remove mode before the
+// store-row removal. The profile must exist first (error before any helper
+// work); a helper error/EOF aborts with the store untouched.
+func (s *Server) removeProfileWithHelper(integration, profile string, d Definition) Ack {
+	// 1. Validate the profile exists (and stage the stores the setup service
+	// loads) before touching the helper.
+	s.mu.Lock()
+	profiles, err := s.storeProfiles(d)
+	if err == nil {
+		err = s.stageStores(d, integration)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return errAck("profiles: " + err.Error())
+	}
+	found := false
+	for _, p := range profiles {
+		if p.Name == profile {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errAck("unknown profile: " + profile)
+	}
+
+	// 2. Park vendor daemons + start the setup units. Same defers as setup: the
+	// setup units stop, then unpark, both after the store removal below.
+	s.parkSetup(d.SetupPark)
+	defer s.unparkSetup(d.SetupPark)
+
+	setupSock := setupSocketUnit(integration)
+	setupSvc := setupServiceUnit(integration)
+	if msg, err := s.runSystemctl("start", setupSock); err != nil {
+		return errAck("systemctl start failed: " + msg)
+	}
+	defer func() {
+		if msg, err := s.runSystemctl("stop", setupSvc, setupSock); err != nil {
+			log.Printf("systemctl stop %s %s: %s", setupSvc, setupSock, msg)
+		}
+	}()
+
+	hc, err := s.dialSetup(integration)
+	if err != nil {
+		return errAck("connect setup helper: " + err.Error())
+	}
+	defer hc.Close()
+
+	// 3. Drive the helper in remove mode, then consume its events: done ->
+	// proceed to the store-row removal; error/EOF -> abort, store untouched.
+	s.writeSetupAction(hc, "remove", profile)
+	if err := s.consumeRemoveEvents(hc); err != nil {
+		return errAck(err.Error())
+	}
+	return s.removeProfile(integration, profile)
+}
+
+// consumeRemoveEvents reads the helper's NDJSON events during a broker-driven
+// remove (no panel connection): a `done` event is success; an `error` event or
+// EOF before any terminal event is failure.
+func (s *Server) consumeRemoveEvents(helper net.Conn) error {
+	r := bufio.NewReaderSize(helper, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var ev SetupEvent
+			if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
+				switch ev.Event {
+				case "done":
+					return nil
+				case "error":
+					if ev.Error != "" {
+						return errors.New(ev.Error)
+					}
+					return errors.New("setup helper reported an error")
+				}
+			}
+		}
+		if err != nil {
+			return errors.New("setup helper closed without completing the removal")
+		}
 	}
 }
 

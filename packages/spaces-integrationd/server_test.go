@@ -892,3 +892,260 @@ func TestSetupConcurrentListSucceeds(t *testing.T) {
 		t.Fatalf("want done, got %v", ev)
 	}
 }
+
+// mailSetupDef is a proton-shaped definition: config + secret fields, a setup
+// flow, and a setupPark unit (the vendor daemon the broker displaces for the
+// duration of link/remove). It exercises the v2 setup channel end to end.
+const mailSetupDef = `{
+  "name": "mail",
+  "description": "Email (IMAP/SMTP)",
+  "multiProfile": true,
+  "network": true,
+  "connectPorts": [443],
+  "autoRun": [],
+  "config": { "email": { "description": "Account email", "required": true } },
+  "secrets": { "bridge_password": { "description": "Bridge password", "required": false } },
+  "setup": true,
+  "extraServices": [],
+  "setupPark": ["spaces-proton-bridge.service"]
+}`
+
+func TestDefinitionParsesSetupPark(t *testing.T) {
+	var d Definition
+	if err := json.Unmarshal([]byte(mailSetupDef), &d); err != nil {
+		t.Fatal(err)
+	}
+	if !equalStrings(d.SetupPark, []string{"spaces-proton-bridge.service"}) {
+		t.Fatalf("want SetupPark [spaces-proton-bridge.service], got %v", d.SetupPark)
+	}
+	// A definition without the field defaults to nil.
+	var g Definition
+	if err := json.Unmarshal([]byte(signalSetupDef), &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.SetupPark != nil {
+		t.Fatalf("want nil SetupPark, got %v", g.SetupPark)
+	}
+}
+
+// enableMail writes the mail def + marks it enabled so a setup/remove flow can
+// run against it.
+func (e *testEnv) enableMail() {
+	e.t.Helper()
+	e.writeDef("mail", mailSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"mail": {Enabled: true}}})
+}
+
+// The broker writes exactly one action line to the helper immediately after
+// connecting, before any relay — {"action":"link"} for a default setup op.
+func TestSetupActionLineFirst(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	gotAction := make(chan string, 1)
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		line, _ := bufio.NewReader(conn).ReadBytes('\n')
+		gotAction <- strings.TrimSpace(string(line))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
+	}
+	select {
+	case a := <-gotAction:
+		if a != `{"action":"link"}` {
+			t.Fatalf("want first line {\"action\":\"link\"}, got %q", a)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("helper never received the action line")
+	}
+}
+
+// A panel reply line ({"value":...}) is forwarded verbatim to the helper.
+func TestSetupPanelReplyReachesHelper(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	gotReply := make(chan string, 1)
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		br.ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"text-field","field":"email","label":"Account email"}` + "\n"))
+		line, _ := br.ReadBytes('\n')
+		gotReply <- strings.TrimSpace(string(line))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("mail")
+	defer conn.Close()
+	ev := e.readEvent(r)
+	if ev["event"] != "text-field" || ev["field"] != "email" || ev["label"] != "Account email" {
+		t.Fatalf("want text-field relayed verbatim, got %v", ev)
+	}
+	if _, err := conn.Write([]byte(`{"value":"me@proton.me"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if ev2 := e.readEvent(r); ev2["event"] != "done" {
+		t.Fatalf("want done after reply, got %v", ev2)
+	}
+	select {
+	case rep := <-gotReply:
+		if rep != `{"value":"me@proton.me"}` {
+			t.Fatalf("want reply forwarded verbatim, got %q", rep)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("helper never received the panel reply")
+	}
+}
+
+// A set-field event is broker-consumed: executed via setField (store updated)
+// and NEVER relayed — the panel sees the surrounding events but not the value.
+func TestSetupSetFieldIntercepted(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		br.ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"message","text":"linking"}` + "\n"))
+		conn.Write([]byte(`{"event":"set-field","profile":"default","field":"email","value":"me@proton.me"}` + "\n"))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("mail")
+	defer conn.Close()
+	if m1 := e.readEvent(r); m1["event"] != "message" {
+		t.Fatalf("want message, got %v", m1)
+	}
+	// The very next event the panel sees must be done — the set-field line and
+	// its value must never be relayed.
+	m2 := e.readEvent(r)
+	if m2["event"] == "set-field" || m2["value"] != nil {
+		t.Fatalf("set-field/value must not reach the panel, got %v", m2)
+	}
+	if m2["event"] != "done" {
+		t.Fatalf("want done after the intercepted set-field, got %v", m2)
+	}
+	// The store was updated by the intercepted set-field.
+	info := e.infoByName("mail")
+	p := profileByName(info, "default")
+	if p == nil {
+		t.Fatal("intercepted set-field must have created the profile")
+	}
+	cfg, _ := p["config"].(map[string]any)
+	if cfg["email"] != "me@proton.me" {
+		t.Fatalf("want stored email me@proton.me, got %v", cfg)
+	}
+}
+
+// A set-field the store rejects fails the flow closed: the broker synthesises
+// an error event to the panel and aborts (no later helper event is relayed).
+func TestSetupSetFieldFailureAborts(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		br.ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"set-field","profile":"default","field":"nope","value":"x"}` + "\n"))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("mail")
+	defer conn.Close()
+	ev := e.readEvent(r)
+	if ev["event"] != "error" || !strings.Contains(ev["error"].(string), "field") {
+		t.Fatalf("want a synthesised set-field error, got %v", ev)
+	}
+	// Abort: the helper's done must not be relayed; the connection closes.
+	if _, err := r.ReadBytes('\n'); err == nil {
+		t.Fatal("broker must close after aborting on a set-field failure")
+	}
+}
+
+// op:"remove-profile" on a setup-bearing integration drives the helper in
+// remove mode (action line {"action":"remove","profile":p}) and only then
+// removes the store row.
+func TestRemoveProfileDrivesHelper(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	e.setField("mail", "default", "email", "me@proton.me")
+	gotAction := make(chan string, 1)
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		line, _ := bufio.NewReader(conn).ReadBytes('\n')
+		gotAction <- strings.TrimSpace(string(line))
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	e.wantOK(e.roundtrip(Request{Op: "remove-profile", Integration: "mail", Profile: "default"}))
+	select {
+	case a := <-gotAction:
+		if a != `{"action":"remove","profile":"default"}` {
+			t.Fatalf("want remove action line, got %q", a)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("helper never received the remove action line")
+	}
+	if info := e.infoByName("mail"); profileByName(info, "default") != nil {
+		t.Fatal("row must be removed after the helper reports done")
+	}
+}
+
+// A helper error during the remove dispatch aborts before the store write: the
+// row survives and the Ack carries the helper's error text.
+func TestRemoveProfileHelperErrorLeavesRow(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	e.setField("mail", "default", "email", "me@proton.me")
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		bufio.NewReader(conn).ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"error","error":"bridge logout failed"}` + "\n"))
+	})
+	defer ln.Close()
+
+	e.wantError(e.roundtrip(Request{Op: "remove-profile", Integration: "mail", Profile: "default"}), "bridge logout failed")
+	if info := e.infoByName("mail"); profileByName(info, "default") == nil {
+		t.Fatal("row must survive a helper error during remove")
+	}
+}
+
+// setupPark units are stopped before the setup units start and started again on
+// the way out (after the post-done try-restart), in that order.
+func TestSetupParkUnitsStoppedStarted(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.enableMail()
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		bufio.NewReader(conn).ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("mail")
+	defer conn.Close()
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
+	}
+	want := []string{
+		"stop spaces-proton-bridge.service",
+		"start spaces-integration-mail-setup.socket",
+		"try-restart spaces-integration-mail.service",
+		"stop spaces-integration-mail-setup.service spaces-integration-mail-setup.socket",
+		"start spaces-proton-bridge.service",
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 5 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("want park/unpark order %v, got %v", want, calls)
+	}
+}

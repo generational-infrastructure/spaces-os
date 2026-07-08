@@ -271,6 +271,22 @@ QtObject {
         strm.destroy(1000);
       }
 
+      // Write one NDJSON line back on the live stream (e.g. a setup reply
+      // {"value":...}). Returns false when the stream is torn down or the
+      // socket is not connected. The stream stays open — teardown is still
+      // peer close / error / closeStream().
+      function sendLine(payload) {
+        if (ended || !connected)
+          return false;
+        try {
+          write(JSON.stringify(payload) + "\n");
+          flush();
+          return true;
+        } catch (_e) {
+          return false;
+        }
+      }
+
       connected: path !== ""
       parser: SplitParser {
         onRead: line => {

@@ -19,7 +19,12 @@ package main
 // "list"; Profile for set-field/remove-profile; Field/Value only for set-field.
 // "setup" keeps the connection open and streams SetupEvent NDJSON lines.
 type Request struct {
-	Op          string `json:"op"`
+	Op string `json:"op"`
+	// Action selects the setup helper's mode on the setup channel: "" or
+	// "link" (default device-linking) or "remove" (drive the helper's vendor
+	// removal). Only meaningful for op=="setup"; the broker also sets it itself
+	// when it drives the remove dispatch for op=="remove-profile".
+	Action      string `json:"action,omitempty"`
 	Integration string `json:"integration,omitempty"`
 	Profile     string `json:"profile,omitempty"`
 	Field       string `json:"field,omitempty"`
@@ -36,12 +41,21 @@ type Ack struct {
 // SetupEvent is one NDJSON line on the long-lived setup channel (broker ->
 // panel). The broker relays the helper's lines verbatim and only ever
 // synthesises the "error" variant itself (validation/transport failures). The
-// event vocabulary is the minimal docs/agent-integrations-design.md §5.5
-// subset — qr | message | done | error; the richer typed requests (text-prompt,
-// secret-field, open-url, confirm, progress) are to be completed later.
+// v2 vocabulary (docs/agent-integrations-design.md §5.5): qr | message | done |
+// error | text-field | secret-field are relayed to the panel; set-field is
+// broker-consumed (executed via the setField path, never relayed). Unknown
+// future events keep flowing to the panel unmodified.
 type SetupEvent struct {
 	Event string `json:"event"`
 	Error string `json:"error,omitempty"`
+	// text-field/secret-field prompts carry Field + Label (relayed). The
+	// broker-consumed set-field carries Profile + Field + Value (executed, never
+	// relayed — the value must not reach the panel). Panels answer a prompt with
+	// a bare {"value":...} line, not a SetupEvent.
+	Field   string `json:"field,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	Value   string `json:"value,omitempty"`
 }
 
 // daemon -> client, reply to "list".
@@ -92,6 +106,12 @@ type Definition struct {
 	// try-restarts after a successful setup so a fresh link/state is picked up.
 	Setup         bool     `json:"setup"`
 	ExtraServices []string `json:"extraServices"`
+	// setupPark names user units the broker stops for the duration of a setup
+	// flow (link or remove) and starts again on the way out — single-instance
+	// vendor daemons (e.g. Proton Bridge) the sandboxed helper must displace to
+	// spawn its own transient instance. Default []; lib.nix lowers the
+	// manifest's setupPark field.
+	SetupPark []string `json:"setupPark"`
 }
 
 type FieldSchema struct {

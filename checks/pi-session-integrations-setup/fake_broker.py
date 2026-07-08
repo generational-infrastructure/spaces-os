@@ -39,20 +39,36 @@ STATE = {
     "signal": {"description": "Signal", "enabled": True, "setup": True},
     "mail": {"description": "Email (IMAP/SMTP)", "enabled": False, "setup": True},
     "caldav": {"description": "Calendar (CalDAV)", "enabled": True, "setup": True},
+    "proton": {"description": "Proton Mail", "enabled": True, "setup": True},
 }
 LOCK = threading.Lock()
 STATS_PATH = None
-STATS = {"list": 0, "setup": 0}
+STATS = {"list": 0, "setup": 0, "replies": []}
 
 
-def _bump(op: str) -> None:
-    """Record an op in the stats sidecar (call under LOCK)."""
-    STATS[op] = STATS.get(op, 0) + 1
+def _flush_stats() -> None:
+    """Atomically write the stats sidecar (call under LOCK)."""
     if STATS_PATH:
         tmp = STATS_PATH + ".tmp"
         with open(tmp, "w") as f:
             json.dump(STATS, f)
         os.replace(tmp, STATS_PATH)
+
+
+def _bump(op: str) -> None:
+    """Record an op in the stats sidecar (call under LOCK)."""
+    STATS[op] = STATS.get(op, 0) + 1
+    _flush_stats()
+
+
+def _record_reply(line: str) -> None:
+    """Record a panel reply line's value in the stats sidecar (call under LOCK)."""
+    try:
+        val = json.loads(line).get("value")
+    except (ValueError, AttributeError):
+        val = None
+    STATS["replies"].append(val)
+    _flush_stats()
 
 
 def list_reply() -> dict:
@@ -79,6 +95,17 @@ def send_line(conn: socket.socket, obj: dict) -> None:
     conn.sendall((json.dumps(obj) + "\n").encode())
 
 
+def recv_line(conn: socket.socket) -> str:
+    """Read one NDJSON line (the panel's reply) off the connection; '' on EOF."""
+    buf = b""
+    while not buf.endswith(b"\n"):
+        chunk = conn.recv(4096)
+        if not chunk:
+            return buf.decode()
+        buf += chunk
+    return buf.decode().strip()
+
+
 def stream_setup(conn: socket.socket, name: str) -> None:
     """Stream the scripted NDJSON event sequence for `name`, then return
     (the caller closes the connection — the panel treats EOF as flow end).
@@ -102,6 +129,29 @@ def stream_setup(conn: socket.socket, name: str) -> None:
         time.sleep(0.6)
         send_line(conn, {"event": "message", "text": "Waiting for the phone to scan…"})
         time.sleep(0.6)
+        send_line(conn, {"event": "done"})
+    elif name == "proton":
+        # Prompt flow: text-field email -> reply -> secret-field password ->
+        # reply -> done. Each reply is recorded so the driver can assert it
+        # reached the broker verbatim (and secret-field masking on the panel).
+        send_line(
+            conn,
+            {"event": "text-field", "field": "email", "label": "Proton account email"},
+        )
+        with LOCK:
+            _record_reply(recv_line(conn))
+        time.sleep(0.2)
+        send_line(
+            conn,
+            {
+                "event": "secret-field",
+                "field": "password",
+                "label": "Proton account password",
+            },
+        )
+        with LOCK:
+            _record_reply(recv_line(conn))
+        time.sleep(0.2)
         send_line(conn, {"event": "done"})
     else:
         send_line(conn, {"event": "message", "text": "Starting link…"})

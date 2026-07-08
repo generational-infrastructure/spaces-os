@@ -77,7 +77,9 @@
     "integrations-setup-scan": "Zeskanuj ten kod QR telefonem, aby połączyć urządzenie.",
     "integrations-setup-done": "Konfiguracja zakończona.",
     "integrations-setup-error": "Konfiguracja nie powiodła się: {error}",
-    "integrations-setup-cancel": "Anuluj"
+    "integrations-setup-cancel": "Anuluj",
+    "integrations-setup-submit": "Wyślij",
+    "integrations-setup-prompt": "Wprowadź żądaną wartość."
   },
   "menu": {
     "open-chat": "Otwórz czat",

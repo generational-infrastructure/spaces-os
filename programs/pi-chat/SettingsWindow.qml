@@ -40,10 +40,14 @@ FloatingWindow {
   // setupFor names the integration whose setup pane is open; the rest
   // mirror the broker's streamed NDJSON events (see IntegrationsBridge).
   property string setupFor: ""
-  property string setupPhase: ""   // "connecting" | "qr" | "done" | "error"
+  property string setupPhase: ""   // "connecting" | "qr" | "prompt" | "done" | "error"
   property string setupPng: ""
   property string setupText: ""
   property string setupErrorText: ""
+  // Prompt phase (text-field/secret-field): the label to show above the input
+  // and whether it is a secret (masked). Cleared by resetSetup.
+  property string setupPromptLabel: ""
+  property bool setupPromptSecret: false
 
   // Setup-pane lifecycle phases (setupPhase). "connecting" is entered on
   // launch, then the broker's stream drives qr → done | error.
@@ -51,6 +55,7 @@ FloatingWindow {
   readonly property string phaseQr: "qr"
   readonly property string phaseDone: "done"
   readonly property string phaseError: "error"
+  readonly property string phasePrompt: "prompt"
 
   // Success pane lingers on its done state this long before auto-closing,
   // so the user registers the "linked" confirmation.
@@ -67,6 +72,8 @@ FloatingWindow {
     root.setupPng = "";
     root.setupText = "";
     root.setupErrorText = "";
+    root.setupPromptLabel = "";
+    root.setupPromptSecret = false;
   }
 
   IntegrationsBridge {
@@ -92,6 +99,13 @@ FloatingWindow {
       } else if (ev.event === integrations.evError) {
         root.setupErrorText = ev.error || "";
         root.setupPhase = root.phaseError;
+      } else if (ev.event === integrations.evTextField || ev.event === integrations.evSecretField) {
+        // A prompt: show a labelled input (masked for secret-field) and wait
+        // for the user to submit a reply via sendSetupReply.
+        root.setupPromptLabel = ev.label || "";
+        root.setupPromptSecret = ev.event === integrations.evSecretField;
+        root.setupText = "";
+        root.setupPhase = root.phasePrompt;
       }
     }
   }
@@ -354,6 +368,43 @@ FloatingWindow {
                 horizontalAlignment: Text.AlignHCenter
                 color: Color.mOnSurfaceVariant
                 pointSize: Style.fontSizeS
+              }
+
+              // Prompt phase: labelled input (masked for secret-field) + submit.
+              // Submitting sends the reply and returns to the streaming state so
+              // the helper's next event drives the pane.
+              ColumnLayout {
+                objectName: "setupPrompt"
+                visible: root.setupPhase === root.phasePrompt
+                Layout.fillWidth: true
+                spacing: Style.marginXS
+
+                NText {
+                  Layout.fillWidth: true
+                  text: root.setupPromptLabel !== ""
+                    ? root.setupPromptLabel
+                    : I18n.tr("settings.integrations-setup-prompt")
+                  wrapMode: Text.Wrap
+                  color: Color.mOnSurface
+                  pointSize: Style.fontSizeS
+                }
+                NTextInput {
+                  id: setupPromptInput
+                  objectName: "setupPromptInput"
+                  Layout.fillWidth: true
+                  echoMode: root.setupPromptSecret ? TextInput.Password : TextInput.Normal
+                  placeholderText: root.setupPromptLabel
+                }
+                NButton {
+                  objectName: "setupSubmit"
+                  text: I18n.tr("settings.integrations-setup-submit")
+                  enabled: setupPromptInput.text.length > 0
+                  onClicked: {
+                    integrations.sendSetupReply(setupPromptInput.text);
+                    setupPromptInput.text = "";
+                    root.setupPhase = root.phaseConnecting;
+                  }
+                }
               }
 
               NText {

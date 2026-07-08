@@ -2,8 +2,9 @@
 """Headless check: the panel's integration device-setup flow.
 
 Drives the real SettingsWindow + IntegrationsBridge against a Python fake
-broker that streams the setup op's NDJSON events (qr | message | done |
-error). Asserts the UI contract the sandboxed setup channel depends on:
+broker that streams the setup op's NDJSON events (qr | message | done | error |
+text-field | secret-field). Asserts the UI contract the sandboxed setup channel
+depends on:
   - the Link/Setup button shows ONLY for an integration that is BOTH enabled
     AND setup-capable (github: enabled/no-setup and mail: setup/disabled must
     NOT show it; signal and caldav must),
@@ -11,6 +12,9 @@ error). Asserts the UI contract the sandboxed setup channel depends on:
     visible with the streamed png data URL,
   - a done event flips to the success state, auto-closes the pane, and the
     bridge fires a re-list (observed via the broker's stats sidecar),
+  - a text-field/secret-field prompt shows an input (masked for secret-field),
+    and each submitted reply reaches the broker verbatim as a {"value":...}
+    line (observed via the stats sidecar),
   - the error path surfaces the error text and keeps the pane open.
 
 No pi, no LLM, no compositor. Usage:
@@ -110,6 +114,51 @@ def main() -> None:
         if not wait_until(lambda: stats().get("list", 0) > lists_before, timeout_s=10):
             die(f"no re-list after done (before={lists_before}, stats={stats()!r})")
 
+        # Prompt flow: proton streams a text-field then a secret-field. The
+        # panel shows an input (masked for secret-field); each submitted reply
+        # reaches the broker verbatim.
+        if ipc("click", "setupBtn-proton") != "ok":
+            die("could not click the proton setup button")
+        if not wait_until(lambda: ipc("setupPhase") == "prompt", timeout_s=15):
+            die(
+                f"proton setup never reached the prompt phase (phase={ipc('setupPhase')!r})"
+            )
+        if ipc("visibleOf", "setupPromptInput") != "true":
+            die("prompt input should be visible in the prompt phase")
+        if ipc("echoModeOf", "setupPromptInput") != "normal":
+            die("a text-field prompt must not be masked")
+        if ipc("setText", "setupPromptInput", "user@proton.me") != "ok":
+            die("could not type into the text-field prompt")
+        if ipc("click", "setupSubmit") != "ok":
+            die("could not submit the text-field reply")
+
+        # The secret-field prompt: same input, now masked.
+        if not wait_until(
+            lambda: (
+                ipc("setupPhase") == "prompt"
+                and ipc("echoModeOf", "setupPromptInput") == "password"
+            ),
+            timeout_s=15,
+        ):
+            die("proton setup never reached the masked secret-field prompt")
+        if ipc("setText", "setupPromptInput", "bridge-token") != "ok":
+            die("could not type into the secret-field prompt")
+        if ipc("click", "setupSubmit") != "ok":
+            die("could not submit the secret-field reply")
+
+        # done -> auto-close, and the broker received both replies verbatim.
+        if not wait_until(lambda: ipc("setupFor") == "", timeout_s=15):
+            die(
+                f"proton prompt flow never auto-closed after done (setupFor={ipc('setupFor')!r})"
+            )
+        if not wait_until(
+            lambda: stats().get("replies") == ["user@proton.me", "bridge-token"],
+            timeout_s=10,
+        ):
+            die(
+                f"broker did not receive both replies verbatim: {stats().get('replies')!r}"
+            )
+
         # Error path: caldav's setup streams an error -> error text shown, and
         # the pane stays open (no auto-close).
         if ipc("click", "setupBtn-caldav") != "ok":
@@ -127,7 +176,7 @@ def main() -> None:
 
         sys.stderr.write(
             "PASS: setup-button gate + streamed QR visible + done auto-close + "
-            "re-list + error text\n"
+            "re-list + prompt replies + error text\n"
         )
     finally:
         qs.stop()

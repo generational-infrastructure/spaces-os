@@ -69,6 +69,22 @@ QtObject {
       return n ? String(n.text) : "missing";
     }
 
+    // Prompt-input helpers: type a reply, then read the echo mode so the
+    // driver can assert secret-field masking.
+    function setText(name: string, value: string): string {
+      const n = shell._node(name);
+      if (!n)
+        return "missing";
+      n.text = value;
+      return "ok";
+    }
+    function echoModeOf(name: string): string {
+      const n = shell._node(name);
+      if (!n)
+        return "missing";
+      return n.echoMode === TextInput.Password ? "password" : "normal";
+    }
+
     // Window-level setup-flow state.
     function setupFor(): string { return settingsWin.setupFor; }
     function setupPhase(): string { return settingsWin.setupPhase; }

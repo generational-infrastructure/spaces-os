@@ -77,7 +77,9 @@
     "integrations-setup-scan": "Отсканируйте этот QR-код телефоном, чтобы привязать устройство.",
     "integrations-setup-done": "Настройка завершена.",
     "integrations-setup-error": "Не удалось выполнить настройку: {error}",
-    "integrations-setup-cancel": "Отмена"
+    "integrations-setup-cancel": "Отмена",
+    "integrations-setup-submit": "Отправить",
+    "integrations-setup-prompt": "Введите запрошенное значение."
   },
   "menu": {
     "open-chat": "Открыть чат",

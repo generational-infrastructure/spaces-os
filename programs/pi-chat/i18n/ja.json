@@ -77,7 +77,9 @@
     "integrations-setup-scan": "この QR コードをスマートフォンでスキャンしてデバイスをリンクします。",
     "integrations-setup-done": "設定が完了しました。",
     "integrations-setup-error": "設定に失敗しました: {error}",
-    "integrations-setup-cancel": "キャンセル"
+    "integrations-setup-cancel": "キャンセル",
+    "integrations-setup-submit": "送信",
+    "integrations-setup-prompt": "要求された値を入力してください。"
   },
   "menu": {
     "open-chat": "チャットを開く",

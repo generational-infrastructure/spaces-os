@@ -77,7 +77,9 @@
     "integrations-setup-scan": "Scan deze QR-code met je telefoon om het apparaat te koppelen.",
     "integrations-setup-done": "Instellen voltooid.",
     "integrations-setup-error": "Instellen mislukt: {error}",
-    "integrations-setup-cancel": "Annuleren"
+    "integrations-setup-cancel": "Annuleren",
+    "integrations-setup-submit": "Verzenden",
+    "integrations-setup-prompt": "Voer de gevraagde waarde in."
   },
   "menu": {
     "open-chat": "Chat openen",

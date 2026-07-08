@@ -54,11 +54,15 @@ QtObject {
   // streams NDJSON events (qr | message | done | error) until the
   // broker closes it. Only one flow runs at a time.
 
-  // Setup-stream event names (broker → panel `event` field).
+  // Setup-stream event names (broker → panel `event` field). text-field and
+  // secret-field are prompt variants: the panel shows an input (masked for
+  // secret-field) and answers with sendSetupReply().
   readonly property string evQr: "qr"
   readonly property string evMessage: "message"
   readonly property string evDone: "done"
   readonly property string evError: "error"
+  readonly property string evTextField: "text-field"
+  readonly property string evSecretField: "secret-field"
 
   // One parsed setup event line relayed from the broker.
   signal setupEvent(var ev)
@@ -100,6 +104,14 @@ QtObject {
   // the setup helper. _onSetupClosed() clears the state on teardown.
   function cancelSetup() {
     if (root._setupSock) root._setupSock.closeStream();
+  }
+
+  // Answer a text-field/secret-field prompt: write one {"value":...} line on
+  // the live setup connection. The broker forwards it verbatim to the helper.
+  // Returns false when no setup flow is live or the write failed.
+  function sendSetupReply(value) {
+    if (!root._setupSock) { root.lastError = "no setup flow running"; return false; }
+    return root._setupSock.sendLine({ value: value });
   }
 
   property NdjsonSocket _sock: NdjsonSocket {
