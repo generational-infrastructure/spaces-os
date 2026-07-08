@@ -270,6 +270,10 @@ in
   imports = [
     ../llama-swap.nix
     inputs.self.nixosModules.signal-cli
+    # Proton Mail Bridge backing for the Proton integration (env-pinned wrapper
+    # + confined state root). Imported here so every pi-chat consumer gets it;
+    # enabled by default (tracks pi-chat.enable), like signal-cli.
+    inputs.self.nixosModules.proton-bridge
     # Voice-to-text (Mod+S). Imported here so every pi-chat consumer
     # gets it for free; voxtype's config is unconditional, so it is
     # enabled by the mere import.

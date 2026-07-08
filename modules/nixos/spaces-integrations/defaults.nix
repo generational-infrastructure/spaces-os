@@ -39,6 +39,23 @@ let
       secrets = lib.mkDefault (secretsOf name);
     }
     // rest;
+
+  # Proton Mail Bridge glue. The env-pinned `protonmail-bridge` wrapper is built
+  # from the SAME pure builder the spaces-proton-bridge module uses
+  # (../proton-bridge/wrapper.nix) — a plain import, NOT a config read, so this
+  # manifest still evaluates in the isolated integration checks that load only
+  # nixosModules.spaces-integrations.
+  protonWrapper = import ../proton-bridge/wrapper.nix { inherit pkgs lib; };
+  protonWrapperExe = lib.getExe protonWrapper;
+  # integration-proton-setup spawns a transient `protonmail-bridge --grpc` by
+  # resolving `protonmail-bridge` on PATH. The twin setup unit's ExecStart is
+  # this `setup` command run through landlock-exec, so prepend the wrapper's bin
+  # dir to PATH via a one-token writeShellScript. Wrapping ONLY the setup command
+  # keeps the Bridge wrapper off the main MCP server unit's PATH.
+  protonSetup = pkgs.writeShellScript "integration-proton-setup" ''
+    export PATH=${lib.makeBinPath [ protonWrapper ]}''${PATH:+:$PATH}
+    exec ${lib.getExe' pkgsSelf.integration-proton "integration-proton-setup"} "$@"
+  '';
 in
 {
   services.spaces-integrations.integrations = {
@@ -149,6 +166,74 @@ in
       # activated socket, drives the signal-cli daemon's startLink/finishLink
       # JSON-RPC, and streams qr/message/done/error events to the panel.
       setup = lib.mkDefault (lib.getExe' pkgsSelf.integration-signal "integration-signal-setup");
+    };
+
+    # Migrated from the email skill's Proton Mail recipe: Proton has no public
+    # IMAP/SMTP, so the Proton Mail Bridge daemon (a CONFINED extraService below)
+    # fronts it with a loopback IMAP/SMTP the generic himalaya/msmtp server talks
+    # to. Read tools auto-run; message_send confirms (schema tools identical to
+    # mail's). network=true so the MCP server reaches the loopback bridge (and,
+    # per connectPorts, Proton's API is dialable during setup). The Bridge daemon
+    # is vault-gated (inert until onboarding creates the vault); setupPark
+    # displaces the single-instance daemon so the setup helper can spawn its own
+    # transient --grpc Bridge. Env pinning + keychain determinism live in the
+    # shared `protonmail-bridge` wrapper (../proton-bridge/wrapper.nix); the
+    # spaces-proton-bridge module owns the state root + on-PATH wrapper.
+    proton = mkInteg "proton" {
+      description = lib.mkDefault "Proton Mail";
+      network = lib.mkDefault true;
+      connectPorts = lib.mkDefault [
+        443
+        1143
+        1025
+      ];
+      autoRun = lib.mkDefault [
+        "envelope_list"
+        "message_read"
+      ];
+      # Read by the integration-proton server to locate Bridge's serving cert;
+      # also consumed by the setup helper to resolve the Bridge state root.
+      environment = lib.mkDefault {
+        SPACES_PROTON_BRIDGE_STATE = "%h/.local/state/protonmail-bridge";
+      };
+      extraPaths = lib.mkDefault [
+        {
+          # Bridge state root — rw for the cert read + himalaya/msmtp config.
+          source = "%h/.local/state/protonmail-bridge";
+          mode = "rw";
+        }
+      ];
+      # PATH-prefixed so the helper's transient `protonmail-bridge --grpc` spawn
+      # resolves the env-pinning wrapper.
+      setup = lib.mkDefault "${protonSetup}";
+      # Single-instance Bridge: the broker parks the daemon for the setup flow so
+      # the helper's transient --grpc instance can take the lock.
+      setupPark = lib.mkDefault [ "spaces-proton-bridge.service" ];
+      # The Bridge daemon as a full Landlock-confined resident unit: 443 egress
+      # for Proton's API, binds 1143/1025 to serve loopback IMAP/SMTP, rw on its
+      # own state root, vault-gated so a pre-onboarding start is inert, and
+      # Restart=always (resilient companion daemon).
+      extraServices = lib.mkDefault [
+        {
+          name = "spaces-proton-bridge.service";
+          command = "${protonWrapperExe} --noninteractive";
+          description = "Proton Mail Bridge (loopback IMAP/SMTP for the Proton integration)";
+          network = true;
+          connectPorts = [ 443 ];
+          bindPorts = [
+            1143
+            1025
+          ];
+          extraPaths = [
+            {
+              source = "%h/.local/state/protonmail-bridge";
+              mode = "rw";
+            }
+          ];
+          unitConfig.ConditionPathExists = "%h/.local/state/protonmail-bridge/config/protonmail/bridge-v3/vault.enc";
+          restart = true;
+        }
+      ];
     };
   };
 }
