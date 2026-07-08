@@ -422,7 +422,7 @@ in
       description = ''
         Additional skill directories for pi, keyed by name. Merged
         with the built-in spaces skills (datetime, location, maps,
-        skill-config, calendar, notifications).
+        wikipedia, wikidata, notifications, skill-config).
       '';
     };
 
