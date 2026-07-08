@@ -123,6 +123,19 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
         names = builtins.attrNames disabledSystem.config.systemd.user.services;
       in
       if builtins.elem "spaces-signal-cli" names then "yes" else "no";
+    # The finishLink linking bug: signal-cli 0.14.2–0.14.4 daemons break
+    # finishLink under an active receive subscription (subscribeReceive
+    # collects handlers into an immutable .toList(), so onManagerAdded's
+    # handlers.add() throws UnsupportedOperationException -> JSON-RPC -32603
+    # -> the panel's GUI QR link flow dies with "Setup failed"). Fixed in
+    # 0.14.5 (Collectors.toCollection(ArrayList::new)), so the module's
+    # package MUST be >= 0.14.5.
+    signalPkgVersion = enabledSystem.config.services.spaces-signal.package.version;
+    signalPkgVersionOk =
+      if lib.versionAtLeast enabledSystem.config.services.spaces-signal.package.version "0.14.5" then
+        "yes"
+      else
+        "no";
   }
   ''
     set -euo pipefail
@@ -208,6 +221,13 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     if [ "$brokenSucceeded" = "yes" ]; then
       fail "spaces-signal evaluated cleanly without pi-chat; the assertion is missing or stopped catching this combo."
     fi
+
+    # ── 8. signal-cli package is >= 0.14.5 (GUI QR linking bug) ──────
+    # 0.14.2–0.14.4 daemons throw UnsupportedOperationException from
+    # finishLink under the bridge's active receive subscription, so the
+    # panel's QR link flow fails. The module default must pin >= 0.14.5.
+    [ "$signalPkgVersionOk" = "yes" ] \
+      || fail "services.spaces-signal.package must be signal-cli >= 0.14.5 (GUI QR linking finishLink bug), got $signalPkgVersion"
 
     echo "OK"
     touch "$out"
