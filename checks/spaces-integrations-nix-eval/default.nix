@@ -73,6 +73,58 @@ let
         1025
       ];
     };
+    # Confined extraService (proton-mail groundwork): a backing vendor daemon
+    # attached to a Landlock policy + wrapped in landlock-exec, plus setupPark.
+    # Synthetic name so it never merges with the real `proton`/`mail` manifests.
+    protonlike = {
+      description = "Proton-like bridge demo";
+      command = "integration-protonlike-placeholder";
+      network = true;
+      connectPorts = [
+        443
+        1143
+        1025
+      ];
+      autoRun = [ "envelope_list" ];
+      environment.SPACES_PROTON_BRIDGE_STATE = "%h/.local/state/protonmail-bridge";
+      extraPaths = [
+        {
+          source = "%h/.local/state/protonmail-bridge";
+          mode = "rw";
+        }
+      ];
+      setup = "integration-protonlike-setup-placeholder";
+      setupPark = [ "spaces-protonlike-bridge.service" ];
+      extraServices = [
+        {
+          name = "spaces-protonlike-bridge.service";
+          command = "protonmail-bridge-placeholder --noninteractive";
+          description = "Proton-like Bridge daemon";
+          network = true;
+          connectPorts = [ 443 ];
+          bindPorts = [
+            1143
+            1025
+          ];
+          extraPaths = [
+            {
+              source = "%h/.local/state/protonmail-bridge";
+              mode = "rw";
+            }
+          ];
+          environment.SPACES_PROTON_BRIDGE_STATE = "%h/.local/state/protonmail-bridge";
+          unitConfig.ConditionPathExists = "%h/.local/state/protonmail-bridge/config/protonmail/bridge-v3/vault.enc";
+          restart = true;
+        }
+      ];
+    };
+    # Bare-string extraService: today's exact behavior — lifecycle only, the
+    # daemon is owned/run by another module, NO confined unit is generated.
+    barehost = {
+      description = "Bare extraServices demo";
+      command = "integration-barehost-placeholder";
+      extraServices = [ "spaces-external-daemon.service" ];
+    };
   };
 
   enabledSystem = mkSystem [
@@ -132,6 +184,27 @@ let
     landlockExec = "unused-here";
   };
   bindportsDef = bindportsInteg.definition;
+  # ── confined extraService (proton groundwork) + bare-string regression ──────
+  bridgeSvc = enabledSystem.config.systemd.user.services."spaces-protonlike-bridge";
+  bridgeSvcStripped = builtins.removeAttrs bridgeSvc.serviceConfig [
+    "ExecStart"
+    "ExecStartPre"
+  ];
+  protonlikeInteg = integLib.mkIntegration {
+    name = "protonlike";
+    manifest = enabledSystem.config.services.spaces-integrations.integrations.protonlike;
+    landlockPolicyCli = "unused-here";
+    landlockExec = "unused-here";
+  };
+  protonlikeDef = protonlikeInteg.definition;
+  bridgeSpecFile = protonlikeInteg.extraServiceSpecs."spaces-protonlike-bridge";
+  bareInteg = integLib.mkIntegration {
+    name = "barehost";
+    manifest = enabledSystem.config.services.spaces-integrations.integrations.barehost;
+    landlockPolicyCli = "unused-here";
+    landlockExec = "unused-here";
+  };
+  bareBackingSvc = enabledSystem.config.systemd.user.services."spaces-external-daemon";
   brokerSvc = enabledSystem.config.systemd.user.services.spaces-integrationd;
 in
 # ── Exec lines: shape at eval (no realize) ──────────────────────────────────
@@ -169,6 +242,46 @@ assert lib.hasSuffix "/bin/spaces-integrationd" brokerSvc.serviceConfig.ExecStar
 assert brokerSvc.serviceConfig.StateDirectory == "spaces-integrationd";
 assert lib.hasInfix "--with-key=host+tpm2" brokerSvc.environment.SPACES_INTEGRATIOND_CREDS_ENCRYPT;
 assert lib.hasInfix "%t/spaces-integrations.sock" brokerSvc.environment.SPACES_INTEGRATIOND_SOCKET;
+# ── Confined extraService (proton groundwork): a backing vendor daemon wrapped
+# in landlock-exec, NOT socket-activated ────────────────────────────────────
+# policy lowering pre-start into the daemon's own runtime dir.
+assert lib.any (lib.hasInfix "/bin/spaces-landlock-policy ") bridgeSvc.serviceConfig.ExecStartPre;
+assert lib.any (lib.hasInfix "--out %t/spaces-protonlike-bridge/landlock.json")
+  bridgeSvc.serviceConfig.ExecStartPre;
+# confined ExecStart through the launcher, execing the vendor command.
+assert lib.hasInfix "/bin/landlock-exec " bridgeSvc.serviceConfig.ExecStart;
+assert lib.hasInfix "--json %t/spaces-protonlike-bridge/landlock.json --"
+  bridgeSvc.serviceConfig.ExecStart;
+assert lib.hasInfix "protonmail-bridge-placeholder" bridgeSvc.serviceConfig.ExecStart;
+# resident, not socket-activated.
+assert bridgeSvc.wantedBy == [ ];
+# PartOf injected by the module (GUI teardown) AND the entry's ConditionPathExists
+# gate carried verbatim — both fold onto the SAME unit's [Unit] section.
+assert bridgeSvc.unitConfig.PartOf == [ "spaces-integration-protonlike.socket" ];
+assert
+  bridgeSvc.unitConfig.ConditionPathExists
+  == "%h/.local/state/protonmail-bridge/config/protonmail/bridge-v3/vault.enc";
+# NO credentials / StateDirectory: the vendor daemon owns its state via extraPaths.
+assert !(bridgeSvc.serviceConfig ? LoadCredential);
+assert !(bridgeSvc.serviceConfig ? LoadCredentialEncrypted);
+assert !(bridgeSvc.serviceConfig ? StateDirectory);
+# definition.extraServices carries just the NAME regardless of form; setupPark verbatim.
+assert protonlikeDef.extraServices == [ "spaces-protonlike-bridge.service" ];
+assert protonlikeDef.setupPark == [ "spaces-protonlike-bridge.service" ];
+# the socket Wants/After the backing unit NAME.
+assert protonlikeInteg.socketUnit.wants == [ "spaces-protonlike-bridge.service" ];
+assert protonlikeInteg.socketUnit.after == [ "spaces-protonlike-bridge.service" ];
+# ── Bare-string extraService: today's EXACT behavior (regression) ────────────
+# name flows to socket Wants/After + definition; NO confined unit generated.
+assert bareInteg.socketUnit.wants == [ "spaces-external-daemon.service" ];
+assert bareInteg.socketUnit.after == [ "spaces-external-daemon.service" ];
+assert bareInteg.definition.extraServices == [ "spaces-external-daemon.service" ];
+assert bareInteg.definition.setupPark == [ ];
+assert bareInteg.extraServiceUnits == { };
+# the module still injects PartOf (lifecycle) but emits no ExecStart — the daemon
+# is owned/run by another module.
+assert bareBackingSvc.unitConfig.PartOf == [ "spaces-integration-barehost.socket" ];
+assert !(bareBackingSvc.serviceConfig ? ExecStart);
 pkgs.runCommand "spaces-integrations-nix-eval-test"
   {
     nativeBuildInputs = [
@@ -183,6 +296,9 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     wpSpecFile = wpInteg.policySpecFile;
     bindportsSpecFile = bindportsInteg.policySpecFile;
     bindportsDefinition = builtins.toJSON bindportsDef;
+    bridgeServiceConfig = builtins.toJSON bridgeSvcStripped;
+    protonlikeDefinition = builtins.toJSON protonlikeDef;
+    inherit bridgeSpecFile;
     disabledHasGithub =
       if (disabledSystem.config.systemd.user.services."spaces-integration-github" or null) == null then
         "no"
@@ -312,6 +428,59 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     # manifest approval): the bridge lists its bind ports.
     jq -e '.bindPorts == [1143, 1025]' <<<"$bindportsDefinition" >/dev/null \
       || fail "bindPorts not surfaced in the bind-ports definition"
+
+    # ── 10. confined extraService (proton groundwork): the backing vendor daemon
+    # runs Landlock-confined, NOT socket-activated, credential-free ──
+    bridge() { jq -e "$1" <<<"$bridgeServiceConfig" >/dev/null || fail "bridge serviceConfig: $1"; }
+    bridge '.Type == "exec"'
+    # network = true → IP egress at the family layer.
+    bridge '.RestrictAddressFamilies == "AF_UNIX AF_INET AF_INET6"'
+    # the SAME hardening bouquet as the MCP unit.
+    bridge '.NoNewPrivileges == true'
+    bridge '.RestrictNamespaces == true'
+    bridge '.ProtectProc == "invisible"'
+    bridge '.SystemCallFilter | index("@system-service") != null'
+    bridge 'any(.SystemCallFilter[]; startswith("~ptrace"))'
+    bridge '.SystemCallErrorNumber == "EPERM"'
+    # resilient resident daemon: restart=true → Restart=always + RestartSec.
+    bridge '.Restart == "always"'
+    bridge '.RestartSec == 2'
+    # only a runtime dir for the policy; no StateDirectory/credentials.
+    bridge '.RuntimeDirectory == "spaces-protonlike-bridge"'
+    bridge 'has("StateDirectory") | not'
+    bridge 'has("LoadCredential") | not'
+    bridge 'has("LoadCredentialEncrypted") | not'
+    # the vendor daemon's own env passes through (no SPACES_INTEGRATION_SHARED_DIR).
+    bridge '.Environment | index("SPACES_PROTON_BRIDGE_STATE=%h/.local/state/protonmail-bridge") != null'
+    bridge 'any(.Environment[]; startswith("SPACES_INTEGRATION_SHARED_DIR=")) | not'
+
+    # the daemon's policy SPEC carries its own bindPorts/connectPorts/extraPaths.
+    jq -e '.bindPorts == [1143, 1025]' "$bridgeSpecFile" >/dev/null \
+      || fail "bridge spec missing bindPorts"
+    jq -e '.connectPorts == [443]' "$bridgeSpecFile" >/dev/null \
+      || fail "bridge spec missing connectPorts"
+    jq -e '.extraPaths == [{"source":"%h/.local/state/protonmail-bridge","mode":"rw"}]' "$bridgeSpecFile" >/dev/null \
+      || fail "bridge spec missing extraPaths"
+    # lower it with the real CLI exactly as the unit would at runtime (no
+    # StateDirectory; %h resolves from HOME): egress 443 + bind 1143/1025, and the
+    # rw extraPath (%h expanded) is the only writable surface. Deny-by-default holds.
+    bridgepolicy=$PWD/landlock-bridge.json
+    env HOME=/home/x spaces-landlock-policy --spec "$bridgeSpecFile" --out "$bridgepolicy"
+    jq -e '.netPort == [{"allowedAccess":["connect_tcp"],"port":[443]},{"allowedAccess":["bind_tcp"],"port":[1143,1025]}]' \
+      "$bridgepolicy" >/dev/null || fail "bridge ports not lowered to egress 443 + bind 1143/1025"
+    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] == ["/home/x/.local/state/protonmail-bridge"]' \
+      "$bridgepolicy" >/dev/null || fail "bridge writable surface != its %h-expanded state dir"
+    jq -e '.ruleset[0].handledAccessNet == ["bind_tcp"]' "$bridgepolicy" >/dev/null \
+      || fail "bind_tcp not handled (deny-by-default) for the confined bridge"
+
+    # the definition carries just the NAME + setupPark verbatim (broker/gateway
+    # contract: unit names only, regardless of the confined form).
+    jq -e '.extraServices == ["spaces-protonlike-bridge.service"]' <<<"$protonlikeDefinition" >/dev/null \
+      || fail "confined extraService leaked more than its name into the definition"
+    jq -e '.setupPark == ["spaces-protonlike-bridge.service"]' <<<"$protonlikeDefinition" >/dev/null \
+      || fail "setupPark not carried verbatim into the definition"
+    jq -e 'has("command") | not' <<<"$protonlikeDefinition" >/dev/null \
+      || fail "definition leaked a command"
 
     touch "$out"
   ''

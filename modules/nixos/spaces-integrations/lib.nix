@@ -66,24 +66,34 @@ in
       # while accounts stay dynamic (unified blob-credential store).
       storeDir = "%S/spaces-integrationd/${name}";
 
-      # Static half of the Landlock policy; the CLI folds in the per-user paths
-      # at start. connectPorts / bindPorts are the port-granular TCP egress /
-      # ingress allowlists (the coarse AF_INET gate is RestrictAddressFamilies,
+      # Static half of the Landlock policy (one builder, reused by the main unit
+      # and every confined extraService below); the CLI folds in the per-user
+      # paths at start. connectPorts / bindPorts are the port-granular TCP egress
+      # / ingress allowlists (the coarse AF_INET gate is RestrictAddressFamilies,
       # from `network`). Both ride unconditionally: an empty list lowers to no
       # rule, but bind_tcp stays denied by default (buildLandlockPolicy).
-      policySpec = {
-        inherit (manifest) connectPorts bindPorts;
-        abi = 6;
-        scope = [
-          "signal"
-          "abstract_unix_socket"
-        ];
-      }
-      // lib.optionalAttrs (manifest.extraPaths != [ ]) {
-        # ro → read set, rw → write set (folded by spaces-landlock-policy). Sources
-        # keep %t/%h verbatim; the spec is a store file, so systemd never expands
-        # them — the CLI resolves them from the unit env ($XDG_RUNTIME_DIR/$HOME).
-        extraPaths = map (p: { inherit (p) source mode; }) manifest.extraPaths;
+      mkPolicySpec =
+        {
+          connectPorts,
+          bindPorts,
+          extraPaths,
+        }:
+        {
+          inherit connectPorts bindPorts;
+          abi = 6;
+          scope = [
+            "signal"
+            "abstract_unix_socket"
+          ];
+        }
+        // lib.optionalAttrs (extraPaths != [ ]) {
+          # ro → read set, rw → write set (folded by spaces-landlock-policy). Sources
+          # keep %t/%h verbatim; the spec is a store file, so systemd never expands
+          # them — the CLI resolves them from the unit env ($XDG_RUNTIME_DIR/$HOME).
+          extraPaths = map (p: { inherit (p) source mode; }) extraPaths;
+        };
+      policySpec = mkPolicySpec {
+        inherit (manifest) connectPorts bindPorts extraPaths;
       };
       policySpecFile = jsonFormat.generate "${unitName}-policy-spec.json" policySpec;
 
@@ -99,17 +109,117 @@ in
           autoRun
           confirmPreview
           multiProfile
-          extraServices
           ;
+        # extraServices / setupPark ride as plain unit-NAME strings regardless of
+        # the manifest form (bare string or confined attrset) — the broker /
+        # gateway only need names: to try-restart the backing daemons after a
+        # successful setup (extraServices), and to stop/park single-instance
+        # vendor daemons for the duration of a setup flow (setupPark).
+        extraServices = extraServiceNames;
+        inherit (manifest) setupPark;
         # setup: true iff a twin setup unit exists — the panel gates its
-        # Link/Setup button on this. extraServices rides verbatim so the broker
-        # can restart the backing daemons after a successful setup.
+        # Link/Setup button on this.
         setup = hasSetup;
         config = lib.mapAttrs (_: c: { inherit (c) description required; }) manifest.config;
         secrets = lib.mapAttrs (_: s: { inherit (s) description required; }) manifest.secrets;
         socket = socketPath;
       };
       definitionFile = jsonFormat.generate "${unitName}.json" definition;
+
+      # Same-uid hardening bouquet (mirrors sandbox.ts landlockHardeningProps +
+      # the shared seccomp denylist): closes the kernel objects Landlock leaves
+      # exposed between same-uid sibling domains. RestrictAddressFamilies is the
+      # coarse egress gate — AF_INET(6) only when the unit opts into `network`;
+      # Landlock netPort refines WHICH ports. Reused verbatim by the main MCP /
+      # setup units and every confined extraService (vendor daemon), so the
+      # sandbox shape can never drift between them.
+      hardeningServiceConfig = network: {
+        RestrictAddressFamilies = if network then "AF_UNIX AF_INET AF_INET6" else "AF_UNIX";
+        NoNewPrivileges = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        RestrictNamespaces = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
+        ProtectControlGroups = true;
+        ProtectClock = true;
+        ProtectProc = "invisible";
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [
+          "@system-service"
+          "~${lib.concatStringsSep " " denySyscalls}"
+        ];
+        SystemCallErrorNumber = "EPERM";
+        MemoryHigh = memoryHigh;
+      };
+
+      # An extraServices entry is EITHER a bare unit-name string (lifecycle only:
+      # the daemon is owned/run by another module — signal's precedent — this
+      # module just wires the socket Wants/After + PartOf) OR a confined attrset
+      # (this module ALSO materialises a full Landlock-confined resident unit for
+      # the backing vendor daemon). Either way the NAME is what the broker /
+      # gateway and the reverse PartOf edge consume.
+      extraServiceName = svc: if builtins.isString svc then svc else svc.name;
+      extraServiceNames = map extraServiceName manifest.extraServices;
+
+      # One record per CONFINED extraService: its systemd key (unit name minus
+      # `.service`), the policy SPEC its ExecStartPre lowers, and the full
+      # confined resident unit — wrapped in the SAME landlock-exec launcher +
+      # hardening bouquet as the MCP unit, closing the inherited gap where
+      # extraServices ran unconfined. Unlike the MCP unit it is NOT socket-
+      # activated (plain resident, wantedBy = [ ]) and carries NO credentials /
+      # shared dir: vendor daemons own their state (granted rw via `extraPaths`,
+      # e.g. Proton Bridge's ~/.local/state tree), never the broker's store. Its
+      # lifecycle matches the bare form — the integration socket Wants/After
+      # pulls it in, PartOf tears it down, and any unitConfig.ConditionPathExists
+      # keeps a pre-onboarding start inert. Bare-string entries contribute none.
+      confinedEntries = map (
+        entry:
+        let
+          key = lib.removeSuffix ".service" entry.name;
+          specFile = jsonFormat.generate "${key}-policy-spec.json" (mkPolicySpec {
+            inherit (entry) connectPorts bindPorts extraPaths;
+          });
+          policyPath = "%t/${key}/landlock.json";
+        in
+        {
+          inherit key specFile;
+          unit = {
+            inherit (entry) description unitConfig;
+            # Resident, not socket-activated: the integration socket Wants/After
+            # this unit; it never wants default.target on its own.
+            wantedBy = [ ];
+            serviceConfig = {
+              Type = "exec";
+              # Lower the per-user policy into this unit's own runtime dir, then
+              # exec the vendor daemon confined by it. No shared dir / credentials.
+              ExecStartPre = [
+                "${landlockPolicyCli} --spec ${specFile} --out ${policyPath}"
+              ];
+              ExecStart = "${landlockExec} --json ${policyPath} -- ${entry.command}";
+              Environment = lib.mapAttrsToList (k: v: "${k}=${v}") entry.environment;
+              # Only the runtime dir (holds the lowered policy); no StateDirectory
+              # — the daemon's state lives where `extraPaths` grants it.
+              RuntimeDirectory = key;
+            }
+            // lib.optionalAttrs entry.restart {
+              # Resilient resident daemon (e.g. Proton Bridge): always restart,
+              # backing off like the broker's own on-failure policy.
+              Restart = "always";
+              RestartSec = 2;
+            }
+            // hardeningServiceConfig entry.network;
+          };
+        }
+      ) (builtins.filter (svc: !builtins.isString svc) manifest.extraServices);
+
+      # Keyed by unit name minus `.service` for systemd.user.services; the spec
+      # files ride alongside so the eval check can lower them with the real CLI.
+      extraServiceUnits = builtins.listToAttrs (map (e: lib.nameValuePair e.key e.unit) confinedEntries);
+      extraServiceSpecs = builtins.listToAttrs (
+        map (e: lib.nameValuePair e.key e.specFile) confinedEntries
+      );
 
       # One shared serviceConfig builder. The main MCP server and (when
       # manifest.setup != null) the twin setup unit run the SAME sandbox — same
@@ -156,31 +266,8 @@ in
             # of that kind.
             LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml";
             LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
-            # Coarse egress gate: AF_INET(6) only when the manifest opts in; the
-            # passed activation socket is always AF_UNIX. Landlock netPort refines
-            # WHICH ports when network is on.
-            RestrictAddressFamilies = if manifest.network then "AF_UNIX AF_INET AF_INET6" else "AF_UNIX";
-            # Same-uid hardening bouquet (mirrors sandbox.ts landlockHardeningProps
-            # + the shared seccomp denylist): closes the kernel objects Landlock
-            # leaves exposed between same-uid sibling domains.
-            NoNewPrivileges = true;
-            RestrictSUIDSGID = true;
-            LockPersonality = true;
-            RestrictNamespaces = true;
-            ProtectKernelTunables = true;
-            ProtectKernelModules = true;
-            ProtectKernelLogs = true;
-            ProtectControlGroups = true;
-            ProtectClock = true;
-            ProtectProc = "invisible";
-            SystemCallArchitectures = "native";
-            SystemCallFilter = [
-              "@system-service"
-              "~${lib.concatStringsSep " " denySyscalls}"
-            ];
-            SystemCallErrorNumber = "EPERM";
-            MemoryHigh = memoryHigh;
-          };
+          }
+          // hardeningServiceConfig manifest.network;
         };
 
       # Socket-unit shape shared by the main and setup channels; SocketMode
@@ -235,12 +322,12 @@ in
           path = socketPath;
           description = "Spaces integration socket: ${manifest.description}";
         }
-        // lib.optionalAttrs (manifest.extraServices != [ ]) {
+        // lib.optionalAttrs (extraServiceNames != [ ]) {
           # Starting this socket pulls in the integration's backing daemons; the
           # spaces-integrations module injects the reverse PartOf onto each so a
           # GUI disable (socket stop) tears them down too.
-          wants = manifest.extraServices;
-          after = manifest.extraServices;
+          wants = extraServiceNames;
+          after = extraServiceNames;
         };
     in
     {
@@ -256,6 +343,9 @@ in
         policySpecFile
         definition
         definitionFile
+        extraServiceNames
+        extraServiceUnits
+        extraServiceSpecs
         ;
     };
 }

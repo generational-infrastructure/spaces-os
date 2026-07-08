@@ -80,6 +80,98 @@ let
     };
   };
 
+  # A confined extraService: this module materialises a full Landlock-confined
+  # resident systemd user service for a backing vendor daemon (e.g. Proton
+  # Bridge), wrapped in the same landlock-exec launcher + hardening bouquet as
+  # the MCP unit. Contrast the bare-string form of `extraServices`, which only
+  # wires lifecycle onto a unit owned/run by another module (signal's precedent).
+  extraServiceSubmodule = lib.types.submodule {
+    options = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          Full user service unit name (incl. `.service`) this module emits for
+          the backing daemon. Its Landlock-confined unit is keyed by this name
+          minus `.service`; the integration's `.socket` gains `Wants=`/`After=`
+          it and the module injects `PartOf=spaces-integration-<name>.socket`.
+        '';
+      };
+      command = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          The daemon's ExecStart line, run through landlock-exec. Whitespace-split
+          by systemd — no shell.
+        '';
+      };
+      description = lib.mkOption {
+        type = lib.types.str;
+        description = "Human-readable unit description for the backing daemon.";
+      };
+      network = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Grant the daemon outbound IP (AF_INET/AF_INET6). Off => AF_UNIX only.
+          `connectPorts` refines WHICH TCP ports when on.
+        '';
+      };
+      connectPorts = lib.mkOption {
+        type = lib.types.listOf lib.types.port;
+        default = [ ];
+        description = "Port-granular TCP egress allowlist (Landlock netPort), like the integration's own.";
+      };
+      bindPorts = lib.mkOption {
+        type = lib.types.listOf lib.types.port;
+        default = [ ];
+        description = ''
+          Port-granular TCP bind allowlist (Landlock netPort, bind_tcp) — e.g. a
+          mail bridge's local IMAP/SMTP ports. Empty (default) => bind stays
+          denied. Requires `network = true` for the AF_INET family gate.
+        '';
+      };
+      extraPaths = lib.mkOption {
+        type = lib.types.listOf extraPathSubmodule;
+        default = [ ];
+        description = ''
+          Host paths folded into the daemon's Landlock policy (`{ source; mode; }`,
+          mode `ro`|`rw`, sources may carry `%t`/`%h`). This is how a vendor daemon
+          reaches its own state dir (rw) — it gets no StateDirectory/credentials.
+        '';
+      };
+      environment = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = ''
+          Environment variables for the daemon unit (values may carry systemd
+          `%t`/`%h` specifiers, expanded by systemd). No SPACES_INTEGRATION_SHARED_DIR
+          is injected — a vendor daemon is not the agent-facing MCP server.
+        '';
+      };
+      unitConfig = lib.mkOption {
+        type = lib.types.attrs;
+        default = { };
+        description = ''
+          Free-form `[Unit]` directives folded onto the emitted unit, e.g.
+          `ConditionPathExists` to gate the daemon on a vault file so a
+          pre-onboarding start is inert. Merged with the module's injected
+          `PartOf`.
+        '';
+      };
+      restart = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          When true the resident daemon gets `Restart=always` + a short
+          `RestartSec` (a resilient companion process, e.g. Proton Bridge). A
+          dedicated boolean rather than a free-form serviceConfig passthrough:
+          the materialiser owns the sandbox shape (hardening,
+          RestrictAddressFamilies, confinement) and never lets a manifest
+          override it — each real need gets a named, typed option instead.
+        '';
+      };
+    };
+  };
+
   integrationSubmodule = lib.types.submodule {
     options = {
       description = lib.mkOption {
@@ -197,15 +289,32 @@ let
         '';
       };
       extraServices = lib.mkOption {
+        type = lib.types.listOf (lib.types.either lib.types.str extraServiceSubmodule);
+        default = [ ];
+        description = ''
+          Backing services that share this integration's GUI lifecycle. Each entry
+          is EITHER a bare unit-name string (incl. `.service`) — the daemon is
+          owned/run by another module and this module only wires lifecycle
+          (signal's precedent) — OR a confined attrset (see extraServiceSubmodule),
+          in which case this module ALSO materialises a full Landlock-confined
+          resident unit for it. Either way the integration's `.socket` gains
+          `Wants=`/`After=` the unit NAME and the module injects
+          `PartOf=spaces-integration-<name>.socket` onto it so a GUI disable
+          (socket stop) tears the backing daemons down too. The world-readable
+          definition carries only the NAMEs (the broker try-restarts them after a
+          successful setup).
+        '';
+      };
+      setupPark = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
         description = ''
-          Full user service unit names (incl. `.service`) that back this
-          integration and share its GUI lifecycle. The integration's `.socket`
-          gains `Wants=`/`After=` each; the spaces-integrations module injects
-          `PartOf=spaces-integration-<name>.socket` onto each so a GUI disable
-          (socket stop) tears the backing daemons down too. Used e.g. by signal
-          to bind the signal-cli daemon + bridge to the Signal integration.
+          Full user unit names the broker stops for the duration of a setup flow
+          (link or remove) and starts again on the way out — single-instance
+          vendor daemons (e.g. Proton Bridge) the sandboxed setup helper must
+          displace to spawn its own transient instance. Lowered verbatim into the
+          definition's `setupPark` (json key `setupPark`); the broker already
+          parses it. Default [] (signal declares none).
         '';
       };
       setup = lib.mkOption {
@@ -253,13 +362,18 @@ let
   extraServicesPartOf = lib.mkMerge (
     lib.concatLists (
       lib.mapAttrsToList (
-        name: manifest:
+        name: i:
         map (svc: {
           ${lib.removeSuffix ".service" svc}.unitConfig.PartOf = [ "spaces-integration-${name}.socket" ];
-        }) manifest.extraServices
-      ) cfg.integrations
+        }) i.extraServiceNames
+      ) built
     )
   );
+
+  # Confined form of extraServices: each integration may materialise full
+  # Landlock-confined resident units for its backing vendor daemons (bare-string
+  # entries contribute none), keyed by unit name minus `.service`.
+  extraServiceUnits = lib.mkMerge (lib.mapAttrsToList (_: i: i.extraServiceUnits) built);
 in
 {
   # Every consumer of the module gets the 5 default integrations (github,
@@ -309,6 +423,7 @@ in
       (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.serviceUnit) built)
       setupServices
       extraServicesPartOf
+      extraServiceUnits
       {
         spaces-integrationd = {
           description = "Spaces integrations broker (enable + secret provisioning over %t/spaces-integrations.sock)";
