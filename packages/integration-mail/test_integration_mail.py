@@ -358,16 +358,16 @@ def test_secret_fingerprint(client):
 
 
 def test_enc_for_port_mapping():
-    assert integration_mail._enc_for_port(993) == "tls"
-    assert integration_mail._enc_for_port("465") == "tls"
-    assert integration_mail._enc_for_port(587) == "start-tls"
-    assert integration_mail._enc_for_port("143") == "start-tls"
-    assert integration_mail._enc_for_port(25) == "none"
-    assert integration_mail._enc_for_port(12345) == "tls"
+    assert integration_mail.enc_for_port(993) == "tls"
+    assert integration_mail.enc_for_port("465") == "tls"
+    assert integration_mail.enc_for_port(587) == "start-tls"
+    assert integration_mail.enc_for_port("143") == "start-tls"
+    assert integration_mail.enc_for_port(25) == "none"
+    assert integration_mail.enc_for_port(12345) == "tls"
 
 
 def test_toml_escape():
-    assert integration_mail._toml_escape('a"b\\c') == 'a\\"b\\\\c'
+    assert integration_mail.toml_escape('a"b\\c') == 'a\\"b\\\\c'
 
 
 @pytest.mark.usefixtures("env")

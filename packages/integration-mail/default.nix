@@ -1,6 +1,9 @@
 { inputs, pkgs, ... }:
 let
-  inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system}) spaces-integration-mcp;
+  inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system})
+    spaces-integration-mcp
+    spaces-himalaya-core
+    ;
 in
 pkgs.python3Packages.buildPythonApplication {
   pname = "integration-mail";
@@ -8,7 +11,10 @@ pkgs.python3Packages.buildPythonApplication {
   pyproject = true;
   src = ./.;
   build-system = [ pkgs.python3Packages.hatchling ];
-  dependencies = [ spaces-integration-mcp ];
+  dependencies = [
+    spaces-integration-mcp
+    spaces-himalaya-core
+  ];
   makeWrapperArgs = [
     "--prefix"
     "PATH"
