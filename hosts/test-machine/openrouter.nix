@@ -32,6 +32,9 @@ let
   internet = {
     networking.useDHCP = lib.mkForce true;
     networking.nameservers = lib.mkForce [ "10.0.2.3" ];
+    # Newer nixpkgs asserts resolvconf must be off when resolv.conf is
+    # written directly.
+    networking.resolvconf.enable = lib.mkForce false;
     environment.etc."resolv.conf".text = lib.mkForce "nameserver 10.0.2.3\n";
   };
 

@@ -49,12 +49,11 @@ _ONBOARDING_HINT = (
     "signal is not linked on this host yet. link it from the panel: "
     "Settings -> Integrations -> Signal -> Link device, then scan the QR "
     "with your phone (Signal app -> Settings -> Linked devices).\n"
-    "(CLI fallback: run `signal-cli link -n \"spaces-$(hostname)\"` on the "
+    '(CLI fallback: run `signal-cli link -n "spaces-$(hostname)"` on the '
     "host shell and scan the printed URL instead.)"
 )
 _UNLINKED_MSG = (
-    "signal is not reachable (daemon down or no linked account).\n"
-    + _ONBOARDING_HINT
+    "signal is not reachable (daemon down or no linked account).\n" + _ONBOARDING_HINT
 )
 
 _SHORT_MAXLEN = 4  # names this short use a normalized distance, not lev<=2
@@ -317,8 +316,8 @@ def _namespace(client, accounts):
         for contact in _safe_list(client, "listContacts", account_id):
             if not isinstance(contact, dict):
                 continue
-            raw = contact.get("number") or contact.get("uuid") or contact.get(
-                "username"
+            raw = (
+                contact.get("number") or contact.get("uuid") or contact.get("username")
             )
             entries.append(
                 {
@@ -375,7 +374,7 @@ def _to_line(entry):
         or entry.get("username")
         or entry.get("raw")
     )
-    return f'{entry["display"]} <{ident}>'
+    return f"{entry['display']} <{ident}>"
 
 
 def _tool_contacts(args, client, accounts):
@@ -467,9 +466,7 @@ def _levenshtein(a, b):
     for i, ca in enumerate(a, 1):
         cur = [i]
         for j, cb in enumerate(b, 1):
-            cur.append(
-                min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
-            )
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
         prev = cur
     return prev[-1]
 
@@ -709,8 +706,10 @@ TOOLS, call_tool, main = make_server(
         _rec(
             "search",
             "Full-text-ish search of message bodies across all threads",
-            {"query": {"type": "string", "description": "text to match"},
-             "limit": _LIMIT},
+            {
+                "query": {"type": "string", "description": "text to match"},
+                "limit": _LIMIT,
+            },
             ["query"],
             _tool_search,
         ),
@@ -724,8 +723,7 @@ TOOLS, call_tool, main = make_server(
         ),
         _rec(
             "groups",
-            "List joined Signal groups (live from the daemon): title, id, "
-            "member count",
+            "List joined Signal groups (live from the daemon): title, id, member count",
             {},
             [],
             _tool_groups,
@@ -758,8 +756,7 @@ TOOLS, call_tool, main = make_server(
         ),
         _rec(
             "fetch_attachment",
-            "Copy a stored attachment into the shared exchange dir and return "
-            "its path",
+            "Copy a stored attachment into the shared exchange dir and return its path",
             {
                 "message_uid": {
                     "type": "string",

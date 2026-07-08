@@ -97,9 +97,11 @@ assert signal.setupServiceUnit != null;
 assert signal.setupSocketUnit != null;
 # Identical sandbox to the main server, only ExecStart differs.
 assert signalMainCfg == signalSetupCfg;
-assert signal.serviceUnit.serviceConfig.ExecStart != signal.setupServiceUnit.serviceConfig.ExecStart;
+assert
+  signal.serviceUnit.serviceConfig.ExecStart != signal.setupServiceUnit.serviceConfig.ExecStart;
 # Setup socket path + posture.
-assert signal.setupSocketUnit.socketConfig.ListenStream == "%t/spaces-integration-signal-setup.sock";
+assert
+  signal.setupSocketUnit.socketConfig.ListenStream == "%t/spaces-integration-signal-setup.sock";
 assert signal.setupSocketUnit.socketConfig.SocketMode == "0600";
 assert !(signal.setupSocketUnit ? wantedBy);
 # ── signal: main socket Wants/After on extraServices ─────────────────────────

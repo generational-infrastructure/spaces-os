@@ -116,7 +116,7 @@ async def handler(ws, *_):
                                 "body": "hi",
                             },
                             "context": (
-                                'to: Alice <+15550001111>\n'
+                                "to: Alice <+15550001111>\n"
                                 '\u26a0 similar to "Alicia" <+15550002222>'
                             ),
                         },

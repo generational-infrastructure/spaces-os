@@ -131,9 +131,7 @@ test("lowerIntegrationPolicy: extraPaths route ro→roDirs, rw→rwDirs", () => 
   expect(p.rwDirs).toContain(
     "/home/alice/.local/state/spaces-integration-signal",
   );
-  expect(p.rwDirs).not.toContain(
-    "/home/x/.local/share/signal-cli/attachments",
-  );
+  expect(p.rwDirs).not.toContain("/home/x/.local/share/signal-cli/attachments");
 });
 
 test("lowerIntegrationPolicy: %t/%h in extraPaths expand from the unit env", () => {
@@ -147,9 +145,7 @@ test("lowerIntegrationPolicy: %t/%h in extraPaths expand from the unit env", () 
   };
   const p = lowerIntegrationPolicy(spec, signalResolved);
   expect(p.rwDirs).toContain("/run/user/1000/signal-cli");
-  expect(p.roDirs).toContain(
-    "/home/alice/.local/share/signal-cli/attachments",
-  );
+  expect(p.roDirs).toContain("/home/alice/.local/share/signal-cli/attachments");
 });
 
 test("lowerIntegrationPolicy: an unresolvable specifier fails closed", () => {

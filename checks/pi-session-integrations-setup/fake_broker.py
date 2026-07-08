@@ -32,9 +32,7 @@ import time
 
 # A valid 1x1 PNG (base64). The panel renders it via a data: URL; the driver
 # only asserts this payload flows through into the QR Image's source.
-KNOWN_PNG = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
-)
+KNOWN_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
 
 STATE = {
     "github": {"description": "GitHub", "enabled": True, "setup": False},
@@ -94,7 +92,11 @@ def stream_setup(conn: socket.socket, name: str) -> None:
     if name == "signal":
         send_line(
             conn,
-            {"event": "qr", "uri": "sgnl://linkdevice?uuid=test-device", "png": KNOWN_PNG},
+            {
+                "event": "qr",
+                "uri": "sgnl://linkdevice?uuid=test-device",
+                "png": KNOWN_PNG,
+            },
         )
         time.sleep(0.6)
         send_line(conn, {"event": "message", "text": "Waiting for the phone to scan…"})

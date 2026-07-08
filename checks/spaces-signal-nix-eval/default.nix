@@ -100,14 +100,18 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     restart = service.serviceConfig.Restart or "";
     wantedBy = lib.concatStringsSep " " (service.wantedBy or [ ]);
     partOf = lib.concatStringsSep " " (lib.toList (service.unitConfig.PartOf or [ ]));
-    condition = lib.concatStringsSep " " (lib.toList (service.unitConfig.ConditionPathExistsGlob or [ ]));
+    condition = lib.concatStringsSep " " (
+      lib.toList (service.unitConfig.ConditionPathExistsGlob or [ ])
+    );
     bridgeExecStart = bridge.serviceConfig.ExecStart;
     bridgeRequires = lib.concatStringsSep " " (bridge.requires or [ ]);
     bridgeAfter = lib.concatStringsSep " " (bridge.after or [ ]);
     bridgeRestart = bridge.serviceConfig.Restart or "";
     bridgeWantedBy = lib.concatStringsSep " " (bridge.wantedBy or [ ]);
     bridgePartOf = lib.concatStringsSep " " (lib.toList (bridge.unitConfig.PartOf or [ ]));
-    bridgeCondition = lib.concatStringsSep " " (lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ]));
+    bridgeCondition = lib.concatStringsSep " " (
+      lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ])
+    );
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
     enabledTmpfiles = lib.concatStringsSep "\n" enabledSystem.config.systemd.user.tmpfiles.rules;
     # The old path-activation unit must no longer exist anywhere.

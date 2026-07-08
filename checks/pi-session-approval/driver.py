@@ -155,9 +155,7 @@ def main():
         # NO approval_request (the child gets a tool error instead). The panel
         # must never render a bubble the gateway did not send.
         ipc("send", "fail-closed:appr-fc")
-        if wait_until(
-            lambda: ipc("approvalState", "appr-fc") != "", timeout_s=3
-        ):
+        if wait_until(lambda: ipc("approvalState", "appr-fc") != "", timeout_s=3):
             die("panel rendered an approval bubble for a fail-closed call")
 
         sys.stderr.write(

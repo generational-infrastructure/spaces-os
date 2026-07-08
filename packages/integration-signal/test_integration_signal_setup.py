@@ -15,8 +15,6 @@ import socket
 import threading
 import time
 
-import pytest
-
 import integration_signal_setup as setup
 
 DEVICE_LINK_URI = "sgnl://linkdevice?uuid=abcd-1234&pub_key=deadbeef"
@@ -61,9 +59,7 @@ class FakeLinkDaemon:
                 conn, _ = self._sock.accept()
             except OSError:
                 return
-            threading.Thread(
-                target=self._handle, args=(conn,), daemon=True
-            ).start()
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     def _handle(self, conn):
         with conn, conn.makefile("rb") as reader:

@@ -44,28 +44,6 @@ let
 
   signalCliPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.signal-cli;
 
-  # signal-cli >= 0.14.5, required by the GUI QR device-linking flow.
-  #
-  # nixpkgs still pins 0.14.2, whose daemon (0.14.2–0.14.4) breaks finishLink
-  # under an active receive subscription: SignalJsonRpcDispatcherHandler
-  # .subscribeReceive collected the receive handlers into an immutable
-  # .toList(), so when finishLink registered the first account the
-  # onManagerAdded callback's handlers.add() threw UnsupportedOperationException
-  # -> JSON-RPC -32603 -> the panel surfaced "Setup failed". Our bridge keeps a
-  # receive subscription live for the daemon's whole lifetime, so linking ALWAYS
-  # hits this path. Fixed upstream in v0.14.5
-  # (Collectors.toCollection(ArrayList::new)).
-  #
-  # overrideAttrs keeps nixpkgs' derivation shape (official release-tarball
-  # fetchurl + JRE makeWrapper) — we only retarget version + src to v0.14.5.
-  signalCli0_14_5 = pkgs.signal-cli.overrideAttrs (_finalAttrs: _prevAttrs: {
-    version = "0.14.5";
-    src = pkgs.fetchurl {
-      url = "https://github.com/AsamK/signal-cli/releases/download/v0.14.5/signal-cli-0.14.5.tar.gz";
-      hash = "sha256-YtOOv+85iNePQ35zKBg7de5UnRETguZsGvcNPr0816c=";
-    };
-  });
-
   identityRel = ".local/share/signal-cli";
   storeRel = ".local/state/spaces/signal";
 in
@@ -85,12 +63,9 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      # >= 0.14.5: 0.14.2–0.14.4 daemons break finishLink under an active
-      # receive subscription (UnsupportedOperationException), so the panel's
-      # GUI QR device-linking flow fails. See signalCli0_14_5 above.
-      default = signalCli0_14_5;
-      defaultText = lib.literalExpression ''pkgs.signal-cli.overrideAttrs (_: { version = "0.14.5"; src = <v0.14.5 release tarball>; })'';
-      description = "signal-cli package to run the daemon from (must be >= 0.14.5 for GUI QR linking).";
+      default = pkgs.signal-cli;
+      defaultText = lib.literalExpression "pkgs.signal-cli";
+      description = "signal-cli package to run the daemon from.";
     };
   };
 

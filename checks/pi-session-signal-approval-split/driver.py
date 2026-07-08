@@ -306,7 +306,9 @@ async def scenarios(state, daemon):
             fail(f"note_to_self should succeed, got {res}")
         note_sends = daemon.sends()
         if len(note_sends) != 1:
-            fail(f"note_to_self should dispatch exactly one send, got {len(note_sends)}")
+            fail(
+                f"note_to_self should dispatch exactly one send, got {len(note_sends)}"
+            )
         if note_sends[0]["params"].get("message") != "remember milk":
             fail(f"note_to_self send carried wrong body: {note_sends[0]}")
 
@@ -349,7 +351,11 @@ async def scenarios(state, daemon):
         )
         if saw:
             fail("a failed preview must not raise an approval prompt")
-        if not res or not res.get("isError") or "recipient is required" not in res["text"]:
+        if (
+            not res
+            or not res.get("isError")
+            or "recipient is required" not in res["text"]
+        ):
             fail(f"a failed preview must surface the signal preview error, got {res}")
         if len(daemon.sends()) != sends_before:
             fail("a fail-closed send must never reach the daemon")

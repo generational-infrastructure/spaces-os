@@ -17,9 +17,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-import pytest
-
 import integration_signal
+import pytest
 from spaces_signal import db as dbmod
 
 # ── fake daemon fixtures ────────────────────────────────────────────
@@ -75,9 +74,7 @@ class FakeDaemon:
                 conn, _ = self._sock.accept()
             except OSError:
                 return
-            threading.Thread(
-                target=self._handle, args=(conn,), daemon=True
-            ).start()
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     def _handle(self, conn):
         with conn, conn.makefile("rb") as reader:
@@ -355,9 +352,7 @@ def test_groups_lists_titles_and_member_count(sig):
 
 
 def test_send_verified_dispatches(sig):
-    text, is_error = call(
-        "send", recipient="+15551230001", name="Bob", body="hi bob"
-    )
+    text, is_error = call("send", recipient="+15551230001", name="Bob", body="hi bob")
     assert is_error is False, text
     sends = sig.daemon.calls("send")
     assert len(sends) == 1
@@ -366,9 +361,7 @@ def test_send_verified_dispatches(sig):
 
 
 def test_send_name_mismatch_refuses_with_true_name(sig):
-    text, is_error = call(
-        "send", recipient="+15551230001", name="Mallory", body="hi"
-    )
+    text, is_error = call("send", recipient="+15551230001", name="Mallory", body="hi")
     assert is_error is True
     assert "Bob" in text  # the true name is disclosed
     assert sig.daemon.calls("send") == []  # nothing dispatched
@@ -377,9 +370,7 @@ def test_send_name_mismatch_refuses_with_true_name(sig):
 def test_send_name_mismatch_lists_near_misses(sig):
     # Claiming "Alicia" for Bob's number: refuses (name mismatch) AND the error
     # points at the near-miss "Alice" from the pooled namespace.
-    text, is_error = call(
-        "send", recipient="+15551230001", name="Alicia", body="hi"
-    )
+    text, is_error = call("send", recipient="+15551230001", name="Alicia", body="hi")
     assert is_error is True
     assert "Alice" in text
     assert sig.daemon.calls("send") == []
@@ -393,9 +384,7 @@ def test_send_name_required(sig):
 
 
 def test_send_unknown_number_refuses(sig):
-    text, is_error = call(
-        "send", recipient="+19998887777", name="Whoever", body="hi"
-    )
+    text, is_error = call("send", recipient="+19998887777", name="Whoever", body="hi")
     assert is_error is True
     assert "not in your contacts" in text
     assert "add them on your phone" in text
@@ -438,18 +427,14 @@ def test_send_group_verified_dispatches(sig):
 
 
 def test_send_group_name_mismatch_refuses(sig):
-    text, is_error = call(
-        "send", recipient="TEAMGROUPID=", name="NotTeam", body="hi"
-    )
+    text, is_error = call("send", recipient="TEAMGROUPID=", name="NotTeam", body="hi")
     assert is_error is True
     assert "Team" in text
     assert sig.daemon.calls("send") == []
 
 
 def test_send_unknown_group_refuses(sig):
-    text, is_error = call(
-        "send", recipient="UNKNOWNGROUPID=", name="Team", body="hi"
-    )
+    text, is_error = call("send", recipient="UNKNOWNGROUPID=", name="Team", body="hi")
     assert is_error is True
     assert "group" in text.lower()
     assert sig.daemon.calls("send") == []
@@ -520,9 +505,7 @@ def test_preview_flags_greek_confusable():
 
 
 def test_similarity_ignores_exact_match():
-    warnings = integration_signal._similarity_scan(
-        "Bob", [("Bob", "+15551230001")]
-    )
+    warnings = integration_signal._similarity_scan("Bob", [("Bob", "+15551230001")])
     assert warnings == []
 
 

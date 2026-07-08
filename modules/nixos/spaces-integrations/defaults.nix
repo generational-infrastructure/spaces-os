@@ -23,7 +23,8 @@ let
   exe = name: lib.getExe pkgsSelf.${name};
   # The package's exported store contract: { config, secrets, tools }.
   schemaOf =
-    name: builtins.fromJSON (builtins.readFile (../../../packages + "/integration-${name}/schema.json"));
+    name:
+    builtins.fromJSON (builtins.readFile (../../../packages + "/integration-${name}/schema.json"));
   configOf = name: (schemaOf name).config;
   secretsOf = name: (schemaOf name).secrets;
 in

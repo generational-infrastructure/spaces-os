@@ -93,8 +93,7 @@ def link(conn):
             conn,
             {
                 "event": "error",
-                "error": "signal daemon socket not configured "
-                f"(${DAEMON_SOCKET_ENV})",
+                "error": f"signal daemon socket not configured (${DAEMON_SOCKET_ENV})",
             },
         )
         return

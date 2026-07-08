@@ -95,9 +95,7 @@ def main() -> None:
         # qr event -> the QR Image becomes visible carrying the streamed png.
         if not wait_until(lambda: ipc("setupPhase") == "qr", timeout_s=15):
             die(f"setup never reached the qr phase (phase={ipc('setupPhase')!r})")
-        if not wait_until(
-            lambda: ipc("visibleOf", "setupQr") == "true", timeout_s=10
-        ):
+        if not wait_until(lambda: ipc("visibleOf", "setupQr") == "true", timeout_s=10):
             die("QR image never became visible after the qr event")
         src = ipc("qrSource")
         if "data:image/png;base64," not in src or "iVBOR" not in src:
@@ -106,7 +104,9 @@ def main() -> None:
         # done -> success state, then auto-close (setupFor clears), plus a
         # re-list fired by the bridge (visible in the broker stats).
         if not wait_until(lambda: ipc("setupFor") == "", timeout_s=15):
-            die(f"setup flow never auto-closed after done (setupFor={ipc('setupFor')!r})")
+            die(
+                f"setup flow never auto-closed after done (setupFor={ipc('setupFor')!r})"
+            )
         if not wait_until(lambda: stats().get("list", 0) > lists_before, timeout_s=10):
             die(f"no re-list after done (before={lists_before}, stats={stats()!r})")
 
@@ -115,7 +115,9 @@ def main() -> None:
         if ipc("click", "setupBtn-caldav") != "ok":
             die("could not click the caldav setup button")
         if not wait_until(lambda: ipc("setupPhase") == "error", timeout_s=15):
-            die(f"caldav setup never reached the error phase (phase={ipc('setupPhase')!r})")
+            die(
+                f"caldav setup never reached the error phase (phase={ipc('setupPhase')!r})"
+            )
         if not wait_until(
             lambda: "device link failed" in ipc("statusText"), timeout_s=10
         ):
