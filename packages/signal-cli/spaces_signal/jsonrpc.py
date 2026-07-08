@@ -183,9 +183,9 @@ class JsonRpcClient:
                     self._deliver_response(int(msg["id"]), msg)
                 elif "method" in msg and self._on_notification is not None:
                     # Notification handler crashes must not kill the
-                    # read loop — the next response may be one the
-                    # main thread is waiting on. Swallow silently;
-                    # the handler is expected to log if it cares.
+                    # read loop. The next response may be one the
+                    # main thread is waiting on. Swallow silently.
+                    # The handler is expected to log if it cares.
                     with contextlib.suppress(Exception):
                         self._on_notification(str(msg["method"]), msg.get("params"))
         finally:

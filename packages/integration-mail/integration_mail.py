@@ -269,7 +269,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _tool_message_send,
         },
     ],
-    secret_field="password",  # noqa: S106 — names the store field, not a credential
+    secret_field="password",  # noqa: S106 (names the store field, not a credential)
     error_label="mail operation",
 )
 

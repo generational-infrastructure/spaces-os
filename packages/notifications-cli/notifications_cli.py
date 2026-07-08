@@ -108,7 +108,7 @@ def _load(path: Path) -> list[Notification]:
     if not isinstance(payload, dict):
         msg = f"{path}: expected object at top level"
         # ValueError is this function's documented malformed-store contract,
-        # matching the JSONDecodeError re-raise above; TypeError would
+        # matching the JSONDecodeError re-raise above. TypeError would
         # escape the callers that translate it into a stderr one-liner.
         raise ValueError(msg)  # noqa: TRY004
     entries = payload.get("notifications") or []

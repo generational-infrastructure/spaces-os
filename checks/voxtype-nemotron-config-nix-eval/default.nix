@@ -8,13 +8,13 @@
 # does NOT catch but the feature depends on:
 #
 #   - `spaces.voxtype.engine = "nemotron"` must serialize `engine = "nemotron"`
-#     and emit a `[nemotron]` table — a typo in the enum or a missing engine
-#     branch would fall back to whisper silently;
+#     and emit a `[nemotron]` table. A typo in the enum or a missing engine
+#     branch would fall back to whisper silently.
 #   - `[nemotron] model` must carry the configured value verbatim (a store
 #     path, or a passed-through registry name / absolute path). We assert on a
 #     path override here to keep this check cheap: the default resolves to a
 #     Nix-fetched ~2.6 GB model directory, whose realisation is deliberately
-#     out of this ~1s check;
+#     out of this ~1s check.
 #   - `target_lang` and `streaming` reach the TOML under the snake_case keys
 #     voxtype's serde expects, with the documented defaults.
 #

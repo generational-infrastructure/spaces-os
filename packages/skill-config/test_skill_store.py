@@ -1,5 +1,5 @@
 """skill_store: the pure store library. Everything here is in-process —
-no subprocess, no sys.exit; failures are typed exceptions.
+no subprocess, no sys.exit. Failures are typed exceptions.
 """
 
 import json

@@ -174,8 +174,8 @@ def spawn(
     """Spawn a helper process (fake daemon, mock LLM, ...) with its stdout+
     stderr captured to <work_dir>/<log_name>.
     """
-    # The handle is handed to the child and must outlive this function;
-    # it is reclaimed when the Popen object (and this fd) are GC'd.
+    # The handle is handed to the child and must outlive this function.
+    # It is reclaimed when the Popen object (and this fd) are GC'd.
     log = (Path(work_dir) / log_name).open("w")
     return subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
 
@@ -244,7 +244,7 @@ class Quickshell:
 
     def start(self) -> subprocess.Popen:
         # Both handles are handed to the qs child process and must outlive
-        # this method; they are reclaimed when the process is reaped/GC'd.
+        # this method. They are reclaimed when the process is reaped/GC'd.
         out = (Path(self.work_dir) / self.LOG_NAMES[0]).open("w")
         err = (Path(self.work_dir) / self.LOG_NAMES[1]).open("w")
         self.proc = subprocess.Popen(

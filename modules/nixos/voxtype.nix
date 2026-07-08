@@ -4,7 +4,7 @@
 # systemd user service that starts with the graphical session. The service
 # prefers a user override at ~/.config/voxtype/config.toml (written by the
 # voxtype-tuner "Apply" action) over the generated config, so tuning takes
-# effect on a plain `systemctl --user restart voxtype` — no nixos-rebuild.
+# effect on a plain `systemctl --user restart voxtype`, no nixos-rebuild.
 #
 # Three engines are supported:
 #   - whisper  (default): whisper.cpp, batch transcription. Uses the
@@ -20,7 +20,7 @@
 #     ASR export, driven through parakeet-rs's `Nemotron` type. Reuses the
 #     `parakeet` ONNX feature, so it also needs a `parakeet*` variant. Its
 #     ~2.6 GB model is Nix-fetched (see `nemotronModels`) so a nemotron host
-#     stays offline like whisper — unlike parakeet, voxtype ships no
+#     stays offline like whisper. Unlike parakeet, voxtype ships no
 #     first-use downloader for it. CPU-only (fp32) upstream today.
 #
 # Keybinding: Mod+Space  (defined in niri.nix)
@@ -67,7 +67,7 @@ let
   # Nemotron models, Nix-fetched so a nemotron host's closure stays offline
   # exactly like the whisper ggml models above. Shared verbatim with the
   # voxtype-tuner package (packages/voxtype-tuner/default.nix), which drives the
-  # same engine from its Transcribe button — factored into one file so the
+  # same engine from its Transcribe button. Factored into one file so the
   # ~2.6 GB git-LFS fetch is defined once, not duplicated.
   nemotronModels = import ./nemotron-models.nix { inherit pkgs lib; };
 
@@ -97,7 +97,7 @@ let
         engine = "nemotron";
         nemotron = {
           # A known registry name resolves to the Nix-fetched offline model
-          # directory; any other value passes through as an absolute path or a
+          # directory. Any other value passes through as an absolute path or a
           # name voxtype resolves under ~/.local/share/voxtype/models/.
           model = toString (nemotronModels.${cfg.nemotronModel} or cfg.nemotronModel);
           target_lang = cfg.nemotronTargetLang;
@@ -160,14 +160,14 @@ let
   # voxtype's built-in defaults (src/config/load.rs), which would re-enable
   # the hotkey grab and the OSD we disable above.
   #
-  # voxtype does not merge config files — an override layers over voxtype's
+  # voxtype does not merge config files. An override layers over voxtype's
   # *built-in* defaults, not over the generated config, so a partial
   # hand-written override sheds the settings above. The tuner always writes
   # a complete file (seeded from /etc/xdg/voxtype/config.toml).
   #
   # Failure mode: a malformed override makes the daemon exit at startup and
-  # Restart=on-failure loops it — the same as running voxtype by hand with a
-  # bad config. Deliberately no silent fallback to the generated config; a
+  # Restart=on-failure loops it, the same as running voxtype by hand with a
+  # bad config. Deliberately no silent fallback to the generated config. A
   # half-applied config is worse than a visibly failing unit. Escape hatch:
   # fix or delete the override, then `systemctl --user restart voxtype`.
   #
@@ -237,7 +237,7 @@ in
         Model for engine = "nemotron". A known registry name (currently only
         "nemotron-3.5-asr-streaming-0.6b") resolves to a Nix-fetched model
         directory baked into the closure, so the host stays offline like the
-        whisper engine. Any other value is passed through verbatim — either an
+        whisper engine. Any other value is passed through verbatim, either an
         absolute path to a model directory you provide, or a registry name
         voxtype resolves under ~/.local/share/voxtype/models/ (note: voxtype
         ships no first-use downloader for nemotron, so a bare name only works
@@ -346,7 +346,7 @@ in
 
     # Reference copy of the generated config, read by the voxtype-tuner as
     # "system defaults" ($VOXTYPE_TUNER_DEFAULT_CONFIG fallback). voxtype
-    # itself never reads /etc/xdg — its native system fallback is
+    # itself never reads /etc/xdg. Its native system fallback is
     # /etc/voxtype/config.toml (src/config/root.rs SYSTEM_PATH), and the
     # daemon below is started with an explicit -c anyway. User overrides are
     # honored by daemonScript, not through this file.

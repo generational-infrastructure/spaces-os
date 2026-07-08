@@ -2,25 +2,25 @@
 # mechanism (modules/nixos/voxtype.nix).
 #
 # The voxtype-tuner "Apply" action writes ~/.config/voxtype/config.toml and
-# restarts the user service; the daemon must then actually run against that
+# restarts the user service. The daemon must then actually run against that
 # file. The unit used to pin `-c <store config>` unconditionally, so a user
-# override was written and silently IGNORED — while the module comment
+# override was written and silently IGNORED, while the module comment
 # claimed overrides worked. This check guards the fix:
 #
-#   - ExecStart is the voxtype-daemon wrapper, not a bare `voxtype -c ...`;
-#   - the wrapper script (realised and read from the store — cheap: it execs
+#   - ExecStart is the voxtype-daemon wrapper, not a bare `voxtype -c ...`.
+#   - the wrapper script (realised and read from the store, cheap: it execs
 #     voxtype by name, so its closure is bash + the generated TOML, not the
 #     voxtype package) contains both the $XDG_CONFIG_HOME user probe and the
 #     store-config fallback. The probe is load-bearing: `voxtype -c
 #     <missing>` silently runs on built-in defaults (src/config/load.rs),
-#     which would re-enable the hotkey grab and OSD the module disables;
-#   - functionally: a stub `voxtype` on PATH captures argv — with no user
-#     file the wrapper passes the store config; with one present (plain
-#     $HOME and $XDG_CONFIG_HOME flavours) it passes the user file;
-#   - `voxtype` stays resolvable by name in the unit's PATH;
+#     which would re-enable the hotkey grab and OSD the module disables.
+#   - functionally: a stub `voxtype` on PATH captures argv. With no user
+#     file the wrapper passes the store config. With one present (plain
+#     $HOME and $XDG_CONFIG_HOME flavours) it passes the user file.
+#   - `voxtype` stays resolvable by name in the unit's PATH.
 #   - cuda variants keep the LD_LIBRARY_PATH env wiring, which the wrapper
-#     indirection must not eat (x86_64-only and eval-only — no CUDA builds;
-#     build coverage of the variant itself lives in voxtype-parakeet-cuda).
+#     indirection must not eat (x86_64-only and eval-only, no CUDA builds.
+#     Build coverage of the variant itself lives in voxtype-parakeet-cuda).
 #
 # Builds only the wrapper + generated-config derivations. ~1s, no VM.
 { pkgs, inputs, ... }:
@@ -46,8 +46,8 @@ let
   execStart = (unit defaultSystem).serviceConfig.ExecStart;
   configToml = defaultSystem.config.environment.etc."xdg/voxtype/config.toml".source;
 
-  # The wrapper execs `voxtype` by name; the unit's PATH must provide it.
-  # Touching .name is eval-only — it does not build the package.
+  # The wrapper execs `voxtype` by name. The unit's PATH must provide it.
+  # Touching .name is eval-only. It does not build the package.
   unitPathHasVoxtype = lib.any (p: lib.hasInfix "voxtype" p.name) (unit defaultSystem).path;
 
   # CUDA on aarch64 is fragile and unused (same scoping rationale as the
@@ -96,7 +96,7 @@ pkgs.runCommand "voxtype-user-override-nix-eval-test"
       || { echo "FAIL: wrapper lost the store-config fallback ($configToml)"; exit 1; }
 
     [ "$unitPathHasVoxtype" = "true" ] \
-      || { echo "FAIL: voxtype package missing from the unit's path — the wrapper execs it by name"; exit 1; }
+      || { echo "FAIL: voxtype package missing from the unit's path, the wrapper execs it by name"; exit 1; }
 
     # functional: which config does the wrapper hand to voxtype?
     mkdir -p stub
@@ -120,7 +120,7 @@ pkgs.runCommand "voxtype-user-override-nix-eval-test"
     ARGV_OUT="$PWD/argv-home" HOME="$PWD/home-tuned" "$execStart"
     printf '%s\n' -c "$PWD/home-tuned/.config/voxtype/config.toml" daemon > expected-home
     diff -u expected-home argv-home \
-      || { echo "FAIL: override in ~/.config was ignored — the bug this check guards"; exit 1; }
+      || { echo "FAIL: override in ~/.config was ignored, the bug this check guards"; exit 1; }
 
     # $XDG_CONFIG_HOME relocation is honored too
     mkdir -p xdg-conf/voxtype

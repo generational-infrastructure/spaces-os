@@ -1,7 +1,7 @@
 # Single source of truth for ruff across the repo (treefmt's ruff-check and
-# ruff-format resolve this file; per-package pyprojects must NOT carry
+# ruff-format resolve this file. Per-package pyprojects must NOT carry
 # [tool.ruff] sections or they would silently shadow it).
-# Everything is enabled; each ignore below carries its own reason.
+# Everything is enabled. Each ignore below carries its own reason.
 target-version = "py313"
 line-length = 88
 
@@ -41,10 +41,10 @@ ignore = [
   "TD",      # TODO comment formatting
   "D205",    # docstring summary reflow: cosmetic, large existing surface
   "D400",    # docstring trailing period: cosmetic, same as D415
-  "TRY003",  # raise-vanilla-args: compliance forces custom exception classes;
-             # changing raised types is a semantic API change out of scope here
+  "TRY003",  # raise-vanilla-args: compliance forces custom exception classes.
+             # Changing raised types is a semantic API change out of scope here
   "S310",    # urlopen audit: our urllib CLIs build URLs from https:// string
-             # literals, so the scheme can't be attacker-controlled; same
+             # literals, so the scheme can't be attacker-controlled. Same
              # false-positive audit class as S603/S607 above
 ]
 
@@ -53,7 +53,7 @@ ignore = [
 # - S101/S105/SLF001/PLR2004: asserts, dummy secrets, private-member access
 #   and literal expected values are what test code is made of
 # - PT009/PT027: suites are deliberately unittest.TestCase-based (run under
-#   pytest in the nix sandbox); rewriting ~540 assertions is pure churn
+#   pytest in the nix sandbox). Rewriting ~540 assertions is pure churn
 # - ANN: no annotation requirement for test code
 # - RUF001: tests assert on real-world Unicode API payloads (wiki content)
 # - S106: dummy tokens passed as keyword args in fixtures, same class as S105

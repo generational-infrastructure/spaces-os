@@ -151,7 +151,7 @@ def start_daemon(daemon_bin: str, stub: str, mock_url: str, port: int, work_dir:
 
 def stage_bin(harness_dir: str, work_dir: str) -> str:
     """PATH overlay for quickshell: just the harness's notify-send witness
-    (sessions run daemon-side; the panel only execs notify-send).
+    (sessions run daemon-side, the panel only execs notify-send).
     """
     bin_dir = os.path.join(work_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)

@@ -104,7 +104,7 @@ def parse_summary(data: dict[str, Any]) -> dict[str, Any]:
 
 def parse_extract(data: dict[str, Any]) -> str:
     """Return the plaintext extract from a prop=extracts response. The
-    pages map is keyed by pageid; a missing page carries no extract.
+    pages map is keyed by pageid. A missing page carries no extract.
     """
     for page in data.get("query", {}).get("pages", {}).values():
         return page.get("extract", "")

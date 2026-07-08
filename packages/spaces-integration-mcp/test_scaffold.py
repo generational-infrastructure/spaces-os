@@ -60,7 +60,7 @@ class Client:
         self.sock.close()
 
 
-# unique per test run; os.getpid() keeps parallel test workers apart
+# unique per test run, os.getpid() keeps parallel test workers apart
 sock_path = str(Path(tempfile.mkdtemp()) / f"spaces-mcp-test-{os.getpid()}.sock")
 
 

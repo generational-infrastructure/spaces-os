@@ -249,7 +249,7 @@ def api_dispatch(req: dict, store: SkillStore) -> dict:
 
 
 def _parse_api_request(text: str) -> dict:
-    """Parse one JSON request object; raises ValueError on any malformation
+    """Parse one JSON request object. Raises ValueError on any malformation
     (including "well-formed JSON but not an object").
     """
     req = json.loads(text)

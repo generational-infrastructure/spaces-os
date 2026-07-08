@@ -421,8 +421,8 @@ def render_flake_nix(gs: libcalamares.GlobalStorage) -> str:
     return expr.replace("@@extra_modules@@", extra)
 
 
-# kbd-model-map columns: consolemap, xlayout, xmodel, xvariant, xoptions —
-# a row is only matchable once it carries at least the xvariant column.
+# kbd-model-map columns: consolemap, xlayout, xmodel, xvariant, xoptions.
+# A row is only matchable once it carries at least the xvariant column.
 KBD_MODEL_MAP_MIN_FIELDS = 4
 
 

@@ -13,7 +13,7 @@ _: {
   programs.shellcheck.enable = true;
 
   # Python: rule selection lives in the repo-root ruff.toml (single source
-  # of truth); ruff resolves it for every file treefmt hands it.
+  # of truth). Ruff resolves it for every file treefmt hands it.
   programs.ruff-format.enable = true;
   programs.ruff-check.enable = true;
 

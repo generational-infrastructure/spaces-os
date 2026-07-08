@@ -69,7 +69,7 @@ def _list_xml(start: str, end: str) -> str:
 
 def _ctx(vals: dict[str, str]) -> dict[str, str]:
     """One profile's request context (base/origin URLs, Basic auth header)
-    from its store values; the scaffold has already gated the required fields.
+    from its store values. The scaffold has already gated the required fields.
     """
     base = vals["url"].rstrip("/")
     m = re.match(r"^(https?://[^/]+)", base)
@@ -295,7 +295,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _with_ctx(_tool_delete),
         },
     ],
-    secret_field="password",  # noqa: S106 — names the store field, not a credential
+    secret_field="password",  # noqa: S106 (names the store field, not a credential)
 )
 
 

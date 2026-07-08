@@ -299,7 +299,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _tok(_tool_open_pull_request),
         },
     ],
-    secret_field="token",  # noqa: S106 — names the store field, not a credential
+    secret_field="token",  # noqa: S106 (names the store field, not a credential)
     multi_profile=False,
 )
 

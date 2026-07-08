@@ -271,7 +271,7 @@ def _exchange_code(
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
-    except urllib.request.HTTPError as e:  # pragma: no cover — network branch
+    except urllib.request.HTTPError as e:  # pragma: no cover (network branch)
         detail = e.read().decode(errors="replace")
         msg = f"token exchange failed: HTTP {e.code} {detail.strip()}"
         raise SystemExit(msg) from e

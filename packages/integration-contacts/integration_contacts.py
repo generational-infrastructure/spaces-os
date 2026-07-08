@@ -69,7 +69,7 @@ def _http(
 ) -> tuple[int | None, dict[str, str], bytes, str | None]:
     """Run an authenticated urllib request. Returns
     (status, headers-dict, raw-bytes, None) or (None-ish, {}, b"", error-text).
-    2xx (including 207 Multi-Status) is success; anything else is an error.
+    2xx (including 207 Multi-Status) is success. Anything else is an error.
     """
     token = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     headers = {"Authorization": f"Basic {token}"}
@@ -363,7 +363,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _vals(_tool_delete),
         },
     ],
-    secret_field="password",  # noqa: S106 — names the store field, not a credential
+    secret_field="password",  # noqa: S106 (names the store field, not a credential)
 )
 
 

@@ -3,9 +3,9 @@
 # the voxtype-tuner package (its Transcribe button), so the ~2.6 GB fetch is
 # defined ONCE here rather than duplicated in both.
 #
-# Each entry is a directory of five files that MUST live together — encoder.onnx
+# Each entry is a directory of five files that MUST live together: encoder.onnx
 # loads encoder.onnx.data by relative name. We symlink rather than copy so the
-# 2.4 GB .data blob is not duplicated in the store; if onnxruntime is ever seen
+# 2.4 GB .data blob is not duplicated in the store. If onnxruntime is ever seen
 # to canonicalise the model path (which would break relative external-data
 # resolution through the symlink), switch `ln -s` to `cp`. Hashes are the
 # git-LFS oids of the community ONNX export at altunenes/parakeet-rs.

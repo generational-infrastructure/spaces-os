@@ -29,7 +29,7 @@ from qs_harness import wait_until as _wait_until
 
 def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.2) -> bool:
     """Exception-swallowing poll: predicates here go through `qs ipc`, which
-    raises on a transient failure — treat a raise as 'not yet'.
+    raises on a transient failure. Treat a raise as 'not yet'.
     """
 
     def safe():
