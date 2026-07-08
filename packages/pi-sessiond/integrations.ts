@@ -123,9 +123,7 @@ export interface RegistryEntry {
   parameters: Record<string, unknown>;
   socketPath: string;
   autoRun: boolean; // on the manifest allowlist ⇒ runs without a prompt
-  // The gateway-only preview tool called (same socket, same args) before the
-  // approval prompt; its text rides the approval as untrusted `context`.
-  // Absent ⇒ the prompt carries no context. Never itself a registered tool.
+  // This entry's confirmPreview tool (see IntegrationDef.confirmPreview).
   confirmPreview?: string;
 }
 
@@ -296,11 +294,16 @@ export async function buildRegistry(
     // unitName): %t/spaces-integration-<name>.sock. socketDir is the daemon's
     // %t ($XDG_RUNTIME_DIR), shared with the integration units' user manager.
     const socketPath = join(opts.socketDir, `spaces-integration-${name}.sock`);
-    // Preview tools are gateway-internal: the gateway calls them directly by
-    // name over the same socket, so they get no registry entry and thus never
-    // reach the child spec (decision 1: "never listed").
+    // Preview tools get no registry entry (see IntegrationDef.confirmPreview).
     const previewTools = new Set(Object.values(def.confirmPreview));
     const tools = await discover(socketPath);
+    const toolNames = new Set(tools.map((t) => t.name));
+    for (const preview of previewTools) {
+      if (!toolNames.has(preview))
+        console.error(
+          `integrations: ${name} confirmPreview tool ${JSON.stringify(preview)} not discovered`,
+        );
+    }
     for (const t of tools) {
       if (!NAME_RE.test(t.name)) continue;
       if (previewTools.has(t.name)) continue;

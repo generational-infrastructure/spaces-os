@@ -1,4 +1,4 @@
-"""Tests for spaces_signal.db — schema, idempotency, thread/queue queries."""
+"""Tests for spaces_signal.db — schema, idempotency, thread queries."""
 
 from __future__ import annotations
 

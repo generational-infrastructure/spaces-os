@@ -146,13 +146,14 @@ def migrate_legacy_state(new_db_path: Path, legacy_db_path: Path) -> bool:
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     # check_same_thread=False: the bridge serialises writes via its
-    # own db_lock and the CLI workers each only ever hold one thread.
+    # own db_lock and the integration-signal reader holds one thread.
     # The GIL keeps individual sqlite3 calls atomic; WAL handles
     # reader/writer concurrency across processes.
     db = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     db.row_factory = sqlite3.Row
-    # WAL keeps the read CLI (sandbox) from blocking the bridge writer
-    # and vice versa — both processes touch the same file concurrently.
+    # WAL keeps the integration-signal MCP read-only reader from
+    # blocking the bridge writer and vice versa — both processes
+    # touch the same file concurrently.
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
     db.execute("PRAGMA foreign_keys=ON")
@@ -168,8 +169,9 @@ def connect(path: Path) -> sqlite3.Connection:
 def connect_readonly(path: Path) -> sqlite3.Connection:
     """Open the message DB read-only via SQLite's URI `mode=ro`.
 
-    Used by the sandbox-side `signal` CLI: the bind-mount that
-    surfaces messages.db into the sandbox is also `mode = "ro"` in
+    Used by the integration-signal MCP server read path
+    (`integration_signal.py` `_open_db` -> `connect_readonly`): the
+    bind-mount that surfaces messages.db is also `mode = "ro"` in
     NixOS, so the kernel enforces this at the filesystem layer
     too. The URI mode is belt-and-braces, but it also produces
     clean OperationalError on attempted writes rather than IOError
@@ -178,9 +180,7 @@ def connect_readonly(path: Path) -> sqlite3.Connection:
     Does not run schema migrations and does not flip journal mode
     — either would itself be a write. Caller is responsible for
     the file already existing; on a fresh, unlinked host the
-    bridge has not produced one yet and the CLI's
-    `_signal_running()` check should already have short-circuited
-    before we get here.
+    bridge has not produced one yet.
     """
     uri = f"file:{path}?mode=ro"
     db = sqlite3.connect(uri, uri=True, isolation_level=None, check_same_thread=False)

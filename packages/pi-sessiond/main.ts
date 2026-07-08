@@ -661,15 +661,15 @@ function raiseApproval(
   // the panel renders {once, session, deny} and replies approval_response.
   // `context` (a confirmPreview tool's output) is untrusted preview text the
   // panel renders as plain quoted text; omitted when the tool has no preview.
-  const payload: Record<string, unknown> = {
+  const payload = {
     type: "approval_request",
     id,
     integration: entry.integration,
     tool: entry.tool,
     toolName: entry.piName,
     args,
+    context, // undefined ⇒ JSON.stringify omits the key
   };
-  if (context !== undefined) payload.context = context;
   broadcast(session, payload);
   if (session.subscribers.size === 0) {
     fireNotifier(session, "approval", entry.piName);
@@ -685,6 +685,31 @@ function resolveApproval(
 ): void {
   if (id === undefined) return;
   session.ledger.settleApproval(id, decision ?? "deny");
+}
+
+// A hung preview must not stall the approval gate: cap it well under the 60s
+// default so a stuck preview fails closed quickly.
+const PREVIEW_TIMEOUT_MS = 10000;
+
+// Resolve the untrusted approval context for an entry by calling its
+// confirmPreview tool (same socket, same args). Fails CLOSED: a preview
+// error/timeout returns {ok:false} carrying the tool error text so the caller
+// replies it and raises NO approval (design decision 5). No preview ⇒ {ok:true}
+// with an undefined context.
+async function approvalContext(
+  entry: RegistryEntry,
+  args: Record<string, unknown>,
+): Promise<{ ok: true; context?: string } | { ok: false; text: string }> {
+  if (!entry.confirmPreview) return { ok: true };
+  const preview = await callIntegrationTool(
+    entry.socketPath,
+    entry.confirmPreview,
+    args,
+    undefined,
+    PREVIEW_TIMEOUT_MS,
+  );
+  if (preview.isError) return { ok: false, text: preview.text };
+  return { ok: true, context: preview.text };
 }
 
 // A forwarded integration tool call (from the spaces-integrations extension):
@@ -722,23 +747,12 @@ async function handleIntegrationCall(
   const args = isRecord(call.args) ? call.args : {};
 
   if (!entry.autoRun && !session.toolGrants.has(piName)) {
-    let context: string | undefined;
-    if (entry.confirmPreview) {
-      // Render the untrusted approval context by calling the preview tool with
-      // the same args over the same socket. A preview error/timeout FAILS
-      // CLOSED: reply the tool error and raise NO approval (design decision 5).
-      const preview = await callIntegrationTool(
-        entry.socketPath,
-        entry.confirmPreview,
-        args,
-      );
-      if (preview.isError) {
-        reply(preview.text, true);
-        return;
-      }
-      context = preview.text;
+    const ctx = await approvalContext(entry, args);
+    if (!ctx.ok) {
+      reply(ctx.text, true);
+      return;
     }
-    const decision = await raiseApproval(session, entry, args, context);
+    const decision = await raiseApproval(session, entry, args, ctx.context);
     if (decision === "deny") {
       reply("Denied by user.", true); // the server is never called
       return;

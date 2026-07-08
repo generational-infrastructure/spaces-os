@@ -63,6 +63,8 @@ function expandSpecifiers(
   runtimeDir: string | undefined,
   homeDir: string | undefined,
 ): string {
+  // systemd's `%%` literal-percent escape is not supported here; sources are
+  // lib.nix-authored and never contain a literal percent.
   return source.replace(/%[th]/g, (m) => {
     const [value, varName] =
       m === "%t" ? [runtimeDir, "XDG_RUNTIME_DIR"] : [homeDir, "HOME"];
@@ -87,6 +89,12 @@ export function lowerIntegrationPolicy(
   const expand = (source: string): string =>
     expandSpecifiers(source, resolved.runtimeDir, resolved.homeDir);
   const extra = spec.extraPaths ?? [];
+  for (const e of extra) {
+    if (e.mode !== "ro" && e.mode !== "rw")
+      throw new Error(
+        `spaces-landlock-policy: extraPaths entry "${e.source}" has invalid mode ${JSON.stringify(e.mode)} (expected "ro" or "rw")`,
+      );
+  }
   const extraRw = extra
     .filter((e) => e.mode === "rw")
     .map((e) => expand(e.source));

@@ -108,7 +108,19 @@ QtObject {
     return _streamer.createObject(root, { path: path, payload: payload, lineCb: onLine ?? null, closeCb: onClose ?? null });
   }
 
+  // Parse one NDJSON line; null on failure. Shared by the one-shot and
+  // stream readers (which forward null on a bad line).
+  function _tryParse(line) {
+    let msg = null;
+    try {
+      msg = JSON.parse(line);
+    } catch (_e) {}
+    return msg;
+  }
+
   function _deliver(raw) {
+    // Own try/catch (not _tryParse): a syntactically valid `null` line is a
+    // delivered message(null), only a parse THROW is a bad line.
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -212,13 +224,7 @@ QtObject {
 
       connected: path !== ""
       parser: SplitParser {
-        onRead: line => {
-          let msg = null;
-          try {
-            msg = JSON.parse(line);
-          } catch (_e) {}
-          shot._finish(msg, line);
-        }
+        onRead: line => shot._finish(root._tryParse(line), line)
       }
       onConnectionStateChanged: {
         if (connected) {
@@ -268,12 +274,8 @@ QtObject {
       connected: path !== ""
       parser: SplitParser {
         onRead: line => {
-          let msg = null;
-          try {
-            msg = JSON.parse(line);
-          } catch (_e) {}
           if (strm.lineCb)
-            strm.lineCb(msg, line);
+            strm.lineCb(root._tryParse(line), line);
         }
       }
       onConnectionStateChanged: {

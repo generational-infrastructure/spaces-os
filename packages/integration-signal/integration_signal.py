@@ -45,6 +45,9 @@ DAEMON_SOCKET_ENV = "SPACES_SIGNAL_DAEMON_SOCKET"  # signal-cli JSON-RPC socket
 ATTACHMENTS_DIR_ENV = "SPACES_SIGNAL_ATTACHMENTS_DIR"  # signal-cli attachment store
 # messages.db path comes from SPACES_SIGNAL_DB via dbmod.default_db_path().
 
+# JSON-RPC socket connect timeout (seconds); shared with the setup helper.
+_DAEMON_CONNECT_TIMEOUT = 5.0
+
 _ONBOARDING_HINT = (
     "signal is not linked on this host yet. link it from the panel: "
     "Settings -> Integrations -> Signal -> Link device, then scan the QR "
@@ -57,6 +60,8 @@ _UNLINKED_MSG = (
 )
 
 _SHORT_MAXLEN = 4  # names this short use a normalized distance, not lev<=2
+_NEAR_LEV = 2  # max Levenshtein edits a normal-length name may differ and warn
+_SHORT_NEAR_RATIO = 0.25  # names <= _SHORT_MAXLEN warn under this dist/len ratio
 
 
 class SignalError(Exception):
@@ -69,6 +74,12 @@ class SignalError(Exception):
 # path (and these helpers with it) is slated to be gutted to a forwarder-only
 # service in a later migration step; the integration owns this logic now.
 
+# signal-cli's `send` arg grammar: a bare uuid is 36 chars with 4 dashes; a
+# username is a short "name.NN" handle. These tie the shape checks below to it.
+_UUID_LEN = 36
+_UUID_DASHES = 4
+_USERNAME_MAXLEN = 40
+
 
 def classify_recipient(value):
     """One of 'number', 'uuid', 'username', 'group' — the distinct argument
@@ -76,9 +87,9 @@ def classify_recipient(value):
     value = value.strip()
     if value.startswith("+"):
         return "number"
-    if len(value) == 36 and value.count("-") == 4:
+    if len(value) == _UUID_LEN and value.count("-") == _UUID_DASHES:
         return "uuid"
-    if "." in value and len(value) < 40:
+    if "." in value and len(value) < _USERNAME_MAXLEN:
         return "username"
     return "group"
 
@@ -104,6 +115,12 @@ def is_self_recipient(recipient, accounts):
     return False
 
 
+def _account_id(acct):
+    """The id signal-cli's `account` param wants for a linked account:
+    number preferred, uuid fallback."""
+    return acct.get("number") or acct.get("uuid")
+
+
 # ── daemon probe / client ───────────────────────────────────────────
 
 
@@ -112,7 +129,7 @@ def _connect_daemon():
     if not path:
         raise SignalError(_UNLINKED_MSG)
     try:
-        return JsonRpcClient(path, connect_timeout=5.0)
+        return JsonRpcClient(path, connect_timeout=_DAEMON_CONNECT_TIMEOUT)
     except OSError as exc:
         raise SignalError(_UNLINKED_MSG) from exc
 
@@ -312,7 +329,7 @@ def _namespace(client, accounts):
     its sanitized display name, raw id, and owning account (for dispatch)."""
     entries = []
     for acct in accounts:
-        account_id = acct.get("number") or acct.get("uuid")
+        account_id = _account_id(acct)
         for contact in _safe_list(client, "listContacts", account_id):
             if not isinstance(contact, dict):
                 continue
@@ -407,8 +424,12 @@ def _tool_groups(args, client, accounts):
 # ── similarity / confusable scan (decision 6) ───────────────────────
 # UTS#39-lite: a small hand-rolled Latin/Cyrillic/Greek homoglyph table folds a
 # name to a "skeleton". Two names with equal skeletons but different casefolds
-# look identical across scripts => a mixed-script confusable. stdlib only.
+# look identical across scripts => a mixed-script confusable. Pure stdlib, and
+# deliberately so: the near-miss check uses exact Levenshtein edit distance
+# (see `_is_near`), not difflib's ratio — the edit-distance regime is intended.
 
+# INTENTIONALLY PARTIAL: a hand-grown UTS#39-lite subset (Cyrillic/Greek ->
+# Latin lookalikes), not a complete Unicode confusables map.
 _CONFUSABLES = {
     # Cyrillic (lowercase; casefold runs first) -> Latin lookalike
     "\u0430": "a",  # а
@@ -471,11 +492,31 @@ def _levenshtein(a, b):
     return prev[-1]
 
 
+def _is_confusable(claimed_skel, display):
+    """True when `display`'s skeleton equals the claimed name's — a mixed-script
+    homoglyph lookalike (already known to differ from the exact claimed name)."""
+    return _skeleton(display) == claimed_skel
+
+
+def _is_near(t_norm, c_norm):
+    """True when `c_norm` is a near-miss of the claimed `t_norm`: within
+    `_NEAR_LEV` Levenshtein edits, or a `_SHORT_NEAR_RATIO` normalized distance
+    for short names (<= `_SHORT_MAXLEN`)."""
+    dist = _levenshtein(t_norm, c_norm)
+    maxlen = max(len(t_norm), len(c_norm))
+    if maxlen == 0:
+        return False
+    if maxlen <= _SHORT_MAXLEN:
+        return dist / maxlen <= _SHORT_NEAR_RATIO
+    return dist <= _NEAR_LEV
+
+
 def _similarity_scan(claimed, candidates):
     """Warn (never block) about namespace names close to the claimed name.
     `candidates` is a list of (display, raw_id). Skeleton-equal-but-not-identical
-    names are flagged as mixed-script confusables; the rest use Levenshtein
-    (<=2, or a normalized 0.25 threshold for short names). Raw id beside each."""
+    names are flagged as mixed-script confusables; the rest warn within
+    Levenshtein `_NEAR_LEV`, or a normalized `_SHORT_NEAR_RATIO` for short names
+    (<= `_SHORT_MAXLEN`). Raw id beside each."""
     if not claimed:
         return []
     t_norm = _norm(claimed)
@@ -485,15 +526,9 @@ def _similarity_scan(claimed, candidates):
         c_norm = _norm(display)
         if c_norm == t_norm:
             continue  # the exact (case/width/script-identical) intended match
-        if _skeleton(display) == t_skel:
+        if _is_confusable(t_skel, display):
             out.append(f'\u26a0 confusable (mixed-script): "{display}" [{raw}]')
-            continue
-        dist = _levenshtein(t_norm, c_norm)
-        maxlen = max(len(t_norm), len(c_norm))
-        if maxlen == 0:
-            continue
-        near = (dist / maxlen <= 0.25) if maxlen <= _SHORT_MAXLEN else (dist <= 2)
-        if near:
+        elif _is_near(t_norm, c_norm):
             out.append(f'similar: "{display}" [{raw}]')
     return out
 
@@ -508,7 +543,7 @@ def _similar(claimed, entries):
 def _dispatch_send(client, entry, body):
     account = entry["account"]
     params = {
-        "account": account.get("number") or account.get("uuid"),
+        "account": _account_id(account),
         "message": body,
     }
     if entry["kind"] == "group":
@@ -518,6 +553,19 @@ def _dispatch_send(client, entry, body):
     else:
         params["recipient"] = [entry["raw"]]
     client.call("send", params)
+
+
+def _unknown_recipient_msg(recipient, *, preview):
+    """Notice for a recipient not found in the namespace. The kind->reason tail
+    is the single source; `preview` selects the preview's shorter `to: UNKNOWN …`
+    framing, while send's fuller refusal also nudges 'add them on your phone'."""
+    group = classify_recipient(recipient) == "group"
+    reason = "not a group you've joined" if group else "not in your contacts"
+    if preview:
+        label = "UNKNOWN GROUP" if group else "UNKNOWN"
+        return f"to: {label} {recipient} — {reason}"
+    tail = "" if group else " — add them on your phone"
+    return f"{recipient!r} is {reason}{tail}"
 
 
 def _tool_send(args, client, accounts):
@@ -543,12 +591,7 @@ def _tool_send(args, client, accounts):
     entries = _namespace(client, accounts)
     match = _find_by_id(entries, recipient)
     if match is None:
-        if classify_recipient(recipient) == "group":
-            return f"{recipient!r} is not a group you've joined", True
-        return (
-            f"{recipient!r} is not in your contacts — add them on your phone",
-            True,
-        )
+        return _unknown_recipient_msg(recipient, preview=False), True
     true_name = match["display"]
     if true_name != name:
         msg = (
@@ -568,12 +611,11 @@ def _tool_note_to_self(args, client, accounts):
     if not body:
         return "body is required", True
     account = accounts[0]
-    account_id = account.get("number") or account.get("uuid")
-    own = account.get("number") or account.get("uuid")
+    own = _account_id(account)
     if not own:
         return "linked account has no number or uuid", True
     # signal-cli treats a send to your own number as a note-to-self.
-    client.call("send", {"account": account_id, "message": body, "recipient": [own]})
+    client.call("send", {"account": own, "message": body, "recipient": [own]})
     return "sent to your note-to-self thread", False
 
 
@@ -589,12 +631,7 @@ def _tool_send_preview(args, client, accounts):
     else:
         match = _find_by_id(entries, recipient)
         if match is None:
-            if classify_recipient(recipient) == "group":
-                lines.append(
-                    f"to: UNKNOWN GROUP {recipient} — not a group you've joined"
-                )
-            else:
-                lines.append(f"to: UNKNOWN {recipient} — not in your contacts")
+            lines.append(_unknown_recipient_msg(recipient, preview=True))
         else:
             lines.append("to: " + _to_line(match))
             if name and match["display"] != name:
@@ -777,6 +814,8 @@ TOOLS, call_tool, main = make_server(
             {
                 "recipient": {"type": "string"},
                 "name": {"type": "string"},
+                # `body` is unread by preview; the shape mirrors `send` so the
+                # gateway can forward send's args (incl body) straight through.
                 "body": {"type": "string"},
             },
             ["recipient"],

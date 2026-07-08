@@ -17,6 +17,17 @@ import QtQuick
 QtObject {
   id: root
 
+  // ── wire protocol (broker request `op` + reply status) ─────────────
+  // Mirror packages/spaces-integrationd/protocol.go: one op per request.
+  readonly property string opList: "list"
+  readonly property string opSetField: "set-field"
+  readonly property string opRemoveProfile: "remove-profile"
+  readonly property string opEnable: "enable"
+  readonly property string opDisable: "disable"
+  readonly property string opSetup: "setup"
+  // Reply's `op` field on success.
+  readonly property string statusOk: "ok"
+
   // Set by the parent (the broker socket address). Empty ⇒ inert.
   property string sockPath: ""
 
@@ -43,6 +54,12 @@ QtObject {
   // streams NDJSON events (qr | message | done | error) until the
   // broker closes it. Only one flow runs at a time.
 
+  // Setup-stream event names (broker → panel `event` field).
+  readonly property string evQr: "qr"
+  readonly property string evMessage: "message"
+  readonly property string evDone: "done"
+  readonly property string evError: "error"
+
   // One parsed setup event line relayed from the broker.
   signal setupEvent(var ev)
   // The setup connection closed (done, error, cancel, or peer EOF).
@@ -53,15 +70,15 @@ QtObject {
   property bool setupActive: false
   property var _setupSock: null
 
-  function refresh() { _request({ op: "list" }); }
+  function refresh() { _request({ op: root.opList }); }
   function setField(integration, profile, field, value) {
-    _request({ op: "set-field", integration: integration, profile: profile, field: field, value: value });
+    _request({ op: root.opSetField, integration: integration, profile: profile, field: field, value: value });
   }
   function removeProfile(integration, profile) {
-    _request({ op: "remove-profile", integration: integration, profile: profile });
+    _request({ op: root.opRemoveProfile, integration: integration, profile: profile });
   }
-  function enable(integration) { _request({ op: "enable", integration: integration }); }
-  function disable(integration) { _request({ op: "disable", integration: integration }); }
+  function enable(integration) { _request({ op: root.opEnable, integration: integration }); }
+  function disable(integration) { _request({ op: root.opDisable, integration: integration }); }
 
   // Open the sandboxed setup channel for `integration`. The broker
   // validates it is enabled + setup-capable, starts the twin setup
@@ -69,8 +86,8 @@ QtObject {
   // when inert, already running, or the socket could not be opened.
   function startSetup(integration) {
     if (root.sockPath === "") { root.lastError = "no integrations socket"; return false; }
-    if (root.setupActive) return false;
-    const s = _sock.stream({ op: "setup", integration: integration },
+    if (root.setupActive) { root.lastError = "setup already running"; return false; }
+    const s = _sock.stream({ op: root.opSetup, integration: integration },
                            (ev, raw) => root._onSetupLine(ev, raw),
                            () => root._onSetupClosed());
     if (!s) { root.lastError = "could not open integrations socket"; return false; }
@@ -100,12 +117,12 @@ QtObject {
   function _onReply(req, ev, raw) {
     if (raw === "") {
       root.lastError = (req.op || "request") + ": no reply from broker";
-      if (req.op !== "list") root.acked(req.op, req.integration || "", false, root.lastError);
+      if (req.op !== root.opList) root.acked(req.op, req.integration || "", false, root.lastError);
       return;
     }
     if (!ev) { root.lastError = "malformed broker reply"; return; }
-    if (req.op === "list") {
-      if (ev.op === "ok" && Array.isArray(ev.integrations)) {
+    if (req.op === root.opList) {
+      if (ev.op === root.statusOk && Array.isArray(ev.integrations)) {
         root.integrations = ev.integrations;
         root.loaded = true;
         root.lastError = "";
@@ -115,7 +132,7 @@ QtObject {
       }
       return;
     }
-    const ok = ev.op === "ok";
+    const ok = ev.op === root.statusOk;
     root.lastError = ok ? "" : (ev.error || (req.op + " failed"));
     root.acked(req.op, req.integration || "", ok, root.lastError);
     // A successful mutation changed broker state — re-list so the form,
@@ -129,7 +146,7 @@ QtObject {
     // A completed link changed broker/service state — re-list so the
     // form (enable badges, setup gating) reflects the freshly linked
     // integration.
-    if (ev.event === "done") root.refresh();
+    if (ev.event === root.evDone) root.refresh();
   }
 
   function _onSetupClosed() {

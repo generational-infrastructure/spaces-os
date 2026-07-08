@@ -49,11 +49,12 @@ let
 in
 {
   options.services.spaces-signal = {
-    enable = lib.mkEnableOption "signal-cli daemon backing the spaces AI agent's Signal skill" // {
+    enable = lib.mkEnableOption "signal-cli daemon backing the Signal integration" // {
       # Tracks pi-chat: this module is imported only by pi-chat, so
       # every pi-chat consumer gets the signal infrastructure for
-      # free. The *units* stay condition-gated below, so a fresh
-      # system pays nothing until the user runs `signal-cli link`.
+      # free. The daemon/bridge units carry no wantedBy; the Signal
+      # integration socket-pulls them (Wants/After on its socket), so
+      # they run even before the user links a device.
       # Tracking (rather than a flat `true`) keeps the module inert
       # when pi-chat is imported but disabled, instead of tripping
       # the pi-chat-required assertion below.

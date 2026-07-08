@@ -493,7 +493,7 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       example = lib.literalExpression ''
-        { SPACES_SIGNAL_DB = "%h/.local/state/spaces/signal/messages.db"; }
+        { MY_SKILL_DB = "%h/.local/state/spaces/my-skill/data.db"; }
       '';
       description = ''
         Extra environment variables for the per-session pi sandboxes of the
@@ -706,7 +706,7 @@ in
     # Every built-in skill's CLI lands on the system PATH. Two reasons:
     #   1. pi-sessiond forwards a PATH containing the system
     #      profile into every per-session sandbox, so the agent can shell
-    #      out by bare name (`signal threads`, `osm-cli search …`,
+    #      out by bare name (`osm-cli search …`,
     #      `caldav list …`, etc.) without each skill's SKILL.md having
     #      to spell out absolute store paths.
     #   2. The user can run the exact same commands from a normal

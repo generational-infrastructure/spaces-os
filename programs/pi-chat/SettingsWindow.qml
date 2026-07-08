@@ -45,6 +45,30 @@ FloatingWindow {
   property string setupText: ""
   property string setupErrorText: ""
 
+  // Setup-pane lifecycle phases (setupPhase). "connecting" is entered on
+  // launch, then the broker's stream drives qr → done | error.
+  readonly property string phaseConnecting: "connecting"
+  readonly property string phaseQr: "qr"
+  readonly property string phaseDone: "done"
+  readonly property string phaseError: "error"
+
+  // Success pane lingers on its done state this long before auto-closing,
+  // so the user registers the "linked" confirmation.
+  readonly property int setupDoneCloseMs: 1200
+
+  // Linking QR render size (square), matched to the inline pane width.
+  readonly property int setupQrSize: 180
+
+  // Reset the inline setup pane to one consistent state: every view-state
+  // var assigned, so no teardown site leaves a stale subset behind.
+  function resetSetup(phase, forName) {
+    root.setupFor = forName || "";
+    root.setupPhase = phase || "";
+    root.setupPng = "";
+    root.setupText = "";
+    root.setupErrorText = "";
+  }
+
   IntegrationsBridge {
     id: integrations
     sockPath: root.integrationsSockPath
@@ -56,18 +80,18 @@ FloatingWindow {
     target: integrations
     function onSetupEvent(ev) {
       if (!ev || !ev.event) return;
-      if (ev.event === "qr") {
+      if (ev.event === integrations.evQr) {
         root.setupPng = ev.png || "";
-        root.setupPhase = "qr";
-      } else if (ev.event === "message") {
+        root.setupPhase = root.phaseQr;
+      } else if (ev.event === integrations.evMessage) {
         root.setupText = ev.text || "";
-      } else if (ev.event === "done") {
+      } else if (ev.event === integrations.evDone) {
         root.setupText = "";
-        root.setupPhase = "done";
+        root.setupPhase = root.phaseDone;
         setupAutoClose.restart();
-      } else if (ev.event === "error") {
+      } else if (ev.event === integrations.evError) {
         root.setupErrorText = ev.error || "";
-        root.setupPhase = "error";
+        root.setupPhase = root.phaseError;
       }
     }
   }
@@ -75,13 +99,8 @@ FloatingWindow {
   // On success the pane shows its done state briefly, then closes.
   Timer {
     id: setupAutoClose
-    interval: 1200
-    onTriggered: {
-      root.setupFor = "";
-      root.setupPhase = "";
-      root.setupPng = "";
-      root.setupText = "";
-    }
+    interval: root.setupDoneCloseMs
+    onTriggered: root.resetSetup()
   }
 
   // One profile's provisioning form: config fields (plain) + secret fields
@@ -274,11 +293,7 @@ FloatingWindow {
               visible: intRow.modelData.enabled === true && intRow.modelData.setup === true
               text: I18n.tr("settings.integrations-setup")
               onClicked: {
-                root.setupFor = intRow.modelData.name;
-                root.setupPhase = "connecting";
-                root.setupPng = "";
-                root.setupText = "";
-                root.setupErrorText = "";
+                root.resetSetup(root.phaseConnecting, intRow.modelData.name);
                 integrations.startSetup(intRow.modelData.name);
               }
             }
@@ -323,16 +338,16 @@ FloatingWindow {
 
               Image {
                 objectName: "setupQr"
-                visible: root.setupPhase === "qr" && root.setupPng !== ""
+                visible: root.setupPhase === root.phaseQr && root.setupPng !== ""
                 Layout.alignment: Qt.AlignHCenter
-                sourceSize.width: 180
-                sourceSize.height: 180
+                sourceSize.width: root.setupQrSize
+                sourceSize.height: root.setupQrSize
                 fillMode: Image.PreserveAspectFit
                 source: root.setupPng !== "" ? ("data:image/png;base64," + root.setupPng) : ""
               }
 
               NText {
-                visible: root.setupPhase === "qr"
+                visible: root.setupPhase === root.phaseQr
                 Layout.fillWidth: true
                 text: I18n.tr("settings.integrations-setup-scan")
                 wrapMode: Text.Wrap
@@ -348,22 +363,21 @@ FloatingWindow {
                 wrapMode: Text.Wrap
                 pointSize: Style.fontSizeS
                 text: {
-                  if (root.setupPhase === "done") return I18n.tr("settings.integrations-setup-done");
-                  if (root.setupPhase === "error") return I18n.tr("settings.integrations-setup-error", { error: root.setupErrorText });
+                  if (root.setupPhase === root.phaseDone) return I18n.tr("settings.integrations-setup-done");
+                  if (root.setupPhase === root.phaseError) return I18n.tr("settings.integrations-setup-error", { error: root.setupErrorText });
                   return root.setupText;
                 }
-                color: root.setupPhase === "error" ? Color.mError : Color.mOnSurfaceVariant
+                color: root.setupPhase === root.phaseError ? Color.mError : Color.mOnSurfaceVariant
               }
 
               NButton {
-                visible: root.setupPhase !== "done"
+                visible: root.setupPhase !== root.phaseDone
                 text: I18n.tr("settings.integrations-setup-cancel")
                 bgColor: Color.mSurfaceVariant
                 fgColor: Color.mOnSurfaceVariant
                 onClicked: {
                   integrations.cancelSetup();
-                  root.setupFor = "";
-                  root.setupPhase = "";
+                  root.resetSetup();
                 }
               }
             }

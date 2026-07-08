@@ -37,16 +37,17 @@ import qrcode
 # setup helper binds/inherits its listening socket exactly like the server.
 from spaces_integration_mcp import _listen
 from spaces_signal.jsonrpc import JsonRpcClient, JsonRpcError
+# The daemon socket env name and connect timeout are owned by the server module;
+# import them so setup and server can't drift.
+from integration_signal import DAEMON_SOCKET_ENV, _DAEMON_CONNECT_TIMEOUT
 
 SERVER_NAME = "integration-signal-setup"
 
-DAEMON_SOCKET_ENV = "SPACES_SIGNAL_DAEMON_SOCKET"  # signal-cli JSON-RPC socket
 
 # The daemon is brought up in parallel (socket Wants=) and may still be warming
 # up when we connect, so retry with a short backoff up to the deadline.
 _DAEMON_CONNECT_DEADLINE = 15.0
 _DAEMON_RETRY_INTERVAL = 0.5
-_DAEMON_CONNECT_TIMEOUT = 5.0
 
 # startLink is a local daemon round-trip; finishLink blocks on the human
 # scanning the QR with their phone, so it gets a much more generous window.

@@ -225,13 +225,15 @@ let
     }
   ) cfg.integrations;
 
-  # Twin setup service/socket for every integration that declares `setup`.
-  setupServices = lib.concatMapAttrs (
-    _: i: lib.optionalAttrs (i.setupServiceUnit != null) { ${i.setupUnitName} = i.setupServiceUnit; }
-  ) built;
-  setupSockets = lib.concatMapAttrs (
-    _: i: lib.optionalAttrs (i.setupSocketUnit != null) { ${i.setupUnitName} = i.setupSocketUnit; }
-  ) built;
+  # Twin setup service/socket for every integration that declares `setup`. Both
+  # maps share one body, differing only by which twin field they pick.
+  pickSetup =
+    field:
+    lib.concatMapAttrs (
+      _: i: lib.optionalAttrs (i.${field} != null) { ${i.setupUnitName} = i.${field}; }
+    ) built;
+  setupServices = pickSetup "setupServiceUnit";
+  setupSockets = pickSetup "setupSocketUnit";
 
   # Reverse edge of each integration's `extraServices`: inject
   # PartOf=spaces-integration-<name>.socket into the backing units (owned by

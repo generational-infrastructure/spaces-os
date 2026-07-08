@@ -41,8 +41,8 @@ var fieldPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 type Server struct {
 	defsDir      string
 	stateDir     string
-	runtimeDir   string
-	runtimeRoot  string
+	runtimeDir   string // scratch base for staging work dirs (store.go workDir), distinct from runtimeRoot
+	runtimeRoot  string // %t user runtime root: the twin setup sockets (…-setup.sock) live directly here
 	selfUid      uint32
 	credsEncrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
 	credsDecrypt []string // argv prefix: <prefix...> --name=secrets <in> <out>
@@ -66,6 +66,14 @@ func NewServer(defsDir, stateDir, runtimeDir, runtimeRoot string, credsEncrypt, 
 }
 
 func errAck(msg string) Ack { return Ack{Op: "error", Error: msg} }
+
+// Unit-name helpers: the systemd unit names and the twin setup socket filename
+// are each derived from the integration name in exactly one place.
+func socketUnit(name string) string       { return fmt.Sprintf("spaces-integration-%s.socket", name) }
+func serviceUnit(name string) string      { return fmt.Sprintf("spaces-integration-%s.service", name) }
+func setupSocketUnit(name string) string  { return fmt.Sprintf("spaces-integration-%s-setup.socket", name) }
+func setupServiceUnit(name string) string { return fmt.Sprintf("spaces-integration-%s-setup.service", name) }
+func setupSockPath(name string) string    { return fmt.Sprintf("spaces-integration-%s-setup.sock", name) }
 
 // Serve accepts connections until the listener is closed.
 func (s *Server) Serve(l net.Listener) {
@@ -97,16 +105,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	var raw json.RawMessage
-	if err := json.NewDecoder(conn).Decode(&raw); err != nil {
+	var req Request
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		if !errors.Is(err, io.EOF) {
 			_ = enc.Encode(Ack{Op: "error", Error: "malformed request"})
 		}
-		return
-	}
-	var req Request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		_ = enc.Encode(Ack{Op: "error", Error: "malformed request"})
 		return
 	}
 	// "setup" is the one op that is not request/reply: it takes over the
@@ -194,7 +197,7 @@ func (s *Server) ReconcileEnabled() {
 			log.Printf("reconcile: skip %s (no definition)", name)
 			continue
 		}
-		unit := fmt.Sprintf("spaces-integration-%s.socket", name)
+		unit := socketUnit(name)
 		if msg, err := s.runSystemctl("start", unit); err != nil {
 			log.Printf("reconcile: start %s: %s", unit, msg)
 		}
@@ -203,7 +206,7 @@ func (s *Server) ReconcileEnabled() {
 
 // setupSocketPath is the twin setup unit's %t/spaces-integration-<name>-setup.sock.
 func (s *Server) setupSocketPath(integration string) string {
-	return filepath.Join(s.runtimeRoot, fmt.Sprintf("spaces-integration-%s-setup.sock", integration))
+	return filepath.Join(s.runtimeRoot, setupSockPath(integration))
 }
 
 // setup drives the sandboxed setup channel for one integration. Unlike every
@@ -226,8 +229,8 @@ func (s *Server) setup(conn net.Conn, integration string) {
 		return
 	}
 
-	setupSock := fmt.Sprintf("spaces-integration-%s-setup.socket", integration)
-	setupSvc := fmt.Sprintf("spaces-integration-%s-setup.service", integration)
+	setupSock := setupSocketUnit(integration)
+	setupSvc := setupServiceUnit(integration)
 	if msg, err := s.runSystemctl("start", setupSock); err != nil {
 		fail("systemctl start failed: " + msg)
 		return
@@ -273,19 +276,31 @@ func (s *Server) prepareSetup(integration string) (Definition, error) {
 	}
 	// The setup service loads the same LoadCredential[Encrypted] sources as the
 	// main service, so they must exist at start (same staging as enable).
+	if err := s.stageStores(d, integration); err != nil {
+		return Definition{}, err
+	}
+	return d, nil
+}
+
+// stageStores creates the integration's LoadCredential[Encrypted] sources when
+// absent — an empty config.toml and a sealed empty secrets blob for whichever
+// stores the definition declares — so the unit (or its setup twin) finds them
+// at start. Shared by enable and prepareSetup; each caller applies its own
+// error style to the wrapped result.
+func (s *Server) stageStores(d Definition, integration string) error {
 	if len(d.Config) > 0 {
 		if err := ensureFile(s.configFile(integration)); err != nil {
-			return Definition{}, fmt.Errorf("config store: %w", err)
+			return fmt.Errorf("config store: %w", err)
 		}
 	}
 	if len(d.Secrets) > 0 {
 		if _, err := os.Stat(s.sealedSecrets(integration)); errors.Is(err, os.ErrNotExist) {
 			if err := s.sealEmpty(integration); err != nil {
-				return Definition{}, fmt.Errorf("secrets store: %w", err)
+				return fmt.Errorf("secrets store: %w", err)
 			}
 		}
 	}
-	return d, nil
+	return nil
 }
 
 // dialSetup connects to the twin setup unit's socket, retrying briefly to ride
@@ -355,7 +370,7 @@ func (s *Server) relay(client, helper net.Conn) bool {
 // service after a successful setup so a freshly-linked account/state is picked
 // up. Best-effort: try-restart no-ops inactive units and a failure is logged.
 func (s *Server) postSetupRestart(integration string, extraServices []string) {
-	units := append([]string{fmt.Sprintf("spaces-integration-%s.service", integration)}, extraServices...)
+	units := append([]string{serviceUnit(integration)}, extraServices...)
 	if msg, err := s.runSystemctl("try-restart", units...); err != nil {
 		log.Printf("systemctl try-restart %v: %s", units, msg)
 	}
@@ -613,17 +628,8 @@ func (s *Server) enable(integration string) Ack {
 	}
 
 	// The unit's LoadCredential[Encrypted] sources must exist at start.
-	if len(d.Config) > 0 {
-		if err := ensureFile(s.configFile(integration)); err != nil {
-			return errAck("config store: " + err.Error())
-		}
-	}
-	if len(d.Secrets) > 0 {
-		if _, err := os.Stat(s.sealedSecrets(integration)); errors.Is(err, os.ErrNotExist) {
-			if err := s.sealEmpty(integration); err != nil {
-				return errAck("secrets store: " + err.Error())
-			}
-		}
+	if err := s.stageStores(d, integration); err != nil {
+		return errAck(err.Error())
 	}
 
 	st := s.loadState()
@@ -632,7 +638,7 @@ func (s *Server) enable(integration string) Ack {
 		return errAck("write state: " + err.Error())
 	}
 
-	unit := fmt.Sprintf("spaces-integration-%s.socket", integration)
+	unit := socketUnit(integration)
 	if msg, err := s.runSystemctl("start", unit); err != nil {
 		// Roll back: enabled.json must not claim an integration whose socket
 		// unit failed to start. Store survives the rollback.
@@ -659,8 +665,8 @@ func (s *Server) disable(integration string) Ack {
 		return errAck("unknown integration: " + integration)
 	}
 
-	sock := fmt.Sprintf("spaces-integration-%s.socket", integration)
-	svc := fmt.Sprintf("spaces-integration-%s.service", integration)
+	sock := socketUnit(integration)
+	svc := serviceUnit(integration)
 	if msg, err := s.runSystemctl("stop", sock, svc); err != nil {
 		// Best-effort: the units may simply not be running. State still flips
 		// to disabled so the gateway stops exposing the tools.
@@ -713,7 +719,7 @@ func (s *Server) sealEmpty(integration string) error {
 // connection re-activates with fresh credentials. Best-effort: the write is
 // already durable, so a restart failure is logged, never surfaced as an error.
 func (s *Server) tryRestart(integration string) {
-	unit := fmt.Sprintf("spaces-integration-%s.service", integration)
+	unit := serviceUnit(integration)
 	if msg, err := s.runSystemctl("try-restart", unit); err != nil {
 		log.Printf("systemctl try-restart %s: %s", unit, msg)
 	}

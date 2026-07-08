@@ -110,6 +110,9 @@ _PROFILE_PROP = {
 }
 
 FINGERPRINT_TOOL = "secret_fingerprint"
+# Truncated fingerprint width: leading hex chars of the sha256 digest (see the
+# make_server docstring's "first 16 hex chars").
+_FINGERPRINT_HEX = 16
 
 
 def _advertised(records, multi_profile):
@@ -175,7 +178,7 @@ def make_server(
             "name": FINGERPRINT_TOOL,
             "needs_fields": (secret_field,),
             "impl": lambda args, profile, vals: (
-                hashlib.sha256(vals[secret_field].encode("utf-8")).hexdigest()[:16],
+                hashlib.sha256(vals[secret_field].encode("utf-8")).hexdigest()[:_FINGERPRINT_HEX],
                 False,
             ),
         }

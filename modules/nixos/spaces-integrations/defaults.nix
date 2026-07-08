@@ -27,29 +27,35 @@ let
     builtins.fromJSON (builtins.readFile (../../../packages + "/integration-${name}/schema.json"));
   configOf = name: (schemaOf name).config;
   secretsOf = name: (schemaOf name).secrets;
+  # Name-derived + individually-mkDefault'd triplet every integration shares:
+  # command from the integration-<name> package, config/secrets from its schema.
+  # `rest` carries the per-integration fields (each mkDefault'd inline); its keys
+  # are disjoint from the triplet, so every field keeps its own overridable default.
+  mkInteg =
+    name: rest:
+    {
+      command = lib.mkDefault (exe "integration-${name}");
+      config = lib.mkDefault (configOf name);
+      secrets = lib.mkDefault (secretsOf name);
+    }
+    // rest;
 in
 {
   services.spaces-integrations.integrations = {
-    github = {
+    github = mkInteg "github" {
       description = lib.mkDefault "GitHub";
-      command = lib.mkDefault (exe "integration-github");
       network = lib.mkDefault true;
       connectPorts = lib.mkDefault [ 443 ];
-      config = lib.mkDefault (configOf "github");
-      secrets = lib.mkDefault (secretsOf "github");
       autoRun = lib.mkDefault [ "get_repo" ];
     };
 
     # Migrated from the calendar skill: CalDAV over the panel-provisioned,
     # host+tpm2-sealed store. Read tools auto-run; writes confirm per call.
-    caldav = {
+    caldav = mkInteg "caldav" {
       description = lib.mkDefault "Calendar (CalDAV)";
-      command = lib.mkDefault (exe "integration-caldav");
       network = lib.mkDefault true;
       connectPorts = lib.mkDefault [ 443 ];
       multiProfile = lib.mkDefault true;
-      config = lib.mkDefault (configOf "caldav");
-      secrets = lib.mkDefault (secretsOf "caldav");
       autoRun = lib.mkDefault [
         "list"
         "get"
@@ -58,14 +64,11 @@ in
     };
 
     # Migrated from the contacts skill: CardDAV.
-    contacts = {
+    contacts = mkInteg "contacts" {
       description = lib.mkDefault "Contacts (CardDAV)";
-      command = lib.mkDefault (exe "integration-contacts");
       network = lib.mkDefault true;
       connectPorts = lib.mkDefault [ 443 ];
       multiProfile = lib.mkDefault true;
-      config = lib.mkDefault (configOf "contacts");
-      secrets = lib.mkDefault (secretsOf "contacts");
       autoRun = lib.mkDefault [
         "discover"
         "search"
@@ -74,9 +77,8 @@ in
     };
 
     # Migrated from the email skill: IMAP/SMTP via himalaya. send confirms.
-    mail = {
+    mail = mkInteg "mail" {
       description = lib.mkDefault "Email (IMAP/SMTP)";
-      command = lib.mkDefault (exe "integration-mail");
       network = lib.mkDefault true;
       connectPorts = lib.mkDefault [
         993
@@ -86,8 +88,6 @@ in
         25
       ];
       multiProfile = lib.mkDefault true;
-      config = lib.mkDefault (configOf "mail");
-      secrets = lib.mkDefault (secretsOf "mail");
       autoRun = lib.mkDefault [
         "envelope_list"
         "message_read"
@@ -100,13 +100,10 @@ in
     # rendered `send_preview`. No network: the signal-cli daemon owns the
     # internet, so the integration only reaches the daemon socket + the local
     # message store granted via extraPaths.
-    signal = {
+    signal = mkInteg "signal" {
       description = lib.mkDefault "Signal";
-      command = lib.mkDefault (exe "integration-signal");
       network = lib.mkDefault false;
       connectPorts = lib.mkDefault [ ];
-      config = lib.mkDefault (configOf "signal");
-      secrets = lib.mkDefault (secretsOf "signal");
       autoRun = lib.mkDefault [
         "threads"
         "read_thread"

@@ -2,8 +2,9 @@ package main
 
 // Protocol messages for the spaces-integrationd socket.
 //
-// One JSON request per connection, one JSON reply, then close. The broker runs
-// as the user in their own --user manager; SO_PEERCRED authenticates only that
+// One JSON request per connection, one JSON reply, then close — except "setup",
+// which keeps the connection open and streams SetupEvent NDJSON lines. The
+// broker runs as the user in their own --user manager; SO_PEERCRED authenticates only that
 // the caller is the SAME uid (a sibling user cannot reach %t/spaces-
 // integrations.sock anyway — its dir is 0700 — but the check is the explicit
 // authorisation primitive). Every op acts on this one user's own state.

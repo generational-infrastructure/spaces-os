@@ -49,6 +49,7 @@ in
       unitName = "spaces-integration-${name}";
       # %t = $XDG_RUNTIME_DIR, %S = $XDG_STATE_HOME for a --user unit.
       policyPath = "%t/${unitName}/landlock.json";
+      socketPath = "%t/${unitName}.sock";
       # File-exchange dir (design §9.4 step 6): a plain dir the agent SESSION
       # also grants itself rw (same uid, no idmap). clone_to_workspace populates
       # it; the agent edits the tree with its native file tools. Lives outside
@@ -56,6 +57,7 @@ in
       sharedDir = "%t/spaces-integration-share/${name}";
       hasSecrets = manifest.secrets != { };
       hasConfig = manifest.config != { };
+      hasSetup = manifest.setup != null;
       # Per-integration store the broker manages under its StateDirectory
       # (spaces-integrationd): config.toml is plaintext config rows -> the
       # `config` LoadCredential; `secrets` is the host+tpm2-sealed secrets.toml
@@ -99,10 +101,10 @@ in
         # setup: true iff a twin setup unit exists — the panel gates its
         # Link/Setup button on this. extraServices rides verbatim so the broker
         # can restart the backing daemons after a successful setup.
-        setup = manifest.setup != null;
+        setup = hasSetup;
         config = lib.mapAttrs (_: c: { inherit (c) description required; }) manifest.config;
         secrets = lib.mapAttrs (_: s: { inherit (s) description required; }) manifest.secrets;
-        socket = "%t/${unitName}.sock";
+        socket = socketPath;
       };
       definitionFile = jsonFormat.generate "${unitName}.json" definition;
 
@@ -178,12 +180,25 @@ in
           };
         };
 
+      # Socket-unit shape shared by the main and setup channels; SocketMode
+      # single-sourced. `path` is the ListenStream (the pre-bound socketPath for
+      # the main socket, the setup unit's %t path for the setup socket).
+      socketMode = "0600";
+      mkSocketUnit =
+        { path, description }:
+        {
+          inherit description;
+          socketConfig = {
+            ListenStream = path;
+            SocketMode = socketMode;
+          };
+        };
+
       serviceUnit = mkServiceUnit {
         description = "Spaces integration: ${manifest.description} (Landlock-confined MCP server)";
         execCommand = manifest.command;
       };
 
-      hasSetup = manifest.setup != null;
       setupUnitName = "${unitName}-setup";
 
       # Twin setup unit (design §5.5, sandboxed setup channel). Identical sandbox
@@ -204,24 +219,19 @@ in
 
       setupSocketUnit =
         if hasSetup then
-          {
+          # No wantedBy: the broker starts this on demand during the setup flow.
+          mkSocketUnit {
+            path = "%t/${setupUnitName}.sock";
             description = "Spaces integration setup socket: ${manifest.description}";
-            # No wantedBy: the broker starts this on demand during the setup flow.
-            socketConfig = {
-              ListenStream = "%t/${setupUnitName}.sock";
-              SocketMode = "0600";
-            };
           }
         else
           null;
 
-      socketUnit = {
-        description = "Spaces integration socket: ${manifest.description}";
-        socketConfig = {
-          ListenStream = "%t/${unitName}.sock";
-          SocketMode = "0600";
-        };
-      }
+      socketUnit =
+        mkSocketUnit {
+          path = socketPath;
+          description = "Spaces integration socket: ${manifest.description}";
+        }
       // lib.optionalAttrs (manifest.extraServices != [ ]) {
         # Starting this socket pulls in the integration's backing daemons; the
         # spaces-integrations module injects the reverse PartOf onto each so a
