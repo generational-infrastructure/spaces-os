@@ -1,0 +1,19 @@
+{
+  "config": {
+    "email": {
+      "description": "Proton account email address",
+      "required": true
+    }
+  },
+  "secrets": {
+    "bridge_password": {
+      "description": "Proton Bridge per-account password (issued by the Bridge during setup)",
+      "required": true
+    }
+  },
+  "tools": [
+    "envelope_list",
+    "message_read",
+    "message_send"
+  ]
+}

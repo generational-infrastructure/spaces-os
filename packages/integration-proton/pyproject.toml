@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "integration-proton"
+version = "0.1.0"
+description = "Proton Mail MCP integration server (Bridge-backed) + setup helper"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+  "spaces-integration-mcp",
+  "spaces-himalaya-core",
+  "grpcio",
+  "protobuf",
+]
+
+[tool.hatch.build.targets.wheel]
+# The gRPC stubs (bridge_pb2*.py) are generated from the vendored bridge.proto
+# at build time (see default.nix preBuild) and shipped in the wheel so the setup
+# helper can import them at runtime.
+only-include = [
+  "integration_proton.py",
+  "integration_proton_setup.py",
+  "bridge_pb2.py",
+  "bridge_pb2_grpc.py",
+]
+
+[project.scripts]
+integration-proton = "integration_proton:main"
+integration-proton-setup = "integration_proton_setup:main"
+integration-proton-authcmd = "integration_proton:authcmd"
