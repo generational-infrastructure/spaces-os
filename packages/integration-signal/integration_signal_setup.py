@@ -6,10 +6,11 @@ server (only ExecStart differs). The broker connects to that socket; this
 helper accepts the connection and streams newline-delimited JSON events back
 over it, which the broker relays verbatim to the panel.
 
-Event vocabulary is the minimal subset of docs/agent-integrations-design.md
-§5.5 — qr / message / done / error. (The typed text-prompt, secret-field,
-open-url, confirm and progress requests from that section are to be completed
-later.)
+Event vocabulary used here is the qr / message / done / error subset of
+docs/agent-integrations-design.md §5.5. The channel is bidirectional since the
+setup-channel v2 work (text-field / secret-field prompts, set-field, and an
+action line the broker writes first — see integration-proton's helper); this
+helper never reads the connection, so the action line is simply ignored.
 
 Flow: accept the activated socket connection; connect to the signal-cli daemon
 JSON-RPC socket at $SPACES_SIGNAL_DAEMON_SOCKET (retrying while the daemon

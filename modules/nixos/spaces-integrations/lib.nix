@@ -294,10 +294,11 @@ in
       # Twin setup unit (design §5.5, sandboxed setup channel). Identical sandbox
       # to the main service — only the ExecStart command differs. The broker
       # activates the socket, connects, and relays the helper's NDJSON events to
-      # the panel. The event vocabulary the helper emits is the MINIMAL SUBSET of
-      # docs/agent-integrations-design.md §5.5 — qr / message / done / error; the
-      # richer typed requests in that section (text-prompt, secret-field,
-      # open-url, confirm, progress) are to be completed later per §5.5.
+      # the panel — bidirectionally: prompt events (text-field / secret-field)
+      # flow up, the panel's {"value":...} replies flow back, and set-field
+      # events are intercepted broker-side (see spaces-integrationd protocol.go
+      # for the full §5.5 vocabulary: qr / message / text-field / secret-field /
+      # set-field / done / error).
       setupServiceUnit =
         if hasSetup then
           mkServiceUnit {

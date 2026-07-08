@@ -157,7 +157,11 @@ in
         }
       ];
       # Backing daemons whose lifecycle follows the Signal integration socket
-      # (Wants/After on the socket + PartOf injected onto each).
+      # (Wants/After on the socket + PartOf injected onto each). Bare-string
+      # form: these units run UNCONFINED (owned by signal-cli.nix) — an
+      # inherited gap. Migrating them onto the confined extraServices form
+      # (proton's shape below) is deferred, recorded out of scope in the
+      # proton grill session (2026-07-08, decision 7).
       extraServices = lib.mkDefault [
         "spaces-signal-cli.service"
         "spaces-signal-bridge.service"
