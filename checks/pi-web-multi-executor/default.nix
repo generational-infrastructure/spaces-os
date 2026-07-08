@@ -47,7 +47,7 @@ pkgs.runCommand "pi-web-multi-executor-test"
     export HOME="$TMPDIR"
     export FONTCONFIG_FILE=${fontsConf}
     # Both daemons inherit the launcher from the environment.
-    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/landlock-exec
     mkdir -p "$TMPDIR/state-alpha" "$TMPDIR/state-beta" "$TMPDIR/profile"
 
     # Alpha — serves the PWA, declares both peers.

@@ -28,7 +28,7 @@ pkgs.runCommand "pi-sessiond-drive-path-test"
   ''
     export HOME="$TMPDIR"
     export TMPDIR="$TMPDIR"
-    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/landlock-exec
     ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon} ${stubPi} ${stubs.systemdRun}/bin/systemd-run
     touch "$out"
   ''

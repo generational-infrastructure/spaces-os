@@ -52,6 +52,6 @@ pkgs.runCommand "pi-sessiond-integration-gateway-test"
       ${stubPi} \
       ${./stub-mcp.py} \
       ${stubs.systemdRun}/bin/systemd-run \
-      ${stubs.landlockExec}/bin/pi-landlock-exec
+      ${stubs.landlockExec}/bin/landlock-exec
     touch "$out"
   ''

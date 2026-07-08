@@ -27,7 +27,7 @@ rest)" then arrow labeled "LoadCredentialEncrypted" to box
 TPM chip icon labeled "TPM2" with exactly two connections: a line up-left to
 the encrypt box labeled "seal", a line up-right to the socket box labeled
 "unseal". Far left in the band: box "systemd --user manager" with arrow up to
-INTEGRATION SANDBOX labeled "socket-activates via pi-landlock-exec". OTHER
+INTEGRATION SANDBOX labeled "socket-activates via landlock-exec". OTHER
 ARROWS: double arrow "tool calls (rpc pipe)" between pi runtime and Gateway;
 double arrow "approval" between Gateway and Panel; double arrow "MCP socket"
 between Gateway and MCP server; small user icon above Panel with arrow down
@@ -55,7 +55,7 @@ direct access, plaintext at unit start
 
 ## Known deviation in the shipped image
 
-The "socket-activates via pi-landlock-exec" arrow points at the AGENT
+The "socket-activates via landlock-exec" arrow points at the AGENT
 sandbox instead of the INTEGRATION sandbox. Coincidentally still true (the
 per-session pi runtime is also launched via systemd-run --user +
-pi-landlock-exec), but not what the prompt asked for.
+landlock-exec), but not what the prompt asked for.

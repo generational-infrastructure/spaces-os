@@ -80,7 +80,7 @@ pkgs.runCommand "pi-web-e2e-test"
     PI_OFFLINE=1 \
     PI_TELEMETRY=0 \
     SPACES_SESSIOND_SYSTEMD_RUN=${stubs.systemdRun}/bin/systemd-run \
-    SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec \
+    SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/landlock-exec \
       ${pkgs.lib.getExe daemon} >"$TMPDIR/daemon.log" 2>&1 &
     daemon=$!
 

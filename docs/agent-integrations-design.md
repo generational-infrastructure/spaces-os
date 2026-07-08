@@ -34,7 +34,7 @@ pi runtime itself runs sandboxed: the model loop, every tool, `bash`, the
 file tools, and any extension run confined, driven by a thin trusted
 supervisor (`pi-sessiond`) that runs no model-steerable code. That
 confinement is a self-applied **Landlock** domain — *not* a user
-namespace — built by `pi-landlock-exec` between `systemd-run --user` and
+namespace — built by `landlock-exec` between `systemd-run --user` and
 `pi`. It is built and shipped:
 [landlock-sandbox-design.md](./landlock-sandbox-design.md) (the
 mechanism) and [pi-runtime-isolation-refactor.md](./pi-runtime-isolation-refactor.md)
@@ -52,7 +52,7 @@ protection. So the confidentiality boundary is the **Landlock domain**:
 what a domain does not grant, the code inside it cannot reach.
 
 Each integration runs in its own **`--user` systemd service** confined by
-its own **Landlock domain** — the same `pi-landlock-exec` launcher and
+its own **Landlock domain** — the same `landlock-exec` launcher and
 landlockconfig policy format that confine the agent's per-session runtime
 (one mechanism, both sandboxes; [landlock §7](./landlock-sandbox-design.md)).
 The policy is **lowered from a manifest** the user approves on enable.
@@ -141,7 +141,7 @@ Corollaries that drive the design:
 - **A domain may trace into only the same or a descendant domain**
   (`hook_ptrace_access_check`). *Where the wall is anchored is decided by
   who applies which domain.* The agent and each integration get their own
-  sibling domain via `pi-landlock-exec`, so neither can `ptrace`/read the
+  sibling domain via `landlock-exec`, so neither can `ptrace`/read the
   other; trusted code applies no domain and can inspect, by design.
 - **The wall is independent of uid.** Under a `--user` manager every unit
   runs at the user's uid (req 10 forbids the root action a distinct uid
@@ -171,7 +171,7 @@ denies both — neither path is granted — but keep it explicit.
 
 | Mechanism | Boundary | Verdict |
 |---|---|---|
-| **`--user` unit + per-integration Landlock domain (`pi-landlock-exec`) + systemd hardening** | deny-by-default FS/net/IPC domain, sibling to the agent's; ptrace/mem walled by the Landlock domain rule; same uid | **Default tier.** Rootless and rebuild-free (req 10); one launcher + policy format shared with the agent runtime; user-scoped `LoadCredentialEncrypted=`, `RestrictAddressFamilies=`/proxy, network and paths from the manifest. Needs only a Landlock kernel. |
+| **`--user` unit + per-integration Landlock domain (`landlock-exec`) + systemd hardening** | deny-by-default FS/net/IPC domain, sibling to the agent's; ptrace/mem walled by the Landlock domain rule; same uid | **Default tier.** Rootless and rebuild-free (req 10); one launcher + policy format shared with the agent runtime; user-scoped `LoadCredentialEncrypted=`, `RestrictAddressFamilies=`/proxy, network and paths from the manifest. Needs only a Landlock kernel. |
 | `--user` unit, `PrivateUsers=managed` (`nsresourced`) | per-unit delegated host uid + ns | **Rejected.** Gives a distinct uid under an unprivileged manager, but the feature is still early-stage: a `--user` `managed` unit gets no *writable* host bind-mount — the idmap that would make a host dir writable is system-scope only, and `BindPaths=…:idmap` exists in `systemd-nspawn`, not service units (issue #34695) — so it cannot expose the user's own files to the runtime. Abandoned project-wide in favour of Landlock. |
 | system unit, `DynamicUser=` | distinct *real* host uid + ns | **Multi-tenant / belt-and-suspenders tier.** A genuine second (DAC) layer, but `DynamicUser` is root-only (system unit) → a rebuild to add an integration and a root broker: violates req 10. Reserve for an untrusted-third-party tier or a server-side executor where root is already in play. |
 | bubblewrap per call | ns only; same uid unless userns-mapped | Subsumed by the Landlock domain (declarative, inherited across exec, with cgroup limits from the unit). Skip. |
@@ -284,7 +284,7 @@ runtime-isolation refactor, shipped —
   no model-controlled code and loads no extensions.
 - **Per-session pi runtime (sandbox):** the whole `AgentSession` — model
   loop, tools, `bash`, file tools, and extensions — runs under a
-  per-session **Landlock domain** (`pi-landlock-exec`), one per chat,
+  per-session **Landlock domain** (`landlock-exec`), one per chat,
   driven by the supervisor over pi's headless rpc protocol. Its only
   outward channel is that pipe.
 - **Integrations:** `--user` **Landlock-domain** units, **user-scoped**
@@ -303,7 +303,7 @@ Manifest → a **trusted user-level materialiser** writes a `--user` systemd uni
 this repo — or home-manager for first-party; the broker as a runtime
 materialiser for on-the-fly third-party, §5.6), enabled rootless via `systemctl
 --user enable --now` (req 10), whose `ExecStart` runs the integration through
-`pi-landlock-exec` with a **landlockconfig policy lowered from the
+`landlock-exec` with a **landlockconfig policy lowered from the
 manifest** (§5.4, §7): a deny-by-default FS allowlist (the integration's
 `StateDirectory`, its credential mount, the per-pair shared dir, and
 nothing else), a netPort/`RestrictAddressFamilies` grant or an outbound
@@ -321,7 +321,7 @@ There is **no system-level prerequisite** beyond a Landlock kernel:
 no `nsresourced`, no userns sysctl, no systemd rebuild.
 An `untrusted` trust tier may swap the unit body for a rootless podman
 quadlet or a microVM (§2); the manifest pipeline is unchanged. The
-agent's own pi runtime runs under the **same** `pi-landlock-exec` recipe
+agent's own pi runtime runs under the **same** `landlock-exec` recipe
 (the per-session sandbox of §5.0) — that, plus a non-overlapping
 allowlist, is what walls the agent off from integrations (§1); `bash` and
 the file tools run inside it, not as separate per-command sandboxes.
@@ -541,7 +541,7 @@ per-user codegen, no privileged "start units for users" hop:
   unchanged — a new user simply has their own manager.
 - **Within a user, the wall is the Landlock domain.** The user's agent
   and integrations all run at that user's uid; each is confined by its
-  own sibling `pi-landlock-exec` domain, so neither can `ptrace`/read the
+  own sibling `landlock-exec` domain, so neither can `ptrace`/read the
   other or open the other's files. Trusted code (the human, the gateway,
   the broker) applies no domain and can reach in. This is a single
   enforcement layer (§8 residual).
@@ -606,7 +606,7 @@ unchanged.
   servers; a kernel-boundary backstop above the same-uid Landlock wall)
   in a later iteration. Keep it in mind.
 - **Landlock ABI availability.** Abstract-unix-socket and signal scoping
-  need ABI 6 (Linux 6.12+). On older kernels `pi-landlock-exec` degrades
+  need ABI 6 (Linux 6.12+). On older kernels `landlock-exec` degrades
   best-effort: FS and ptrace/mem walls hold; an integration's abstract
   sockets and cross-domain signals become reachable by a same-uid sibling.
   Track the kernel floor.
@@ -645,14 +645,14 @@ host (systemd 260, kernel 6.18): Landlock **ABI 6**, and the user-scoped secret
 path via **`host+tpm2`** (pure `tpm2` is rejected in `--uid=` mode — §5.2).
 Builds on the shipped sandboxed pi runtime + supervisor gateway
 ([landlock-sandbox-design.md](./landlock-sandbox-design.md)), reusing its
-`pi-landlock-exec` launcher and `buildLandlockPolicy` emitter.
+`landlock-exec` launcher and `buildLandlockPolicy` emitter.
 
 > **Note — the existing `integrations-poc` branch is superseded.** It was
 > written against the abandoned managed-userns model: system `DynamicUser`
 > units, a `nsresourced` platform module, a **root** broker using host-key
 > `systemd-creds`, and a gateway wired into the pre-Landlock `main.ts`. It is
 > **rebuilt fresh, not rebased**, onto this plan: `--user` units +
-> `pi-landlock-exec`, a user-level broker with user-scoped `host+tpm2` creds,
+> `landlock-exec`, a user-level broker with user-scoped `host+tpm2` creds,
 > runtime tool discovery, and the gateway on the shipped supervisor/`rpc-driver`
 > layer. Salvageable as reference: the Go broker skeleton, the Python
 > `integration-github` server, and the check drivers.
@@ -670,7 +670,7 @@ Builds on the shipped sandboxed pi runtime + supervisor gateway
    unit-start paths (`$STATE_DIRECTORY`, `$CREDENTIALS_DIRECTORY`,
    `$RUNTIME_DIRECTORY`, shared dir) into `$RUNTIME_DIRECTORY/landlock.json`;
    `ExecStart` is then
-   `pi-landlock-exec --json $RUNTIME_DIRECTORY/landlock.json -- <command>`.
+   `landlock-exec --json $RUNTIME_DIRECTORY/landlock.json -- <command>`.
    (Unit-start generation is required: a system module emits one generic user
    unit with no build-time `$HOME`, and landlockconfig variables are in-document
    templating, not env injection.) Plus
@@ -753,7 +753,7 @@ broker can encrypt.
 
 - `checks/spaces-integrations-nix-eval`: manifest → unit + socket + policy-spec
   codegen asserts (pattern: `pi-sessiond-nix-eval`). Asserts the unit wiring
-  (`ExecStartPre` policy gen, `ExecStart` `pi-landlock-exec`, `StateDirectory`,
+  (`ExecStartPre` policy gen, `ExecStart` `landlock-exec`, `StateDirectory`,
   `LoadCredentialEncrypted`, socket `ListenStream`/`SocketMode`), and — by
   running the `spaces-landlock-policy` CLI on sample resolved paths — that the
   lowered landlockconfig is deny-by-default and grants only the declared paths /

@@ -26,7 +26,7 @@ in
   # The daemon requires the Landlock launcher; the passthrough stub stands in
   # (driver.py inherits this via os.environ.copy() into the daemon's env).
   env = {
-    SPACES_SESSIOND_LANDLOCK_EXEC = "${stubs.landlockExec}/bin/pi-landlock-exec";
+    SPACES_SESSIOND_LANDLOCK_EXEC = "${stubs.landlockExec}/bin/landlock-exec";
   };
   extraArgs = [
     (pkgs.lib.getExe daemon)

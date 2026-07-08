@@ -40,7 +40,7 @@ let
   token = "poc-ws-token";
   pat = "ghp_pocSECRET0123456789abcXYZ";
 
-  landlockExec = lib.getExe pkgsSelf.pi-landlock-exec;
+  landlockExec = lib.getExe pkgsSelf.landlock-exec;
 
   # Point the github integration at the in-VM mock instead of api.github.com. A
   # wrapper (rather than a new module env knob) keeps the integration package

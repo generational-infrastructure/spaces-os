@@ -61,6 +61,6 @@ pkgs.runCommand "pi-session-signal-approval-split-test"
       ${stubPi} \
       ${pkgs.lib.getExe integrationSignal} \
       ${stubs.systemdRun}/bin/systemd-run \
-      ${stubs.landlockExec}/bin/pi-landlock-exec
+      ${stubs.landlockExec}/bin/landlock-exec
     touch "$out"
   ''

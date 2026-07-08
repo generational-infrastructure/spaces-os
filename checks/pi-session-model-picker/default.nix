@@ -25,10 +25,10 @@ let
     patchShebangs $out/bin/systemd-run
   '';
   landlockExecStub =
-    pkgs.runCommandLocal "pi-landlock-exec-stub" { nativeBuildInputs = [ pkgs.bash ]; }
+    pkgs.runCommandLocal "landlock-exec-stub" { nativeBuildInputs = [ pkgs.bash ]; }
       ''
-        install -Dm755 ${../pi-sessiond-sidechannel/landlock-exec-stub} $out/bin/pi-landlock-exec
-        patchShebangs $out/bin/pi-landlock-exec
+        install -Dm755 ${../pi-sessiond-sidechannel/landlock-exec-stub} $out/bin/landlock-exec
+        patchShebangs $out/bin/landlock-exec
       '';
 in
 (import ../../lib/quickshell-check.nix pkgs).mkQuickshellCheck {
@@ -38,7 +38,7 @@ in
   # The daemon requires the Landlock launcher; the passthrough stub stands in
   # (driver.py inherits this via os.environ.copy() into the daemon's env).
   env = {
-    SPACES_SESSIOND_LANDLOCK_EXEC = "${landlockExecStub}/bin/pi-landlock-exec";
+    SPACES_SESSIOND_LANDLOCK_EXEC = "${landlockExecStub}/bin/landlock-exec";
   };
   extraArgs = [
     (pkgs.lib.getExe daemon)

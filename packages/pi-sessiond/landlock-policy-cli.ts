@@ -8,7 +8,7 @@
 // in-document Cartesian templating, not env injection, so the policy cannot be
 // a static store file either. This CLI bridges the gap: it runs in
 // `ExecStartPre`, reads the build-time spec, folds in the now-resolved paths,
-// and writes `$RUNTIME_DIRECTORY/landlock.json` for `pi-landlock-exec` to apply.
+// and writes `$RUNTIME_DIRECTORY/landlock.json` for `landlock-exec` to apply.
 //
 // The emitter itself is `buildLandlockPolicy` (sandbox.ts) — the single source
 // for the landlockconfig schema, shared with the per-session sandbox. This file
@@ -151,7 +151,7 @@ function parseArgs(argv: string[]): { specPath: string; outPath: string } {
       );
   }
   if (!specPath) die("--spec <spec.json> is required");
-  // Default the output to the unit's RuntimeDirectory, where pi-landlock-exec
+  // Default the output to the unit's RuntimeDirectory, where landlock-exec
   // reads it (ExecStart=--json %t/<dir>/landlock.json).
   if (!outPath) {
     const rt = process.env.RUNTIME_DIRECTORY?.split(":").filter(Boolean)[0];

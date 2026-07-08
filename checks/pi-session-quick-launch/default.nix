@@ -33,7 +33,7 @@ in
   env = {
     # The daemon requires the Landlock launcher; the passthrough stub stands in
     # (driver.py inherits this via os.environ.copy() into the daemon's env).
-    SPACES_SESSIOND_LANDLOCK_EXEC = "${stubs.landlockExec}/bin/pi-landlock-exec";
+    SPACES_SESSIOND_LANDLOCK_EXEC = "${stubs.landlockExec}/bin/landlock-exec";
     # The child is spawned by bare name unless told otherwise; point it at the
     # exact pi the daemon re-exports (the launcher execs an absolute path, not a
     # PATH lookup) — same as production, which sets SPACES_SESSIOND_PI_BIN.

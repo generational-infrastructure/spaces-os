@@ -43,7 +43,7 @@ pkgs.runCommand "pi-sessiond-sidechannel-test"
   }
   ''
     export HOME="$TMPDIR"
-    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/landlock-exec
     ${py}/bin/python3 ${./driver.py} \
       ${pkgs.lib.getExe daemon} \
       ${stubPi} \

@@ -17,7 +17,7 @@ let
   wsPort = 8773;
   llmPort = 8015;
 
-  landlock = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-landlock-exec;
+  landlock = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.landlock-exec;
   driver = ../pi-remote-session/driver.py;
   mockLlm = ../pi-remote-session/mock-llm.py;
   py = pkgs.python3.withPackages (ps: [ ps.websockets ]);
@@ -87,7 +87,7 @@ pkgs.testers.runNixOSTest {
     session_dir = f"/home/agent/.local/state/pi-sessiond/sessions/{sid}"
     tmp_dir = f"{session_dir}/tmp"
     policy = f"{session_dir}/landlock.json"
-    ll = f"${landlock}/bin/pi-landlock-exec --json {policy} --"
+    ll = f"${landlock}/bin/landlock-exec --json {policy} --"
 
     with subtest("the child's TMPDIR is the private session scratch dir"):
         unit = f"pi-session-{sid}.service"

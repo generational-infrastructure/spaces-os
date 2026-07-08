@@ -22,7 +22,7 @@ import denySyscalls from "./seccomp-denylist.json";
 // standalone bash sandbox. Paths arrive pre-expanded (systemd resolves %h/%t
 // in the Environment= the module hands the daemon) and are folded into the
 // session's Landlock FS allowlist by access mode. Landlock grants the real
-// path in place (no remapping) and pi-landlock-exec skips a missing path
+// path in place (no remapping) and landlock-exec skips a missing path
 // non-fatally — so the bind-mount-era `target`/`optional` fields are gone.
 export interface AllowedPath {
   source: string;
@@ -34,7 +34,7 @@ export interface AllowedPath {
 //
 // The runtime stays a real uid and is confined by a self-applied Landlock
 // domain (deny-by-default FS allowlist + TCP-port allowlist + IPC scoping),
-// described by a landlockconfig policy and applied by `pi-landlock-exec`
+// described by a landlockconfig policy and applied by `landlock-exec`
 // between `systemd-run` and `pi`.
 //
 // Two pure, unit-tested outputs: the policy JSON (the supervisor writes one per
@@ -135,7 +135,7 @@ export function buildLandlockPolicy(p: SandboxPolicy): Record<string, unknown> {
 
 export interface LandlockUnitConfig {
   systemdRun: string; // path to systemd-run (or a stub, in tests)
-  landlockExec: string; // path to pi-landlock-exec
+  landlockExec: string; // path to landlock-exec
   policyPath: string; // the per-session landlockconfig file the launcher reads
   unitName: string; // --unit= name, for inspection/teardown
   workdir: string; // pi's cwd (the session workspace)
@@ -169,7 +169,7 @@ function landlockHardeningProps(memoryHigh: string): string[] {
 // argv that runs `<childArgv>` (the pi rpc child) inside the per-session
 // Landlock unit. systemd-run's command (after its own `--`) is the launcher,
 // which applies the policy and then execs the child after a SECOND `--`:
-//   systemd-run … -- pi-landlock-exec --json <policy> -- pi --mode rpc …
+//   systemd-run … -- landlock-exec --json <policy> -- pi --mode rpc …
 // `--pipe --wait` keep the unit's stdio bound to the supervisor's rpc driver.
 export function buildLandlockUnitArgv(
   c: LandlockUnitConfig,

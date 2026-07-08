@@ -13,7 +13,7 @@
 #   - the env JSON carries an entry per fixture, after the baselines,
 #     each with exactly { source, mode } — the bind-mount-era `target`
 #     and `optional` fields are gone (Landlock grants the path in place,
-#     no remapping, and pi-landlock-exec skips a missing path non-fatally);
+#     no remapping, and landlock-exec skips a missing path non-fatally);
 #   - /etc/spaces/pi-chat.json no longer carries a sandboxAllowedPaths key
 #     (the panel never sees grants anymore — only the daemon does);
 #   - with no sandboxAllowedPaths set, the env JSON is exactly the five

@@ -5,7 +5,7 @@
 # writable HOME / PI_CODING_AGENT_DIR — settings/auth/locks live per session,
 # only the long-term memory store is intentionally shared. This boots the real
 # daemon under the Landlock branch (a stub launcher stands in for
-# pi-landlock-exec) against a stub pi and asserts, over the WebSocket envelope
+# landlock-exec) against a stub pi and asserts, over the WebSocket envelope
 # protocol, that each session's agent dir is a distinct per-session directory
 # under its own session dir, seeded with the static config, and that the emitted
 # landlock policy never grants the daemon's shared `pi-agent` dir.
@@ -37,6 +37,6 @@ pkgs.runCommand "pi-sessiond-landlock-agentdir-test"
   ''
     export HOME="$TMPDIR"
     export TMPDIR="$TMPDIR"
-    ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon} ${stubPi} ${stubs.systemdRun}/bin/systemd-run ${stubs.landlockExec}/bin/pi-landlock-exec ${settings} ${confirm}
+    ${py}/bin/python3 ${./driver.py} ${pkgs.lib.getExe daemon} ${stubPi} ${stubs.systemdRun}/bin/systemd-run ${stubs.landlockExec}/bin/landlock-exec ${settings} ${confirm}
     touch "$out"
   ''

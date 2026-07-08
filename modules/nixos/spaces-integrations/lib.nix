@@ -8,7 +8,7 @@
 #
 # Two layers confine the (untrusted, same-uid) MCP server:
 #   - a Landlock domain (deny-by-default FS allowlist + port-granular TCP egress
-#     + IPC scoping), applied by pi-landlock-exec from the policy the
+#     + IPC scoping), applied by landlock-exec from the policy the
 #     spaces-landlock-policy CLI lowers AT UNIT START — the grantable paths
 #     ($STATE_DIRECTORY / $CREDENTIALS_DIRECTORY / a shared dir) are per-user and
 #     unknown at build time. The static half of that policy (the SPEC) is here.
@@ -42,7 +42,7 @@ in
       name,
       manifest,
       landlockPolicyCli, # spaces-landlock-policy binary
-      landlockExec, # pi-landlock-exec binary
+      landlockExec, # landlock-exec binary
       memoryHigh ? "512M",
     }:
     let
@@ -130,7 +130,7 @@ in
             # reads $STATE_DIRECTORY / $CREDENTIALS_DIRECTORY (set by the dirs
             # below) from the env and writes the landlockconfig doc to %t.
             # mkdir the shared dir first (idempotent; the agent session mkdirs the
-            # same path too) so it exists before pi-landlock-exec — Landlock skips
+            # same path too) so it exists before landlock-exec — Landlock skips
             # a missing path, which would silently drop the grant.
             ExecStartPre = [
               "${pkgs.coreutils}/bin/mkdir -p ${sharedDir}"

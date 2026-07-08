@@ -89,7 +89,7 @@ const STATE_DIR = resolve(
 // runs as the user); the cheap checks point it at a passthrough stub that strips
 // the unit flags, applies --setenv, and execs the launcher + child directly.
 const SYSTEMD_RUN = process.env.SPACES_SESSIOND_SYSTEMD_RUN ?? "systemd-run";
-// pi-landlock-exec, the per-session Landlock launcher (sandbox.ts / design §6):
+// landlock-exec, the per-session Landlock launcher (sandbox.ts / design §6):
 // the sole sandbox path. main.ts writes a per-session landlockconfig policy and
 // execs the child through the launcher, which applies the self-applied domain
 // before pi. Required — the daemon refuses to start without it.
@@ -499,7 +499,7 @@ function writeLandlockPolicy(id: string): string {
   // File exchange (design §9.4 step 6): grant each enabled integration's shared
   // dir rw — the same <base>/<name> the integration unit grants itself — so the
   // agent edits a cloned-in tree with its native file tools. Created here so the
-  // grant is live before pi-landlock-exec applies (it skips a missing path).
+  // grant is live before landlock-exec applies (it skips a missing path).
   for (const dir of sessionSharedDirs(
     integrationRegistry,
     INTEGRATIONS_SHARED_DIR,
@@ -817,7 +817,7 @@ function spawnSessionDriver(
     ...SESSION_ENV,
   };
   // Wrap the child in its per-session Landlock unit (sandbox.ts): systemd-run
-  // applies kernel + seccomp hardening, then pi-landlock-exec self-applies the
+  // applies kernel + seccomp hardening, then landlock-exec self-applies the
   // FS/net/IPC domain before exec'ing pi. The cheap checks point SYSTEMD_RUN
   // (and the launcher) at passthrough stubs, so this one argv path serves both.
   const unitName = `pi-session-${id}.service`;

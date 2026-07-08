@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Same-uid Landlock-wall probe for the integration POC VM check (design §9.5).
 
-Run under a live session's real landlock.json (via pi-landlock-exec) it stands
+Run under a live session's real landlock.json (via landlock-exec) it stands
 in for the agent's domain; run bare (as the same user) it stands in for the
 unconfined supervisor. It attempts to READ each target and prints
 `<label> OK|DENIED <errno>`, so the test can assert the agent's domain is denied

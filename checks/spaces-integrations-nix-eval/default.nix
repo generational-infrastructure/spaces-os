@@ -4,14 +4,14 @@
 # Pins two things:
 #   - the wiring: declaring an integration emits a socket-activated, Landlock-
 #     confined `--user` service (ExecStartPre lowers the policy, ExecStart execs
-#     through pi-landlock-exec), its `.socket`, and a world-readable /etc
+#     through landlock-exec), its `.socket`, and a world-readable /etc
 #     definition carrying the gateway/panel contract but no command/secret value;
 #   - the lowering: running the real spaces-landlock-policy CLI on sample
 #     resolved paths yields a deny-by-default landlockconfig granting EXACTLY the
 #     StateDirectory (rw), the credentials mount (ro), and the declared egress
 #     port — nothing else.
 #
-# Eval-discipline: the unit's Exec* lines reference pi-landlock-exec; their shape
+# Eval-discipline: the unit's Exec* lines reference landlock-exec; their shape
 # is asserted at eval (string match never realizes the Rust build), then stripped
 # before export. Only the cheap spaces-landlock-policy bundle (bun + sandbox.ts,
 # no pi closure) is realized — the check has to run it.
@@ -124,7 +124,7 @@ assert lib.any (lib.hasInfix "/bin/mkdir -p %t/spaces-integration-share/github")
   ghSvc.serviceConfig.ExecStartPre;
 assert lib.any (lib.hasInfix "SPACES_INTEGRATION_SHARED_DIR=%t/spaces-integration-share/github")
   ghSvc.serviceConfig.Environment;
-assert lib.hasInfix "/bin/pi-landlock-exec " ghSvc.serviceConfig.ExecStart;
+assert lib.hasInfix "/bin/landlock-exec " ghSvc.serviceConfig.ExecStart;
 assert lib.hasInfix "--json %t/spaces-integration-github/landlock.json --"
   ghSvc.serviceConfig.ExecStart;
 assert lib.hasInfix "integration-github-placeholder" ghSvc.serviceConfig.ExecStart;

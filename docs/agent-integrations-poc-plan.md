@@ -57,7 +57,7 @@ which makes the encrypt side deterministic.
    variables are in-document Cartesian templating, not env injection. So a thin
    `spaces-landlock-policy` CLI (wrapping `buildLandlockPolicy`) runs in
    `ExecStartPre`, writes `$RUNTIME_DIRECTORY/landlock.json`, and `ExecStart` is
-   `pi-landlock-exec --json $RUNTIME_DIRECTORY/landlock.json -- <cmd>`. `lib.nix`
+   `landlock-exec --json $RUNTIME_DIRECTORY/landlock.json -- <cmd>`. `lib.nix`
    emits the static **policy spec** (buckets / ports / abi / scope), eval-checked.
 5. **Tool contract = runtime discovery + manifest allowlist.** The gateway runs
    `initialize` + `tools/list` against the (untrusted) MCP server and registers
@@ -105,7 +105,7 @@ which makes the encrypt side deterministic.
 - Supervisor: `packages/pi-sessiond/{main.ts,sandbox.ts,proxy.ts,rpc-driver.ts}`
   — `sandbox.ts` exports `buildLandlockPolicy(SandboxPolicy)`; `main.ts`
   `writeLandlockPolicy` builds the per-session policy at runtime.
-- Launcher: `packages/pi-landlock-exec/` — `--json <policy>` (repeatable),
+- Launcher: `packages/landlock-exec/` — `--json <policy>` (repeatable),
   composes + `restrict_self()` + exec; `.resolve()` handles in-document
   variables only.
 - User-unit + `lib.nix` precedent: `modules/nixos/pi-sessiond/{default.nix,lib.nix}`.
@@ -128,7 +128,7 @@ below remain.)
    the `pi-sessiond` package), and `checks/spaces-integrations-nix-eval`.
    - `lib.nix`: manifest → { unit data, socket data, policy spec, definition JSON }.
    - `default.nix`: `services.spaces-integrations.integrations.<name>` →
-     `systemd.user.services` (ExecStartPre policy gen, ExecStart `pi-landlock-exec`,
+     `systemd.user.services` (ExecStartPre policy gen, ExecStart `landlock-exec`,
      `StateDirectory`, `LoadCredentialEncrypted`, hardening) + `.socket`.
    - **Acceptance:** unit-text asserts; running the CLI on sample resolved paths
      yields a deny-by-default policy granting exactly StateDir (rw) + cred mount
@@ -258,7 +258,7 @@ surfaced that earlier, narrower checks could not.
   second user manager.
 - **The Landlock-wall probe tests the FS wall with the live session's real
   policy.** It re-applies the actual `landlock.json` the supervisor wrote for the
-  e2e session (through `pi-landlock-exec`) rather than a hand-rolled policy, so it
+  e2e session (through `landlock-exec`) rather than a hand-rolled policy, so it
   tests exactly the domain a real agent runs under: the integration's private
   runtime state is denied while the granted shared workspace stays reachable.
   **Finding:** Landlock mediates filesystem opens, **not** `AF_UNIX connect()`

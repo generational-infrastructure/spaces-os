@@ -5,7 +5,7 @@
 # per integration:
 #   - systemd.user.services."spaces-integration-<name>" — the socket-activated,
 #     Landlock-confined MCP server (ExecStartPre lowers the per-user policy;
-#     ExecStart execs the server through pi-landlock-exec);
+#     ExecStart execs the server through landlock-exec);
 #   - systemd.user.sockets."spaces-integration-<name>" — its unix socket at
 #     %t/spaces-integration-<name>.sock that the supervisor gateway connects to;
 #   - /etc/spaces-integrations/<name>.json — the world-readable definition the
@@ -34,9 +34,9 @@ let
   pkgsSelf = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
   # The policy generator rides as a passthru of the pi-sessiond package (it
   # reuses sandbox.ts's buildLandlockPolicy) but carries no pi closure of its
-  # own. pi-landlock-exec is the shared launcher.
+  # own. landlock-exec is the shared launcher.
   landlockPolicyCli = lib.getExe pkgsSelf.pi-sessiond.landlockPolicy;
-  landlockExec = lib.getExe pkgsSelf.pi-landlock-exec;
+  landlockExec = lib.getExe pkgsSelf.landlock-exec;
 
   fieldSubmodule = lib.types.submodule {
     options = {
@@ -90,7 +90,7 @@ let
         type = lib.types.str;
         description = ''
           The integration's MCP server invocation (the ExecStart line, run
-          through pi-landlock-exec). Whitespace-split by systemd — no shell.
+          through landlock-exec). Whitespace-split by systemd — no shell.
         '';
       };
       network = lib.mkOption {

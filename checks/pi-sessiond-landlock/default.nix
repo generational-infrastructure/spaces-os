@@ -2,7 +2,7 @@
 #
 # Landlock is access control enforced by the running kernel, so this needs a real
 # boot (a runNixOSTest, not a bare runCommand). It probes the MECHANISM in
-# isolation — pi-landlock-exec applied around small probe binaries under a known
+# isolation — landlock-exec applied around small probe binaries under a known
 # landlockconfig policy — so the confinement thesis stands before any
 # pi-sessiond wiring exists.
 #
@@ -15,7 +15,7 @@
 #   - reports full enforcement at Landlock ABI >= 4.
 { pkgs, inputs, ... }:
 let
-  landlock = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-landlock-exec;
+  landlock = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.landlock-exec;
   py = "${pkgs.python3}/bin/python3";
 
   # A deny-by-default domain shaped like a real session policy (design §5.5):
@@ -100,7 +100,7 @@ let
             pass
   '';
 
-  ll = "${landlock}/bin/pi-landlock-exec --json ${policy} --";
+  ll = "${landlock}/bin/landlock-exec --json ${policy} --";
 in
 pkgs.testers.runNixOSTest {
   name = "pi-sessiond-landlock";

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// pi-landlock-exec — the per-session Landlock launcher for pi-sessiond.
+// landlock-exec — the per-session Landlock launcher for pi-sessiond.
 //
 // Sits between `systemd-run --user` and `pi` (design §6). It reads one or more
 // landlockconfig policy documents (`--json <path>`, repeatable), composes them
@@ -33,7 +33,7 @@ use landlockconfig::{Config, OptionalConfig, RuleError};
 const EXIT_FAILURE: i32 = 127;
 
 fn die(msg: impl AsRef<str>) -> ! {
-    eprintln!("pi-landlock-exec: {}", msg.as_ref());
+    eprintln!("landlock-exec: {}", msg.as_ref());
     std::process::exit(EXIT_FAILURE);
 }
 
@@ -75,7 +75,7 @@ fn main() {
             }
         } else {
             die(format!(
-                "unexpected argument {:?}; usage: pi-landlock-exec --json <policy> [--json <policy>...] -- <cmd> [args...]",
+                "unexpected argument {:?}; usage: landlock-exec --json <policy> [--json <policy>...] -- <cmd> [args...]",
                 arg.to_string_lossy()
             ));
         }
@@ -119,9 +119,9 @@ fn main() {
             RuleError::PathFd(PathFdError::OpenCall { source, path, .. })
                 if source.kind() == ErrorKind::NotFound =>
             {
-                eprintln!("pi-landlock-exec: skipped absent path {}", path.display());
+                eprintln!("landlock-exec: skipped absent path {}", path.display());
             }
-            _ => eprintln!("pi-landlock-exec: dropped grant: {err}"),
+            _ => eprintln!("landlock-exec: dropped grant: {err}"),
         }
     }
 
@@ -132,11 +132,11 @@ fn main() {
     let abi = kernel_landlock_abi();
     match status.ruleset {
         RulesetStatus::FullyEnforced => {
-            eprintln!("pi-landlock-exec: domain fully enforced (kernel Landlock ABI {abi})");
+            eprintln!("landlock-exec: domain fully enforced (kernel Landlock ABI {abi})");
         }
         RulesetStatus::PartiallyEnforced => {
             eprintln!(
-                "pi-landlock-exec: domain partially enforced (kernel Landlock ABI {abi}); newer rules degraded best-effort"
+                "landlock-exec: domain partially enforced (kernel Landlock ABI {abi}); newer rules degraded best-effort"
             );
         }
         RulesetStatus::NotEnforced => {

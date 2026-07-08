@@ -75,9 +75,9 @@ assert lib.hasSuffix "/bin/pi" daemon.environment.SPACES_SESSIOND_PI_BIN;
 # the generated settings must still list the sediment extension.
 assert lib.hasInfix "memory" (builtins.readFile daemon.environment.SPACES_SESSIOND_PI_SETTINGS);
 # Landlock is the desktop executor's only sandbox: the daemon always points each
-# pi child at pi-landlock-exec. A string match never realizes the Rust build
+# pi child at landlock-exec. A string match never realizes the Rust build
 # (same discipline as PI_BIN / ExecStart).
-assert lib.hasSuffix "/bin/pi-landlock-exec" daemon.environment.SPACES_SESSIOND_LANDLOCK_EXEC;
+assert lib.hasSuffix "/bin/landlock-exec" daemon.environment.SPACES_SESSIOND_LANDLOCK_EXEC;
 pkgs.runCommand "pi-sessiond-nix-eval-test"
   {
     nativeBuildInputs = [ pkgs.jq ];

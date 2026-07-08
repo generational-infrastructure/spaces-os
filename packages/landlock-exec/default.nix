@@ -1,4 +1,4 @@
-# pi-landlock-exec — the per-session Landlock launcher (design §6).
+# landlock-exec — the per-session Landlock launcher (design §6).
 #
 # A tiny native binary that sits between `systemd-run --user` and `pi`: it reads
 # the landlockconfig policy the supervisor emits, applies the Landlock domain
@@ -10,7 +10,7 @@
 # in lockstep with Cargo.toml); its FOD hash lives in cargoLock.outputHashes.
 { pkgs, ... }:
 pkgs.rustPlatform.buildRustPackage {
-  pname = "pi-landlock-exec";
+  pname = "landlock-exec";
   version = "0.1.0";
 
   # Only the crate inputs — keep default.nix itself out of src so doc/nix edits
@@ -33,7 +33,7 @@ pkgs.rustPlatform.buildRustPackage {
   };
   meta = {
     description = "Per-session Landlock launcher for pi-sessiond";
-    mainProgram = "pi-landlock-exec";
+    mainProgram = "landlock-exec";
     platforms = pkgs.lib.platforms.linux;
   };
 }

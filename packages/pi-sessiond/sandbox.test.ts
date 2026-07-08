@@ -112,7 +112,7 @@ test("no connect ports means no egress rule", () => {
 
 const landlockUnit: LandlockUnitConfig = {
   systemdRun: "/run/wrappers/systemd-run",
-  landlockExec: "/nix/store/zzz-pi-landlock-exec/bin/pi-landlock-exec",
+  landlockExec: "/nix/store/zzz-landlock-exec/bin/landlock-exec",
   policyPath: "/var/lib/pi-sessiond/sessions/abc123/landlock.json",
   unitName: "pi-session-abc123.service",
   workdir: "/var/lib/pi-sessiond/workspaces/abc123",
@@ -148,7 +148,7 @@ test("the landlock unit runs the launcher then the child, no userns machinery", 
   // Blocked syscalls fail soft (EPERM), not SIGSYS — see §5.4 (libuv io_uring).
   expect(argv).toContain("--property=SystemCallErrorNumber=EPERM");
 
-  // systemd-run -- pi-landlock-exec --json <policy> -- <child>
+  // systemd-run -- landlock-exec --json <policy> -- <child>
   const sep = argv.indexOf("--");
   expect(argv[sep + 1]).toBe(landlockUnit.landlockExec);
   expect(argv[sep + 2]).toBe("--json");

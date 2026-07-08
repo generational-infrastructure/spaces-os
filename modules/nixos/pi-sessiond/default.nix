@@ -10,7 +10,7 @@
 #
 # The daemon runs as the user, hardened with ProtectHome=tmpfs so the supervisor
 # (and any in-process extension) never sees $HOME; each per-session pi child is
-# spawned through the Landlock launcher (pi-landlock-exec), which applies a
+# spawned through the Landlock launcher (landlock-exec), which applies a
 # self-applied, deny-by-default Landlock domain (FS allowlist + egress port
 # allowlist + IPC scoping) plus a seccomp denylist before exec'ing pi
 # (docs/landlock-sandbox-design.md). Cross-user isolation on a server is plain

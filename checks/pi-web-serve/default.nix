@@ -18,7 +18,7 @@ pkgs.runCommand "pi-web-serve-test"
   ''
     set -euo pipefail
     export HOME="$TMPDIR"
-    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/pi-landlock-exec
+    export SPACES_SESSIOND_LANDLOCK_EXEC=${stubs.landlockExec}/bin/landlock-exec
     SPACES_SESSIOND_HOST=127.0.0.1 \
     SPACES_SESSIOND_PORT=8790 \
     SPACES_SESSIOND_TOKEN=serve-test \

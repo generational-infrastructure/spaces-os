@@ -60,7 +60,7 @@ in
   # before exec'ing pi — no userns, no nsresourced, no reboot. The child runs
   # as the user (the supervisor's own uid); Landlock confines but never drops
   # privilege.
-  landlockExec = lib.getExe inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-landlock-exec;
+  landlockExec = lib.getExe inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.landlock-exec;
 
   # Compose a session child's extension list + the settings.json it reads.
   #   extensions    — the module's `extensions` option (flake-relative paths).

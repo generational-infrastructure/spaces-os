@@ -116,7 +116,7 @@ anywhere:
 ```mermaid
 flowchart LR
     D[pi-sessiond daemon, uid 1000] -->|spawns| R[systemd-run --user]
-    R -->|cgroup + seccomp + kernel-hardening| L[pi-landlock-exec]
+    R -->|cgroup + seccomp + kernel-hardening| L[landlock-exec]
     L -->|landlockconfig policy, then execvp| P[pi --mode rpc]
     P -.->|stdio = rpc pipe, inherited fds| D
 ```
@@ -127,7 +127,7 @@ flowchart LR
   `ProtectProc=invisible`, `RestrictSUIDSGID`, `LockPersonality`,
   `RestrictAddressFamilies`, `RestrictNamespaces`. All proven compatible with a
   `--user` unit.
-- **`pi-landlock-exec`** (§6) reads a landlockconfig policy, calls
+- **`landlock-exec`** (§6) reads a landlockconfig policy, calls
   `landlock_restrict_self()`, then `execvp("pi", …)`. The domain is inherited by
   `pi` and every tool/`bash`/extension it spawns.
 - **`pi`** runs as uid 1000, owns its dirs (no idmap), and talks to the
@@ -280,7 +280,7 @@ systemd has **no Landlock directive** in our pinned systemd (only the
 `LandlockConfig=`, PR #39174, is proposed and unmerged). So the policy is
 applied by a thin launcher.
 
-**`pi-landlock-exec` is the landlockconfig reference sandboxer**, packaged in the
+**`landlock-exec` is the landlockconfig reference sandboxer**, packaged in the
 flake. landlockconfig ships a `sandboxer` example (Rust and C) that already does
 exactly the job: parse one-or-more JSON/TOML policies, build the ruleset with
 **best-effort** ABI degradation, `restrict_self()`, then `exec` the command
@@ -288,7 +288,7 @@ after `--`. We adopt it directly (or as a ~30-line wrapper around the
 `landlockconfig` crate):
 
 ```
-pi-landlock-exec --json <policy.json> -- pi --mode rpc --session-dir <dir> --session-id <id> ...
+landlock-exec --json <policy.json> -- pi --mode rpc --session-dir <dir> --session-id <id> ...
 ```
 
 Why this shape:
@@ -353,17 +353,17 @@ scheme.
 - **`packages/pi-sessiond/main.ts`** — the spawn call assembles the allowlist
   (workspace + session dir, the `ALLOWED_PATHS` skill sources, the memory store
   when enabled, the credential-proxy and/or llama-swap port), writes it to a
-  per-session policy file, and invokes `systemd-run … pi-landlock-exec --json
+  per-session policy file, and invokes `systemd-run … landlock-exec --json
   <policy> -- pi …`. The session's private agent dir (`HOME`) and `TMPDIR` nest
   under the session-dir grant; the rpc pipe and `cwd` need no grant of their own.
 - **`modules/nixos/pi-sessiond/`** — the single `--user` executor (desktop loopback + each server user). Skill
   paths arrive through `allowedPaths` and fold into each session's Landlock FS
-  allowlist by mode; `pi-landlock-exec`'s absolute path is handed over via
+  allowlist by mode; `landlock-exec`'s absolute path is handed over via
   `SPACES_SESSIOND_LANDLOCK_EXEC`. The supervisor daemon is hardened with
   `ProtectHome=tmpfs` (so it — and any in-process extension — never sees `$HOME`)
   and binds back its state dir plus the user-manager IPC endpoints (`%t/systemd`,
   `%t/bus`) it needs to spawn each session via `systemd-run --user`.
-- **`packages/pi-landlock-exec/`** — the landlockconfig sandboxer, built in the
+- **`packages/landlock-exec/`** — the landlockconfig sandboxer, built in the
   flake against a pinned `landlockconfig` revision.
 
 ---
@@ -462,7 +462,7 @@ A kernel 0-day defeats both — that is a microVM, separately.
 
 - **Cheap focused check** (`checks/pi-sessiond-landlock/`, a small `runNixOSTest`
   — Landlock needs a real kernel, so not a bare `runCommand`): run
-  `pi-landlock-exec` with a known landlockconfig policy around a probe binary and
+  `landlock-exec` with a known landlockconfig policy around a probe binary and
   assert, in one boot:
   - **can** write `workspaces/<id>`, read `/nix/store`;
   - **cannot** read a non-granted file (`/home/test/secret`) → `EACCES`;
@@ -498,13 +498,13 @@ packaging work* (Phase 0–1, isolated from pi-sessiond) and *does a real `pi` t
 survive the allowlist* (Phase 4, the §15 tuning risk) — and prove them cheaply
 before and around the wiring.
 
-**Phase 0 — launcher spike.** Add `packages/pi-landlock-exec/`: a small Rust bin
+**Phase 0 — launcher spike.** Add `packages/landlock-exec/`: a small Rust bin
 crate (deps `landlockconfig` + `landlock`; reference: landlockconfig's
 `examples/sandboxer.rs`) that reads repeatable `--json <policy>`, builds the
 ruleset best-effort, `restrict_self()`, then `execvp` the argv after `--`,
 logging the effective ABI. Package with `rustPlatform.buildRustPackage` (vendored
 `Cargo.lock`; no crane, no flake-input change — blueprint discovers
-`packages/<name>/`). *Done when* `nix build .#pi-landlock-exec` greens and the
+`packages/<name>/`). *Done when* `nix build .#landlock-exec` greens and the
 binary execs a passthrough command.
 
 **Phase 1 — cheap kernel check.** Add `checks/pi-sessiond-landlock/` (the §12
@@ -520,7 +520,7 @@ green and the `managed` path is untouched.
 
 **Phase 3 — wire main.ts + module.** `main.ts` writes the per-session policy file
 and spawns through the launcher; `modules/nixos/pi-sessiond/` folds skill paths
-(`allowedPaths`) into the Landlock allowlist and puts `pi-landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
+(`allowedPaths`) into the Landlock allowlist and puts `landlock-exec` on PATH / `SPACES_SESSIOND_LANDLOCK_EXEC`.
 `nsresourced` stays imported. *Done when* a session starts under the launcher in
 the VM.
 
@@ -545,7 +545,7 @@ config, the `ProtectHome`/`TemporaryFileSystem` block, and `nsresourced.nix`
 (with its BTF systemd-package override) are all **deleted**. What was done:
 
 1. **Done — local executor cutover.** Every desktop pi child (a uid-1000 user
-   service) is spawned through pi-landlock-exec.
+   service) is spawned through landlock-exec.
 2. **Done — root executor retired (per-user cutover).** The root system service
    is gone (docs/pi-sessiond-per-user-refactor.md). Desktop and server now run
    the *same* `--user` executor (`modules/nixos/pi-sessiond/`): the

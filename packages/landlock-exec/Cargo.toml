@@ -1,5 +1,5 @@
 [package]
-name = "pi-landlock-exec"
+name = "landlock-exec"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "Per-session Landlock launcher for pi-sessiond: apply a landlockconfig policy, then exec the runtime confined."
 
 [[bin]]
-name = "pi-landlock-exec"
+name = "landlock-exec"
 path = "src/main.rs"
 
 [dependencies]

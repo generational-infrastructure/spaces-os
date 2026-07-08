@@ -670,7 +670,7 @@ in
       }
       // cfg.sandboxEnv;
       allowedPaths = [
-        # A missing socket is fine: pi-landlock-exec skips an absent grant
+        # A missing socket is fine: landlock-exec skips an absent grant
         # non-fatally, and the CLIs degrade gracefully when the skill-config
         # daemon / panel listener is down.
         {
