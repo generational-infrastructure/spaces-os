@@ -67,10 +67,12 @@ in
       storeDir = "%S/spaces-integrationd/${name}";
 
       # Static half of the Landlock policy; the CLI folds in the per-user paths
-      # at start. connectPorts is the port-granular TCP egress allowlist (the
-      # coarse AF_INET gate is RestrictAddressFamilies, from `network`).
+      # at start. connectPorts / bindPorts are the port-granular TCP egress /
+      # ingress allowlists (the coarse AF_INET gate is RestrictAddressFamilies,
+      # from `network`). Both ride unconditionally: an empty list lowers to no
+      # rule, but bind_tcp stays denied by default (buildLandlockPolicy).
       policySpec = {
-        inherit (manifest) connectPorts;
+        inherit (manifest) connectPorts bindPorts;
         abi = 6;
         scope = [
           "signal"
@@ -93,6 +95,7 @@ in
           description
           network
           connectPorts
+          bindPorts
           autoRun
           confirmPreview
           multiProfile

@@ -112,6 +112,17 @@ let
           network is off.
         '';
       };
+      bindPorts = lib.mkOption {
+        type = lib.types.listOf lib.types.port;
+        default = [ ];
+        description = ''
+          Port-granular TCP bind allowlist (Landlock netPort, bind_tcp). Non-empty
+          => the server may listen only on these ports; every other bind is denied.
+          Empty (the default) => the server may not listen at all — bind stays
+          denied by default. Used e.g. by a mail bridge exposing a local IMAP/SMTP
+          port. Requires `network = true` for the AF_INET family gate.
+        '';
+      };
       extraPaths = lib.mkOption {
         type = lib.types.listOf extraPathSubmodule;
         default = [ ];

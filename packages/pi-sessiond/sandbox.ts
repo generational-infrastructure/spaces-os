@@ -90,6 +90,7 @@ export interface SandboxPolicy {
   roFiles?: string[]; // read-only files (defaults += /etc DNS/nss files)
   rx?: string[]; // read+execute parents (defaults += /nix/store)
   connectPorts?: number[]; // egress TCP ports the child may dial (credential proxy and/or local llama-swap); empty = no egress
+  bindPorts?: number[]; // TCP ports the child may listen on (bind); empty = no bind rule but bind stays denied by default
   abi?: number; // highest requested Landlock ABI (best-effort below it); default 6
   scope?: ("signal" | "abstract_unix_socket")[]; // IPC scoping; default both
 }
@@ -118,18 +119,30 @@ export function buildLandlockPolicy(p: SandboxPolicy): Record<string, unknown> {
     .filter(([, parent]) => parent.length > 0)
     .map(([allowedAccess, parent]) => ({ allowedAccess, parent }));
 
-  const doc: Record<string, unknown> = {
-    abi,
-    ruleset: scope.length > 0 ? [{ scoped: scope }] : [],
-    pathBeneath,
-  };
-  // Egress is locked to the model endpoint port(s): the credential proxy (so the
-  // openrouter key never enters the sandbox) and/or the loopback llama-swap port
-  // for the local provider. bind is never allowed (the runtime never listens).
-  // Port-granular, not address-granular (§5.2).
-  if (p.connectPorts && p.connectPorts.length > 0) {
-    doc.netPort = [{ allowedAccess: ["connect_tcp"], port: p.connectPorts }];
-  }
+  // bind_tcp is always in the ruleset's handled-access set, independent of any
+  // grant: that is what makes bind deny-by-default. A landlockconfig ruleset
+  // only refuses the access rights it *handles*, so without this every bind
+  // would be silently allowed. `scoped` rides the same ruleset entry when set.
+  const ruleset: Record<string, unknown>[] = [
+    {
+      ...(scope.length > 0 ? { scoped: scope } : {}),
+      handledAccessNet: ["bind_tcp"],
+    },
+  ];
+  const doc: Record<string, unknown> = { abi, ruleset, pathBeneath };
+  // Port-granular TCP grants (§5.2), not address-granular. Egress (connect_tcp)
+  // is locked to the model endpoint port(s): the credential proxy (so the
+  // openrouter key never enters the sandbox) and/or the loopback llama-swap
+  // port. Ingress (bind_tcp) is normally none — the runtime never listens — but
+  // an integration that must accept a local connection declares bind ports.
+  // Absent connect_tcp handling here means the coarse AF_INET family gate still
+  // governs egress; bind is always handled above, so an unlisted bind is denied.
+  const netPort: { allowedAccess: string[]; port: number[] }[] = [];
+  if (p.connectPorts && p.connectPorts.length > 0)
+    netPort.push({ allowedAccess: ["connect_tcp"], port: p.connectPorts });
+  if (p.bindPorts && p.bindPorts.length > 0)
+    netPort.push({ allowedAccess: ["bind_tcp"], port: p.bindPorts });
+  if (netPort.length > 0) doc.netPort = netPort;
   return doc;
 }
 

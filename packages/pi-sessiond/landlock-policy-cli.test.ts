@@ -66,13 +66,18 @@ test("end-to-end: deny-by-default doc grants exactly StateDir(rw) + cred(ro) + 4
     lowerIntegrationPolicy(githubSpec, resolved),
   ) as {
     abi: number;
-    ruleset: { scoped: string[] }[];
+    ruleset: { scoped?: string[]; handledAccessNet?: string[] }[];
     pathBeneath: { allowedAccess: string[]; parent: string[] }[];
     netPort?: { allowedAccess: string[]; port: number[] }[];
   };
 
   expect(doc.abi).toBe(6);
-  expect(doc.ruleset).toEqual([{ scoped: ["signal", "abstract_unix_socket"] }]);
+  expect(doc.ruleset).toEqual([
+    {
+      scoped: ["signal", "abstract_unix_socket"],
+      handledAccessNet: ["bind_tcp"],
+    },
+  ]);
 
   // Exactly one read_write bucket, and it is exactly the StateDirectory.
   const rw = doc.pathBeneath.filter((r) =>
@@ -103,6 +108,41 @@ test("end-to-end: deny-by-default doc grants exactly StateDir(rw) + cred(ro) + 4
   const allParents = doc.pathBeneath.flatMap((r) => r.parent);
   expect(allParents).not.toContain("/home/alice");
   expect(allParents).not.toContain("/home/alice/.local/state");
+});
+
+test("lowerIntegrationPolicy: bindPorts fold through into a bind_tcp rule", () => {
+  // A mail-style integration that listens on a local IMAP+SMTP bridge declares
+  // bind ports; they lower into a bind_tcp netPort entry, distinct from egress.
+  const spec: IntegrationPolicySpec = {
+    connectPorts: [443],
+    bindPorts: [1143, 1025],
+    abi: 6,
+    scope: ["signal", "abstract_unix_socket"],
+  };
+  const p = lowerIntegrationPolicy(spec, resolved);
+  expect(p.bindPorts).toEqual([1143, 1025]);
+  const doc = buildLandlockPolicy(p) as {
+    netPort?: { allowedAccess: string[]; port: number[] }[];
+  };
+  expect(doc.netPort).toEqual([
+    { allowedAccess: ["connect_tcp"], port: [443] },
+    { allowedAccess: ["bind_tcp"], port: [1143, 1025] },
+  ]);
+});
+
+test("lowerIntegrationPolicy: absent bindPorts grants no bind but keeps it handled", () => {
+  // Deny-by-default: no bind grant, no bind netPort rule, yet bind_tcp stays in
+  // the handled set so any unlisted bind is refused.
+  const p = lowerIntegrationPolicy(githubSpec, resolved);
+  expect(p.bindPorts).toEqual([]);
+  const doc = buildLandlockPolicy(p) as {
+    ruleset: { handledAccessNet?: string[] }[];
+    netPort?: { allowedAccess: string[]; port: number[] }[];
+  };
+  expect(doc.ruleset[0]!.handledAccessNet).toEqual(["bind_tcp"]);
+  expect(doc.netPort).toEqual([
+    { allowedAccess: ["connect_tcp"], port: [443] },
+  ]);
 });
 
 // A signal-style integration: a rw socket dir + an ro attachments dir folded

@@ -60,6 +60,19 @@ let
         }
       ];
     };
+    # bindPorts (proton-mail groundwork): a listening bridge grants bind_tcp on
+    # its local IMAP/SMTP ports. A synthetic name (not a defaults.nix integration)
+    # so it never merges with the real `mail` manifest. Networked so the AF_INET
+    # family gate is open; no connectPorts, so the bind rule is the only netPort.
+    bindports = {
+      description = "Bind-ports demo";
+      command = "integration-bindports-placeholder";
+      network = true;
+      bindPorts = [
+        1143
+        1025
+      ];
+    };
   };
 
   enabledSystem = mkSystem [
@@ -112,6 +125,13 @@ let
     landlockPolicyCli = "unused-here";
     landlockExec = "unused-here";
   };
+  bindportsInteg = integLib.mkIntegration {
+    name = "bindports";
+    manifest = enabledSystem.config.services.spaces-integrations.integrations.bindports;
+    landlockPolicyCli = "unused-here";
+    landlockExec = "unused-here";
+  };
+  bindportsDef = bindportsInteg.definition;
   brokerSvc = enabledSystem.config.systemd.user.services.spaces-integrationd;
 in
 # ── Exec lines: shape at eval (no realize) ──────────────────────────────────
@@ -136,6 +156,14 @@ assert ghDef.secrets.token.required;
 assert ghDef.multiProfile;
 assert ghDef ? config && ghDef.config ? owner;
 assert !(ghDef ? command);
+# bindPorts posture rides the world-readable definition next to connectPorts: the
+# bind-ports bridge lists its bind ports, an integration without any lists none.
+assert
+  bindportsDef.bindPorts == [
+    1143
+    1025
+  ];
+assert ghDef.bindPorts == [ ];
 # ── Broker unit (step 2): user-scoped host+tpm2 secret path, never pure tpm2 ─
 assert lib.hasSuffix "/bin/spaces-integrationd" brokerSvc.serviceConfig.ExecStart;
 assert brokerSvc.serviceConfig.StateDirectory == "spaces-integrationd";
@@ -153,6 +181,8 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     ghDefinition = builtins.toJSON ghDef;
     specFile = ghInteg.policySpecFile;
     wpSpecFile = wpInteg.policySpecFile;
+    bindportsSpecFile = bindportsInteg.policySpecFile;
+    bindportsDefinition = builtins.toJSON bindportsDef;
     disabledHasGithub =
       if (disabledSystem.config.systemd.user.services."spaces-integration-github" or null) == null then
         "no"
@@ -202,6 +232,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     def '.secrets.token.required == true'
     def '.config.owner.description | length > 0'
     def 'has("command") | not'
+    def '.bindPorts == []'
     [ "$hasEtc" = "yes" ] || fail "github definition not wired into /etc"
 
     # ── 5. disabled / undeclared module generates nothing ───────────
@@ -213,7 +244,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     env STATE_DIRECTORY=/sample/state CREDENTIALS_DIRECTORY=/sample/cred \
       spaces-landlock-policy --spec "$specFile" --out "$policy"
     jq -e '.abi == 6' "$policy" >/dev/null || fail "policy abi"
-    jq -e '.ruleset == [{"scoped":["signal","abstract_unix_socket"]}]' "$policy" >/dev/null \
+    jq -e '.ruleset == [{"scoped":["signal","abstract_unix_socket"],"handledAccessNet":["bind_tcp"]}]' "$policy" >/dev/null \
       || fail "policy IPC scope"
     jq -e '.netPort == [{"allowedAccess":["connect_tcp"],"port":[443]}]' "$policy" >/dev/null \
       || fail "egress not locked to 443"
@@ -245,7 +276,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     # extraPaths key — byte-identical to the pre-mechanism spec shape.
     jq -e 'has("extraPaths") | not' "$specFile" >/dev/null \
       || fail "extraPaths key leaked into an integration that declared none"
-    jq -e '. == {"abi":6,"connectPorts":[443],"scope":["signal","abstract_unix_socket"]}' \
+    jq -e '. == {"abi":6,"bindPorts":[],"connectPorts":[443],"scope":["signal","abstract_unix_socket"]}' \
       "$specFile" >/dev/null || fail "no-extraPaths spec not byte-identical to before"
 
     # Lowering routes rw→writable set, ro→read-only set (nothing else granted).
@@ -258,6 +289,29 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
       "$wppolicy" >/dev/null || fail "ro extraPath not folded into the read-only set"
     jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] | index("/home/x/.local/share/signal-cli/attachments") == null' \
       "$wppolicy" >/dev/null || fail "ro extraPath leaked into the writable set"
+
+    # ── 9. bindPorts (proton-mail groundwork): the listening bridge grants
+    # bind_tcp on EXACTLY its declared ports; egress stays closed. The spec
+    # carries bindPorts verbatim; the CLI lowers it into one bind_tcp netPort rule.
+    jq -e '.bindPorts == [1143, 1025]' "$bindportsSpecFile" >/dev/null \
+      || fail "bindPorts missing from the bind-ports policy spec"
+    bindpolicy=$PWD/landlock-bindports.json
+    env STATE_DIRECTORY=/sample/state spaces-landlock-policy --spec "$bindportsSpecFile" --out "$bindpolicy"
+    jq -e '.netPort == [{"allowedAccess":["bind_tcp"],"port":[1143,1025]}]' "$bindpolicy" >/dev/null \
+      || fail "bind ports not lowered to exactly [1143,1025]"
+    # Deny-by-default: bind_tcp is handled for the bind integration…
+    jq -e '.ruleset[0].handledAccessNet == ["bind_tcp"]' "$bindpolicy" >/dev/null \
+      || fail "bind_tcp not handled (deny-by-default) for the bind-ports integration"
+    # …and equally for one that declares NO bind ports (section 6's $policy): it
+    # grants no bind rule yet still handles bind_tcp, so any unlisted bind is denied.
+    jq -e '.ruleset[0].handledAccessNet == ["bind_tcp"]' "$policy" >/dev/null \
+      || fail "bind_tcp not handled (deny-by-default) for a no-bind integration"
+    jq -e 'any(.netPort[]?; .allowedAccess | index("bind_tcp")) | not' "$policy" >/dev/null \
+      || fail "no-bind integration unexpectedly granted a bind rule"
+    # The definition surfaces the posture next to connectPorts (panel shows it on
+    # manifest approval): the bridge lists its bind ports.
+    jq -e '.bindPorts == [1143, 1025]' <<<"$bindportsDefinition" >/dev/null \
+      || fail "bindPorts not surfaced in the bind-ports definition"
 
     touch "$out"
   ''

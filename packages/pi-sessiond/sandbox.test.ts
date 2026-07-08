@@ -26,14 +26,21 @@ const policyInput: SandboxPolicy = {
 test("the landlockconfig policy is deny-by-default with fs/net/scope grants", () => {
   const doc = buildLandlockPolicy(policyInput) as {
     abi: number;
-    ruleset: { scoped: string[] }[];
+    ruleset: { scoped?: string[]; handledAccessNet?: string[] }[];
     pathBeneath: { allowedAccess: string[]; parent: string[] }[];
     netPort?: { allowedAccess: string[]; port: number[] }[];
   };
 
   expect(doc.abi).toBe(6);
-  // ABI-6 IPC scoping: the cross-session/other-process wall (replaces uid).
-  expect(doc.ruleset).toEqual([{ scoped: ["signal", "abstract_unix_socket"] }]);
+  // ABI-6 IPC scoping (the cross-session/other-process wall, replaces uid) plus
+  // bind_tcp always handled: the runtime never listens, so every unlisted bind
+  // is denied by default even though no bind port is granted here.
+  expect(doc.ruleset).toEqual([
+    {
+      scoped: ["signal", "abstract_unix_socket"],
+      handledAccessNet: ["bind_tcp"],
+    },
+  ]);
 
   // Writable directories get the full read_write group — parents are exactly
   // the session dirs, no files mixed in (so the ruleset stays fully enforced).
@@ -108,6 +115,44 @@ test("no connect ports means no egress rule", () => {
     netPort?: unknown;
   };
   expect(doc.netPort).toBeUndefined();
+});
+
+test("bind ports emit a bind_tcp rule alongside connect egress", () => {
+  // Integrations that must listen (e.g. a local IMAP/SMTP bridge) declare bind
+  // ports; they ride a second netPort entry, disjoint from the connect one.
+  const doc = buildLandlockPolicy({
+    rwDirs: ["/x"],
+    connectPorts: [443],
+    bindPorts: [1143, 1025],
+  }) as { netPort?: { allowedAccess: string[]; port: number[] }[] };
+  expect(doc.netPort).toEqual([
+    { allowedAccess: ["connect_tcp"], port: [443] },
+    { allowedAccess: ["bind_tcp"], port: [1143, 1025] },
+  ]);
+});
+
+test("multiple bind ports collapse into one bind_tcp rule", () => {
+  const doc = buildLandlockPolicy({
+    rwDirs: ["/x"],
+    bindPorts: [1143, 1025],
+  }) as { netPort?: { allowedAccess: string[]; port: number[] }[] };
+  expect(doc.netPort).toEqual([
+    { allowedAccess: ["bind_tcp"], port: [1143, 1025] },
+  ]);
+});
+
+test("no bind ports still handles bind_tcp so every bind is denied", () => {
+  // Deny-by-default posture: bind_tcp stays in the ruleset's handled set even
+  // with no bind grant, so an unlisted bind is refused — but no bind rule is
+  // emitted (nothing is bindable), and connect egress is untouched.
+  const doc = buildLandlockPolicy({ rwDirs: ["/x"], connectPorts: [443] }) as {
+    ruleset: { scoped?: string[]; handledAccessNet?: string[] }[];
+    netPort?: { allowedAccess: string[]; port: number[] }[];
+  };
+  expect(doc.ruleset[0]!.handledAccessNet).toEqual(["bind_tcp"]);
+  expect(doc.netPort).toEqual([
+    { allowedAccess: ["connect_tcp"], port: [443] },
+  ]);
 });
 
 const landlockUnit: LandlockUnitConfig = {

@@ -24,6 +24,9 @@ import { buildLandlockPolicy, type SandboxPolicy } from "./sandbox";
 // manifest's `network` bool).
 export interface IntegrationPolicySpec {
   connectPorts?: number[];
+  // Port-granular TCP bind allowlist (empty/absent ⇒ no bind rule, but bind_tcp
+  // stays handled so every unlisted bind is denied — see buildLandlockPolicy).
+  bindPorts?: number[];
   abi?: number;
   scope?: ("signal" | "abstract_unix_socket")[];
   // Forward-compat static grants; default none.
@@ -111,6 +114,7 @@ export function lowerIntegrationPolicy(
     roDirs: [...resolved.credDirs, ...(spec.roDirs ?? []), ...extraRo],
     roFiles: spec.roFiles ?? [],
     connectPorts: spec.connectPorts ?? [],
+    bindPorts: spec.bindPorts ?? [],
     abi: spec.abi,
     scope: spec.scope,
   };
