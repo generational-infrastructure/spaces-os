@@ -330,7 +330,9 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     sc '.StateDirectory == "spaces-integration-github"'
     sc '.RuntimeDirectory == "spaces-integration-github"'
     sc '.LoadCredentialEncrypted == ["secrets:%S/spaces-integrationd/github/secrets"]'
-    sc '.LoadCredential == ["config:%S/spaces-integrationd/github/config.toml"]'
+    # The managed directory credential (agent-integrations §10.3) rides last on
+    # EVERY MCP unit, unconditional — the stager always creates the per-user dir.
+    sc '.LoadCredential == ["config:%S/spaces-integrationd/github/config.toml","managed:/run/spaces-integrations-managed/%u/github"]'
     # network = true → IP egress permitted at the family layer (Landlock netPort
     # refines the ports below).
     sc '.RestrictAddressFamilies == "AF_UNIX AF_INET AF_INET6"'
@@ -345,7 +347,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     # ── 2. offline integration: no IP egress, no credentials ────────
     notes '.RestrictAddressFamilies == "AF_UNIX"'
     notes '.LoadCredentialEncrypted == []'
-    notes '.LoadCredential == []'
+    notes '.LoadCredential == ["managed:/run/spaces-integrations-managed/%u/notes"]'
 
     # ── 3. socket-activation endpoint ───────────────────────────────
     sock '.ListenStream == "%t/spaces-integration-github.sock"'

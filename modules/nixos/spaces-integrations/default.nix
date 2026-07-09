@@ -374,13 +374,196 @@ let
   # Landlock-confined resident units for its backing vendor daemons (bare-string
   # entries contribute none), keyed by unit name minus `.service`.
   extraServiceUnits = lib.mkMerge (lib.mapAttrsToList (_: i: i.extraServiceUnits) built);
+
+  # ── Nix-managed per-user integration profiles (agent-integrations §10) ──────
+  # `spaces.users` (the pure-data namespace in ../spaces-users.nix) lowered to a
+  # root stager + a per-user staged credential tree. mkManaged validates; the
+  # stager materialises. The one added unit line lives in lib.nix's mkServiceUnit.
+  usersCfg = config.spaces.users;
+  managed = integLib.mkManaged {
+    users = usersCfg;
+    integrations = cfg.integrations;
+    knownUsers = builtins.attrNames config.users.users;
+  };
+
+  managedRoot = "/run/spaces-integrations-managed";
+  normalUsers = lib.filterAttrs (_: u: u.isNormalUser) config.users.users;
+  allIntegrationNames = lib.attrNames cfg.integrations;
+  # Stage only for users that are BOTH declared in spaces.users AND normal: the
+  # per-user dir loop owns dir creation for normal users, and a non-existent
+  # username is reported by mkManaged (never silently staged into a bad chown).
+  stagedUsers = lib.filterAttrs (uname: _: normalUsers ? ${uname}) usersCfg;
+
+  userOwn = uname: "-o ${uname} -g ${config.users.users.${uname}.group}";
+  managedIntegrationsOf =
+    uconf: lib.filterAttrs (iname: _: cfg.integrations ? ${iname}) uconf.integrations;
+
+  # `file =` config refs for a user → one jq shell var each (the index gives a
+  # valid, unique identifier even when field names carry `-`).
+  fileRefsOf =
+    mi:
+    lib.imap0 (i: r: r // { var = "f${toString i}"; }) (
+      lib.concatLists (
+        lib.mapAttrsToList (
+          iname: ientry:
+          lib.concatLists (
+            lib.mapAttrsToList (
+              pname: profile:
+              lib.concatMap (
+                field:
+                let
+                  v = profile.config.${field};
+                in
+                lib.optional (!builtins.isString v) {
+                  inherit iname pname field;
+                  path = v.file;
+                }
+              ) (lib.attrNames profile.config)
+            ) ientry.profiles
+          )
+        ) mi
+      )
+    );
+  varOf =
+    refs: iname: pname: field:
+    (lib.findFirst (r: r.iname == iname && r.pname == pname && r.field == field) null refs).var;
+
+  # jq object expression for managed.json's `integrations` map: literals inlined
+  # as JSON, `file =` config values referenced as $fN (resolved at stage time),
+  # `secrets` reduced to the declared field-name list (values never appear).
+  cfgValueExpr =
+    refs: iname: pname: field: v:
+    if builtins.isString v then builtins.toJSON v else "$" + varOf refs iname pname field;
+  profileExpr =
+    refs: iname: pname: profile:
+    let
+      cfgEntries = map (
+        field: "${builtins.toJSON field}: ${cfgValueExpr refs iname pname field profile.config.${field}}"
+      ) (lib.attrNames profile.config);
+    in
+    "{ \"config\": { ${lib.concatStringsSep ", " cfgEntries} }, \"secrets\": ${builtins.toJSON (lib.attrNames profile.secrets)} }";
+  integExpr =
+    refs: iname: ientry:
+    let
+      profilesPart = lib.optionalString (ientry.profiles != { }) (
+        ", \"profiles\": { "
+        + lib.concatStringsSep ", " (
+          lib.mapAttrsToList (pname: p: "${builtins.toJSON pname}: ${profileExpr refs iname pname p}") ientry.profiles
+        )
+        + " }"
+      );
+    in
+    "{ \"enable\": ${lib.boolToString ientry.enable}${profilesPart} }";
+  integrationsExpr =
+    refs: mi:
+    "{ "
+    + lib.concatStringsSep ", " (
+      lib.mapAttrsToList (iname: i: "${builtins.toJSON iname}: ${integExpr refs iname i}") mi
+    )
+    + " }";
+
+  # managed-config.toml lines for one integration (skill-config TOML: one
+  # [<integration>.<profile>] table per profile; literals baked, file= via jq @json).
+  tomlLines =
+    refs: iname: ientry:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        pname: profile:
+        [ "printf '%s\\n' ${lib.escapeShellArg "[${iname}.${pname}]"}" ]
+        ++ map (
+          field:
+          let
+            v = profile.config.${field};
+          in
+          if builtins.isString v then
+            "printf '%s\\n' ${lib.escapeShellArg "${field} = ${builtins.toJSON v}"}"
+          else
+            "printf '${field} = %s\\n' \"$(jq -rn --arg v \"\$${varOf refs iname pname field}\" '$v|@json')\""
+        ) (lib.attrNames profile.config)
+      ) ientry.profiles
+    );
+
+  perIntegrationScript =
+    uname: refs: iname: ientry:
+    let
+      own = userOwn uname;
+      intDir = "${managedRoot}/${uname}/${iname}";
+    in
+    lib.optionals (ientry.profiles != { }) (
+      [ "cttmp=\"$(mktemp)\"" ]
+      ++ map (l: "${l} >> \"$cttmp\"") (tomlLines refs iname ientry)
+      ++ [
+        "install -m 0400 ${own} \"$cttmp\" ${intDir}/managed-config.toml"
+        "rm -f \"$cttmp\""
+      ]
+    )
+    # secrets are COPIED (never symlinked) so the unit's credential snapshot is stable.
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        pname: profile:
+        map (
+          field:
+          "install -m 0400 ${own} ${lib.escapeShellArg profile.secrets.${field}.file} ${intDir}/secret-${pname}-${field}"
+        ) (lib.attrNames profile.secrets)
+      ) ientry.profiles
+    );
+
+  mkUserManagedScript =
+    uname: uconf:
+    let
+      own = userOwn uname;
+      userDir = "${managedRoot}/${uname}";
+      mi = managedIntegrationsOf uconf;
+      refs = fileRefsOf mi;
+    in
+    lib.optionals (mi != { }) (
+      map (r: "${r.var}=\"$(cat ${lib.escapeShellArg r.path})\"") refs
+      ++ [
+        # `generation` is bumped on EVERY re-stage via `date +%s`: the stager is
+        # a runtime script, so wall-clock is a monotonic-enough source, and a
+        # secret-only rotation still rewrites managed.json — firing the broker's
+        # mtime/generation watch.
+        "gen=\"$(date +%s)\""
+        "mjtmp=\"$(mktemp)\""
+        "jq -n --argjson generation \"$gen\"${lib.concatMapStrings (r: " --arg ${r.var} \"\$${r.var}\"") refs} ${lib.escapeShellArg "{ \"generation\": $generation, \"integrations\": ${integrationsExpr refs mi} }"} > \"$mjtmp\""
+        "install -m 0400 ${own} \"$mjtmp\" ${userDir}/managed.json"
+        "rm -f \"$mjtmp\""
+      ]
+      ++ lib.concatLists (lib.mapAttrsToList (perIntegrationScript uname refs) mi)
+    );
+
+  # The full stager body. Every normal user gets a per-user root (0500,
+  # user-owned) plus a subdir for EVERY declared integration (Phase 0.3: a
+  # MISSING credential dir hard-fails the unit, so it must exist unconditionally;
+  # an empty one is fine). Users with Nix opinions then get managed.json + the
+  # per-integration managed-config.toml/secret files.
+  managedStagerScript = lib.concatStringsSep "\n" (
+    [
+      "set -eu"
+      "install -d -m 0755 -o root -g root ${managedRoot}"
+    ]
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        uname: _:
+        [ "install -d -m 0500 ${userOwn uname} ${managedRoot}/${uname}" ]
+        ++ map (iname: "install -d -m 0500 ${userOwn uname} ${managedRoot}/${uname}/${iname}") allIntegrationNames
+      ) normalUsers
+    )
+    ++ lib.concatLists (lib.mapAttrsToList mkUserManagedScript stagedUsers)
+  );
 in
 {
   # Every consumer of the module gets the 5 default integrations (github,
   # caldav, contacts, mail, signal). Each field is individually mkDefault, so a
   # host can override one sub-option without losing the rest, and may still
   # declare EXTRA integrations alongside them.
-  imports = [ (import ./defaults.nix { inherit inputs; }) ];
+  imports = [
+    (import ./defaults.nix { inherit inputs; })
+    # The pure-data `spaces.users` namespace (../spaces-users.nix) this module
+    # consumes + lowers (agent-integrations §10). Imported here so every consumer
+    # of spaces-integrations — including the isolated eval checks — sees it.
+    inputs.self.nixosModules.spaces-users
+  ];
 
   options.services.spaces-integrations = {
     enable = lib.mkEnableOption "agent integrations: per-user, Landlock-confined MCP servers behind the supervisor gateway";
@@ -398,7 +581,11 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkMerge [
+    # Validate spaces.users regardless of `enable` so a misconfiguration is
+    # caught even on a host that has integrations turned off.
+    { assertions = managed.assertions; }
+    (lib.mkIf cfg.enable {
     # Each user runs their own per-user broker, which seals that user's secrets
     # with `systemd-creds --with-key=host+tpm2` (§5.2) and so needs TPM device
     # access. security.tpm2 provides it — it creates the `tss` group and the
@@ -415,6 +602,26 @@ in
     users.groups.tss.members = builtins.attrNames (
       lib.filterAttrs (_: u: u.isNormalUser) config.users.users
     );
+
+      # Root stager (agent-integrations §10.2), mirroring pi-chat's
+      # spaces-secrets-load: a root oneshot that materialises the per-user staged
+      # credential tree at boot/switch. Fully generated above; only `generation`
+      # and any `file =` values are resolved at runtime.
+      systemd.services.spaces-integrations-managed-load = {
+        description = "Stage Nix-managed integration profiles into per-user credential trees";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "local-fs.target" ];
+        path = [
+          pkgs.coreutils
+          pkgs.jq
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          UMask = "0077";
+        };
+        script = managedStagerScript;
+      };
 
     # The broker runs whenever integrations are enabled (even with none declared
     # yet): it owns enable/disable + secret provisioning over
@@ -478,5 +685,6 @@ in
     environment.etc = lib.mapAttrs' (
       name: i: lib.nameValuePair "spaces-integrations/${name}.json" { source = i.definitionFile; }
     ) built;
-  };
+    })
+  ];
 }

@@ -35,6 +35,73 @@ in
 {
   inherit jsonFormat;
 
+  # Eval-time validation of `spaces.users` against the integration manifests
+  # (agent-integrations §10.1). Pure: default.nix feeds it the resolved option
+  # values so the same logic drives `config.assertions` and the nix-eval check.
+  # Every computation that reaches into a manifest is guarded on the integration
+  # being known, so an unknown-integration mistake yields ONLY its own crisp
+  # assertion instead of a raw attribute-missing throw.
+  #   users        = config.spaces.users
+  #   integrations = config.services.spaces-integrations.integrations
+  #   knownUsers   = builtins.attrNames config.users.users
+  mkManaged =
+    {
+      users,
+      integrations,
+      knownUsers,
+    }:
+    let
+      perIntegration =
+        uname: iname: ientry:
+        let
+          known = integrations ? ${iname};
+          manifest = integrations.${iname} or null;
+          hasFields = known && (manifest.config != { } || manifest.secrets != { });
+          reqOf = fields: lib.filter (f: fields.${f}.required) (lib.attrNames fields);
+          completeness =
+            pname:
+            let
+              profile = ientry.profiles.${pname};
+            in
+            map (f: {
+              assertion = profile.config ? ${f};
+              message = "spaces.users.${uname}.integrations.${iname}.profiles.${pname}: missing required config field '${f}'";
+            }) (reqOf manifest.config)
+            ++ map (f: {
+              assertion = profile.secrets ? ${f};
+              message = "spaces.users.${uname}.integrations.${iname}.profiles.${pname}: missing required secret '${f}'";
+            }) (reqOf manifest.secrets);
+        in
+        # the integration must exist
+        [
+          {
+            assertion = known;
+            message = "spaces.users.${uname}.integrations.${iname}: unknown integration '${iname}' (not in services.spaces-integrations.integrations)";
+          }
+        ]
+        # a field-less integration (no config/secret fields) takes `enable` only
+        ++ lib.optional (known && !hasFields) {
+          assertion = ientry.profiles == { };
+          message = "spaces.users.${uname}.integrations.${iname}: integration '${iname}' declares no config or secret fields; only 'enable' is allowed, not profiles";
+        }
+        # every managed profile must be complete (guarded on a known, field-bearing integration)
+        ++ lib.optionals (known && hasFields) (lib.concatMap completeness (lib.attrNames ientry.profiles));
+
+      perUser =
+        uname: uconf:
+        # the user must exist in users.users
+        [
+          {
+            assertion = lib.elem uname knownUsers;
+            message = "spaces.users.${uname}: unknown user '${uname}' (not in users.users)";
+          }
+        ]
+        ++ lib.concatLists (lib.mapAttrsToList (perIntegration uname) uconf.integrations);
+    in
+    {
+      assertions = lib.concatLists (lib.mapAttrsToList perUser users);
+    };
+
   # manifest -> { unitName, serviceUnit, socketUnit, policySpec, policySpecFile,
   #               definition, definitionFile }. Pure data; no NixOS wiring.
   mkIntegration =
@@ -265,13 +332,21 @@ in
             ++ lib.mapAttrsToList (k: v: "${k}=${v}") manifest.environment;
             RuntimeDirectory = unitName;
             StateDirectory = unitName;
-            # The broker delivers the whole store as two fixed credentials:
-            # `config` (plaintext rows, ro) and `secrets` (host+tpm2 blob,
-            # decrypted ro), each in a private mount the agent's Landlock domain
-            # never grants. Profiles live inside, so the credential set never grows
-            # with accounts. Each is emitted only when the manifest declares fields
-            # of that kind.
-            LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml";
+            # The broker delivers its store as two fixed credentials: `config`
+            # (plaintext rows, ro) and `secrets` (host+tpm2 blob, decrypted ro),
+            # each in a private mount the agent's Landlock domain never grants.
+            # Profiles live inside, so the credential set never grows with
+            # accounts. Each is emitted only when the manifest declares fields of
+            # that kind. THE managed line (agent-integrations §10.3) is always
+            # last and unconditional: a directory credential whose contained
+            # files each become `managed_<filename>`. It points at the per-user
+            # root the stager creates for EVERY integration × user — an empty dir
+            # yields zero credentials and the unit starts, a MISSING dir would
+            # hard-fail it (243/CREDENTIALS), which is why the stager always makes
+            # the subdir.
+            LoadCredential =
+              lib.optional hasConfig "config:${storeDir}/config.toml"
+              ++ [ "managed:/run/spaces-integrations-managed/%u/${name}" ];
             LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
           }
           // hardeningServiceConfig manifest.network;
