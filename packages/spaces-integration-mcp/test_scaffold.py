@@ -241,6 +241,98 @@ def test_resolve_profile_single_and_none(tmp_path, monkeypatch):
     assert mcp.resolve_profile({}) == ("only", None)
 
 
+# --- managed credentials (Nix-managed profiles, design §10.3/§10.6) ----------
+
+
+def test_store_profile_managed_shadows_user(tmp_path, monkeypatch):
+    # A managed profile name wins WHOLESALE over a same-named user profile:
+    # user-only fields under that name are dropped, not per-field merged.
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text(
+        '[mail.work]\nimap_host = "user.imap"\nsmtp_host = "user.smtp"\n'
+    )
+    (creds / "secrets").write_text('[mail.work]\npassword = "user-pw"\n')
+    (creds / "managed_managed-config.toml").write_text(
+        '[mail.work]\nimap_host = "managed.imap"\n'
+    )
+    (creds / "managed_secret-work-password").write_text("managed-pw\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profile("work") == {
+        "imap_host": "managed.imap",
+        "password": "managed-pw",
+    }
+
+
+def test_store_profile_managed_only(tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text('[mail.home]\nimap_host = "home.imap"\n')
+    (creds / "managed_managed-config.toml").write_text(
+        '[mail.corp]\nimap_host = "corp.imap"\nsmtp_host = "corp.smtp"\n'
+    )
+    (creds / "managed_secret-corp-password").write_text("corp-pw")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profile("corp") == {
+        "imap_host": "corp.imap",
+        "smtp_host": "corp.smtp",
+        "password": "corp-pw",
+    }
+
+
+def test_store_profile_user_only_untouched_with_managed_present(tmp_path, monkeypatch):
+    # Managed creds for another profile must not disturb a user-only profile.
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text('[mail.home]\nimap_host = "home.imap"\n')
+    (creds / "secrets").write_text('[mail.home]\npassword = "home-pw"\n')
+    (creds / "managed_managed-config.toml").write_text('[mail.corp]\nimap_host = "c"\n')
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profile("home") == {
+        "imap_host": "home.imap",
+        "password": "home-pw",
+    }
+
+
+def test_managed_secret_filename_resolution_config_known(tmp_path, monkeypatch):
+    # A config-known profile prefix resolves a dashed field name correctly.
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "managed_managed-config.toml").write_text('[mail.work]\nimap_host = "w"\n')
+    (creds / "managed_secret-work-imap-password").write_text("secret-value\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profile("work") == {
+        "imap_host": "w",
+        "imap-password": "secret-value",
+    }
+
+
+def test_managed_secret_filename_fallback_split(tmp_path, monkeypatch):
+    # No config table for the profile → split on the first '-'.
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "managed_secret-solo-password").write_text("solo-pw")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profile("solo") == {"password": "solo-pw"}
+
+
+def test_store_profiles_union_of_user_and_managed(tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "config").write_text('[mail.home]\nimap_host = "h"\n')
+    (creds / "secrets").write_text('[mail.home]\npassword = "p"\n')
+    (creds / "managed_managed-config.toml").write_text('[mail.corp]\nimap_host = "c"\n')
+    (creds / "managed_secret-vault-token").write_text("t")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+
+    assert mcp.store_profiles() == ["corp", "home", "vault"]
+
+
 # --- make_server: declarative tool records ----------------------------------
 
 

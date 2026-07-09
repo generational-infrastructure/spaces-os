@@ -377,6 +377,19 @@ def test_authcmd_prints_stored_password(capsys, monkeypatch):
     assert capsys.readouterr().out.strip() == "pw-work-456"
 
 
+def test_authcmd_resolves_managed_password(tmp_path, capsys, monkeypatch):
+    # authcmd must go through the scaffold so a Nix-managed secret (no user
+    # `secrets` blob at all) still resolves. design §10.6 service-author contract.
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "managed_managed-config.toml").write_text('[mail.ops]\nimap_host = "ops.imap"\n')
+    (creds / "managed_secret-ops-password").write_text("managed-secret-pw\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    monkeypatch.setattr(sys, "argv", ["integration-mail-authcmd", "ops"])
+    integration_mail.authcmd()
+    assert capsys.readouterr().out.strip() == "managed-secret-pw"
+
+
 # --- schema.json: the package's exported store/tool contract ----------------
 
 

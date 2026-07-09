@@ -44,44 +44,139 @@ def shared_dir():
     return os.environ.get("SPACES_INTEGRATION_SHARED_DIR")
 
 
-def store_profile(profile, kinds=("config", "secrets")):
-    """Merged field values for one profile, read from the store's credential
-    blobs ($CREDENTIALS_DIRECTORY/config and .../secrets). The blobs are
-    skill-config TOML: a single [<skill>.<profile>] table tree per integration.
-    Returns {} when a blob is absent or unparseable — a missing field surfaces
-    as a tool error at the call site, never a crash.
-    """
+# Nix-managed credentials arrive as a directory LoadCredential (design §10.3):
+# each staged file is loaded as `managed_<filename>`, so the config blob is
+# managed_managed-config.toml and each secret is a managed_secret-<profile>-<field>
+# file holding one raw value.
+_MANAGED_CONFIG_CRED = "managed_managed-config.toml"
+_MANAGED_SECRET_PREFIX = "managed_secret-"
+
+
+def _merge_profile_tables(text, out):
+    """Fold a skill-config TOML blob's [<skill>.<profile>] tables into out
+    ({profile: {field: value}}); unparseable text is ignored."""
+    try:
+        doc = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return
+    for _skill, profiles in doc.items():
+        if isinstance(profiles, dict):
+            for prof, vals in profiles.items():
+                if isinstance(vals, dict):
+                    out.setdefault(prof, {}).update(vals)
+
+
+def _user_profiles(kinds):
+    """Parse the user config/secrets blobs → {profile: {field: value}}, merged
+    across the requested kinds."""
     out = {}
     for kind in kinds:
         text = read_credential(kind)
-        if not text:
-            continue
-        try:
-            doc = tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            continue
-        for _skill, profiles in doc.items():
-            if isinstance(profiles, dict) and isinstance(profiles.get(profile), dict):
-                out.update(profiles[profile])
+        if text:
+            _merge_profile_tables(text, out)
     return out
 
 
-def store_profiles(kinds=("config", "secrets")):
-    """Sorted names of every provisioned profile (union across the config and
-    secrets blobs).
+def _managed_config():
+    """Parse managed_managed-config.toml → {profile: {field: value}} (same
+    skill-config TOML layout as the user config blob); {} when absent."""
+    out = {}
+    text = read_credential(_MANAGED_CONFIG_CRED)
+    if text:
+        _merge_profile_tables(text, out)
+    return out
+
+
+def _split_managed_secret(rest, known):
+    """Resolve a managed_secret- filename's "<profile>-<field>" remainder into
+    (profile, field). For each config-known profile (longest first), a "<p>-…"
+    remainder binds field to the rest; when no known profile is a prefix, fall
+    back to splitting on the first '-'. Returns (profile, None) when the
+    fallback finds no '-' at all."""
+    for p in known:
+        if rest.startswith(p + "-"):
+            return p, rest[len(p) + 1 :]
+    profile, sep, field = rest.partition("-")
+    return (profile, field) if sep else (profile, None)
+
+
+def _managed_secrets(known_profiles):
+    """Read managed_secret-<profile>-<field> credential files →
+    {profile: {field: value}}. Values are read raw (stripped)."""
+    creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not creds_dir:
+        return {}
+    try:
+        names = os.listdir(creds_dir)
+    except OSError:
+        return {}
+    known = sorted(known_profiles, key=len, reverse=True)
+    out = {}
+    for name in names:
+        if not name.startswith(_MANAGED_SECRET_PREFIX):
+            continue
+        prof, field = _split_managed_secret(name[len(_MANAGED_SECRET_PREFIX) :], known)
+        if field is None:
+            continue
+        value = read_credential(name)
+        if value is not None:
+            out.setdefault(prof, {})[field] = value
+    return out
+
+
+def _managed_profiles(kinds):
+    """Managed profiles → {profile: {field: value}} for the requested kinds:
+    config values when "config" is requested, secret values when "secrets" is.
+    The config tables always supply the profile names that resolve secret
+    filenames, so they are parsed regardless of kinds."""
+    config = _managed_config()
+    out = {}
+    if "config" in kinds:
+        for prof, vals in config.items():
+            out.setdefault(prof, {}).update(vals)
+    if "secrets" in kinds:
+        for prof, vals in _managed_secrets(config.keys()).items():
+            out.setdefault(prof, {}).update(vals)
+    return out
+
+
+def store_profile(profile, kinds=("config", "secrets")):
+    """Effective field values for one profile: user credential blobs merged
+    UNDER Nix-managed credentials (design §10.3/§10.6).
+
+    User blobs: $CREDENTIALS_DIRECTORY/config and .../secrets, each skill-config
+    TOML ([<skill>.<profile>] tables). Managed sources (staged by the root
+    stager, loaded as a directory credential): managed_managed-config.toml (same
+    TOML layout) plus managed_secret-<profile>-<field> files (one raw, stripped
+    value each).
+
+    A managed profile name wins WHOLESALE: when <profile> is managed only its
+    managed values are returned and same-named user values are ignored (shadow,
+    not a per-field merge). Otherwise the user values are returned.
+
+    Secret filename -> (profile, field): the "<profile>-<field>" remainder of a
+    managed_secret-* filename is resolved by matching a config-known profile
+    name (from managed_managed-config.toml, longest match first) as the prefix;
+    a remainder whose prefix matches no known profile falls back to splitting on
+    the first '-' (profile = chars up to the first '-').
+
+    Returns {} when nothing is provisioned or a blob is unparseable — a missing
+    field surfaces as a tool error at the call site, never a crash.
     """
-    names = set()
-    for kind in kinds:
-        text = read_credential(kind)
-        if not text:
-            continue
-        try:
-            doc = tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            continue
-        for _skill, profiles in doc.items():
-            if isinstance(profiles, dict):
-                names.update(k for k, v in profiles.items() if isinstance(v, dict))
+    managed = _managed_profiles(kinds)
+    if profile in managed:
+        return managed[profile]
+    return _user_profiles(kinds).get(profile, {})
+
+
+def store_profiles(kinds=("config", "secrets")):
+    """Sorted names of every provisioned profile: the union of the user
+    config/secrets blobs and the Nix-managed profiles (managed config tables +
+    managed_secret-* files). A managed profile shadows a same-named user one but
+    still appears once in the union.
+    """
+    names = set(_user_profiles(kinds))
+    names.update(_managed_profiles(kinds))
     return sorted(names)
 
 
