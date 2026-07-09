@@ -28,6 +28,7 @@ failure is a protocol event, not a crash). No set-field is emitted before the
 vendor login reports finished, so a failed flow never touches the store.
 """
 
+import base64
 import contextlib
 import json
 import os
@@ -57,6 +58,14 @@ CLIENT_PLATFORM = "spaces"
 # server module pins the same values for himalaya/msmtp.
 IMAP_PORT = 1143
 SMTP_PORT = 1025
+
+
+def _wire_pw(secret: str) -> bytes:
+    """LoginRequest.password on the wire: Bridge base64Decode()s every
+    Login/Login2FA/Login2Passwords password (grpc/service_methods.go) and
+    fails login on raw bytes ("Cannot decode password")."""
+    return base64.b64encode(secret.encode("utf-8"))
+
 
 # Bridge's serving cert CN/SAN (internal/certs/tls.go) — the TLS name the client
 # must verify against, even over a unix socket.
@@ -276,7 +285,7 @@ def _drive_login(conn, reader, stub, md, events, email):
                     "Proton two-factor authentication code",
                 )
                 stub.Login2FA(
-                    pb.LoginRequest(username=email, password=code.encode("utf-8")),
+                    pb.LoginRequest(username=email, password=_wire_pw(code)),
                     metadata=md,
                 )
                 continue
@@ -289,7 +298,7 @@ def _drive_login(conn, reader, stub, md, events, email):
                     "Proton mailbox (second) password",
                 )
                 stub.Login2Passwords(
-                    pb.LoginRequest(username=email, password=mbox.encode("utf-8")),
+                    pb.LoginRequest(username=email, password=_wire_pw(mbox)),
                     metadata=md,
                 )
                 continue
@@ -385,7 +394,7 @@ def link(conn, reader, profile):
                 conn, reader, "secret-field", "password", "Proton account password"
             )
             stub.Login(
-                pb.LoginRequest(username=email, password=password.encode("utf-8")),
+                pb.LoginRequest(username=email, password=_wire_pw(password)),
                 metadata=md,
             )
             user_id = _drive_login(conn, reader, stub, md, events, email)

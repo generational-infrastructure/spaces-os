@@ -98,7 +98,7 @@ TOKEN = os.environ["PROTON_FAKE_TOKEN"]
 CERT = open(os.environ["PROTON_FAKE_CERT"], "rb").read()
 KEY = open(os.environ["PROTON_FAKE_KEY"], "rb").read()
 
-_rec = {"calls": [], "login_calls": [], "settings": None, "removed": []}
+_rec = {"calls": [], "login_calls": [], "settings": None, "removed": [], "wire_passwords": []}
 _lock = threading.RLock()
 
 
@@ -152,9 +152,15 @@ class Servicer(pbg.BridgeServicer):
         if md.get("server-token") != TOKEN:
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "invalid server token")
 
-    def _advance(self, call):
+    def _advance(self, call, request=None):
         with _lock:
             _rec["login_calls"].append(call)
+            # Record the wire password so tests can assert the base64
+            # contract: Bridge's Login/Login2FA/Login2Passwords all run
+            # base64Decode() on it (service_methods.go) and fail login on
+            # raw bytes.
+            if request is not None:
+                _rec["wire_passwords"].append(request.password.decode("utf-8"))
             record()
         if self.i < len(self.steps):
             step = self.steps[self.i]
@@ -186,17 +192,17 @@ class Servicer(pbg.BridgeServicer):
 
     def Login(self, request, context):
         self._tok(context)
-        self._advance("Login")
+        self._advance("Login", request)
         return Empty()
 
     def Login2FA(self, request, context):
         self._tok(context)
-        self._advance("Login2FA")
+        self._advance("Login2FA", request)
         return Empty()
 
     def Login2Passwords(self, request, context):
         self._tok(context)
-        self._advance("Login2Passwords")
+        self._advance("Login2Passwords", request)
         return Empty()
 
     def SetMailServerSettings(self, request, context):
@@ -396,6 +402,15 @@ def test_happy_path_2fa_links_and_sets_fields(bench, tmp_path):
     # two secret prompts: password + totp
     assert kinds.count("secret-field") == 2
     assert rec["login_calls"] == ["Login", "Login2FA"]
+    # Wire contract: Bridge base64Decode()s every LoginRequest.password
+    # (service_methods.go) — raw bytes fail login with "Cannot decode
+    # password". The helper must send std-base64 of the human's reply.
+    import base64 as _b64
+
+    assert rec["wire_passwords"] == [
+        _b64.b64encode(_REPLIES["password"].encode()).decode(),
+        _b64.b64encode(_REPLIES["totp"].encode()).decode(),
+    ]
 
     sf = {e["field"]: e["value"] for e in _set_fields(events)}
     assert sf == {"email": "me@proton.me", "bridge_password": "BRIDGE-PW-1"}
