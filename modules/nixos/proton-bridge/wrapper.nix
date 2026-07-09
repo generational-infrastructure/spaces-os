@@ -49,13 +49,17 @@ pkgs.writeShellApplication {
     export XDG_CACHE_HOME="$state/cache"
     export GNUPGHOME="$state/gnupg"
     export PASSWORD_STORE_DIR="$state/password-store"
+    # Bridge binds its --grpc unix socket under os.TempDir() (service.go
+    # computeFileSocketPath): /tmp is NOT in the Landlock policy, so pin
+    # TMPDIR inside the granted state root instead.
+    export TMPDIR="$state/tmp"
     unset DBUS_SESSION_BUS_ADDRESS
 
     # Idempotent keychain bootstrap: a passphraseless GPG key + `pass init`
     # when missing. A cheap no-op on every later start (two list/test probes),
     # so both the Restart=always daemon and the transient --grpc setup spawn can
     # call through unconditionally.
-    install -d -m0700 "$state" "$GNUPGHOME"
+    install -d -m0700 "$state" "$GNUPGHOME" "$TMPDIR"
     if ! gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec:'; then
       gpg --batch --pinentry-mode loopback --passphrase "" \
         --quick-generate-key "Proton Mail Bridge (spaces)" default default never
