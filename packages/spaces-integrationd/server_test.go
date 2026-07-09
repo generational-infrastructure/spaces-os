@@ -762,20 +762,66 @@ func TestSetupHappyPath(t *testing.T) {
 	}
 }
 
-func TestSetupNotEnabled(t *testing.T) {
+// Setup on a DISABLED integration is the provisioning path (proton bootstrap:
+// enable needs a complete profile, but bridge_password only exists after
+// setup — the gate would deadlock). The flow must run; setupPark daemons are
+// parked/unparked exactly as in the enabled case.
+func TestSetupDisabledProvisions(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeDef("signal", signalSetupDef) // has setup, but not enabled
+	e.writeDef("mail", mailSetupDef) // proton-shaped: fields + setup + setupPark
+	ln := e.startSetupHelper("mail", func(conn net.Conn) {
+		defer conn.Close()
+		bufio.NewReader(conn).ReadBytes('\n') // action line
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("mail")
+	defer conn.Close()
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done (setup must run while disabled), got %v", ev)
+	}
+	want := []string{
+		"stop spaces-proton-bridge.service",
+		"start spaces-integration-mail-setup.socket",
+		"try-restart spaces-integration-mail.service",
+		"stop spaces-integration-mail-setup.service spaces-integration-mail-setup.socket",
+		"start spaces-proton-bridge.service",
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 5 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("want park/flow order %v, got %v", want, calls)
+	}
+}
+
+// Setup on a disabled integration whose helper depends on its extraServices
+// daemons (signal): the broker starts the non-parked extras for the duration
+// and stops them on the way out — they are NOT running (disabled = socket
+// down, nothing pulled them in).
+func TestSetupDisabledStartsExtras(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef) // extras, no setupPark, NOT enabled
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
 	conn, r := e.openSetup("signal")
 	defer conn.Close()
-	ev := e.readEvent(r)
-	if ev["event"] != "error" || !strings.Contains(ev["error"].(string), "not enabled") {
-		t.Fatalf("want a not-enabled error event, got %v", ev)
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
 	}
-	if calls := e.systemctlCalls(); calls != nil {
-		t.Fatalf("no unit must start before validation passes, got %v", calls)
+	want := []string{
+		"start spaces-signal-cli.service spaces-signal-bridge.service",
+		"start spaces-integration-signal-setup.socket",
+		"try-restart spaces-integration-signal.service spaces-signal-cli.service spaces-signal-bridge.service",
+		"stop spaces-integration-signal-setup.service spaces-integration-signal-setup.socket",
+		"stop spaces-signal-cli.service spaces-signal-bridge.service",
 	}
-	if _, err := r.ReadBytes('\n'); err == nil {
-		t.Fatal("broker must close after the error event")
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 5 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("want extras start/stop order %v, got %v", want, calls)
 	}
 }
 

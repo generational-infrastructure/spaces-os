@@ -5,9 +5,9 @@ Drives the real SettingsWindow + IntegrationsBridge against a Python fake
 broker that streams the setup op's NDJSON events (qr | message | done | error |
 text-field | secret-field). Asserts the UI contract the sandboxed setup channel
 depends on:
-  - the Link/Setup button shows ONLY for an integration that is BOTH enabled
-    AND setup-capable (github: enabled/no-setup and mail: setup/disabled must
-    NOT show it; signal and caldav must),
+  - the Link/Setup button shows for every setup-capable integration — enabled
+    OR disabled (disabled = the provisioning path, e.g. proton's bootstrap);
+    github (no setup flow) must NOT show it,
   - clicking it opens the inline pane and a qr event makes the QR Image
     visible with the streamed png data URL,
   - a done event flips to the success state, auto-closes the pane, and the
@@ -80,15 +80,19 @@ def main() -> None:
         ):
             die("integration delegates never built (setupBtn-signal missing)")
 
-        # Visibility gate: shown ONLY when enabled AND setup-capable.
+        # Visibility gate: setup-capable is the only condition. Disabled but
+        # setup-capable (mail) MUST show it — that is the provisioning path
+        # (proton bootstrap: the secret exists only after setup).
         if ipc("visibleOf", "setupBtn-signal") != "true":
             die("signal (enabled + setup-capable) should show the setup button")
         if ipc("visibleOf", "setupBtn-caldav") != "true":
             die("caldav (enabled + setup-capable) should show the setup button")
         if ipc("visibleOf", "setupBtn-github") != "false":
-            die("github (enabled, NOT setup-capable) must not show the setup button")
-        if ipc("visibleOf", "setupBtn-mail") != "false":
-            die("mail (setup-capable but disabled) must not show the setup button")
+            die("github (NOT setup-capable) must not show the setup button")
+        if ipc("visibleOf", "setupBtn-mail") != "true":
+            die(
+                "mail (setup-capable, disabled) should show the setup button (provisioning path)"
+            )
 
         lists_before = stats().get("list", 0)
 

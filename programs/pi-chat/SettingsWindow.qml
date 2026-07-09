@@ -304,7 +304,12 @@ FloatingWindow {
             Item { Layout.fillWidth: true }
             NButton {
               objectName: "setupBtn-" + (intRow.modelData.name || "")
-              visible: intRow.modelData.enabled === true && intRow.modelData.setup === true
+              // Setup-capable is the only gate: setup on a disabled
+              // integration is the provisioning path (proton: the secret a
+              // complete profile needs only exists after setup, so gating on
+              // enabled would deadlock the bootstrap; the broker starts the
+              // helper's daemons on demand).
+              visible: intRow.modelData.setup === true
               text: I18n.tr("settings.integrations-setup")
               onClicked: {
                 root.resetSetup(root.phaseConnecting, intRow.modelData.name);

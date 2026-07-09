@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -224,7 +225,7 @@ func (s *Server) setup(conn net.Conn, integration, action string) {
 		fail("invalid integration name")
 		return
 	}
-	d, err := s.prepareSetup(integration)
+	d, enabled, err := s.prepareSetup(integration)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -238,6 +239,25 @@ func (s *Server) setup(conn net.Conn, integration, action string) {
 	// try-restart and after the setup units stop.
 	s.parkSetup(d.SetupPark)
 	defer s.unparkSetup(d.SetupPark)
+
+	// Provisioning path (integration disabled — proton bootstrap: enable
+	// requires a complete profile, but the secret only exists after setup):
+	// the socket never pulled the backing daemons in, so start the non-parked
+	// extras the helper depends on (signal's daemon socket) for the duration
+	// and stop them again on the way out. Enabled integrations already have
+	// them running via the socket's Wants=.
+	if !enabled {
+		if extras := subtract(d.ExtraServices, d.SetupPark); len(extras) > 0 {
+			if msg, err := s.runSystemctl("start", extras...); err != nil {
+				log.Printf("systemctl start %v: %s", extras, msg)
+			}
+			defer func() {
+				if msg, err := s.runSystemctl("stop", extras...); err != nil {
+					log.Printf("systemctl stop %v: %s", extras, msg)
+				}
+			}()
+		}
+	}
 
 	setupSock := setupSocketUnit(integration)
 	setupSvc := setupServiceUnit(integration)
@@ -271,30 +291,41 @@ func (s *Server) setup(conn net.Conn, integration, action string) {
 }
 
 // prepareSetup validates a setup request and stages the credential store files,
-// all under s.mu, then returns the definition so the caller can stream without
-// the lock. Validation mirrors the contract: the integration must exist, expose
-// a setup flow, and be enabled.
-func (s *Server) prepareSetup(integration string) (Definition, error) {
+// all under s.mu, then returns the definition (and whether the integration is
+// currently enabled) so the caller can stream without the lock. The integration
+// must exist and expose a setup flow. Enabled is NOT required: setup on a
+// disabled integration is the provisioning path — proton's enable gate needs a
+// complete profile, but bridge_password only exists after setup, so gating
+// setup on enable would deadlock the bootstrap.
+func (s *Server) prepareSetup(integration string) (Definition, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	defs := s.loadDefs()
 	d, ok := defs[integration]
 	if !ok {
-		return Definition{}, fmt.Errorf("unknown integration: %s", integration)
+		return Definition{}, false, fmt.Errorf("unknown integration: %s", integration)
 	}
 	if !d.Setup {
-		return Definition{}, fmt.Errorf("integration %s has no setup flow", integration)
-	}
-	if !s.loadState().Integrations[integration].Enabled {
-		return Definition{}, fmt.Errorf("integration %s is not enabled", integration)
+		return Definition{}, false, fmt.Errorf("integration %s has no setup flow", integration)
 	}
 	// The setup service loads the same LoadCredential[Encrypted] sources as the
 	// main service, so they must exist at start (same staging as enable).
 	if err := s.stageStores(d, integration); err != nil {
-		return Definition{}, err
+		return Definition{}, false, err
 	}
-	return d, nil
+	return d, s.loadState().Integrations[integration].Enabled, nil
+}
+
+// subtract returns the elements of a not present in b (order preserved).
+func subtract(a, b []string) []string {
+	out := make([]string, 0, len(a))
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // stageStores creates the integration's LoadCredential[Encrypted] sources when
