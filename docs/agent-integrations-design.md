@@ -822,3 +822,194 @@ output screening (stretch), instance lifecycle on logout, multi-executor,
 agent-proposed enable (§5.6), and persistent ("allow forever") / args-bound tool
 grants (only ephemeral session grants ship). Removing the legacy `skill-config`
 path happens after the POC proves out, not during.
+
+---
+
+## 10. Nix-managed per-user integration profiles (contract)
+
+Declarative (NixOS) provisioning of integration accounts — the same
+values the panel configures at runtime — layered ON TOP of the runtime
+store, never replacing it. This section is the frozen contract every
+track codes against.
+
+### 10.1 Option shape
+
+```nix
+spaces.users.<name>.integrations.<integration> = {
+  enable = true;            # explicit; defaults to true when profiles are set
+  profiles.<profile> = {
+    config.<field>  = "literal" | { file = "/path"; };  # file= allowed on config too
+    secrets.<field> = { file = "/path"; };              # file-reference ONLY, never literals
+  };
+};
+```
+
+- `spaces.users.<name>.*` is a **pure data namespace**: the umbrella
+  module (`modules/nixos/spaces-users.nix`) defines options only; the
+  spaces-integrations module consumes and lowers them.
+- Uniform `profiles.` level even for single-account integrations.
+- Eval-time assertions (each a clear, one-line error):
+  - the integration exists in `services.spaces-integrations.integrations`;
+  - the username exists in `users.users`;
+  - every managed profile is COMPLETE — all required config fields set,
+    all required secrets carry a `file`;
+  - `profiles` set on a field-less integration (e.g. signal) is an
+    error — only `enable` is allowed there.
+- Literal config values land in /nix/store (world-readable) — documented
+  footgun in the option docs; `file =` is the escape hatch.
+- Lock granularity: **per profile, atomic**. A managed profile is
+  complete and fully read-only in the GUI. Managed and user profiles
+  coexist; a managed profile **shadows** a same-named user profile
+  (never deletes it — the user copy reappears when the Nix config is
+  removed).
+
+### 10.2 Staged tree (root stager → broker/units)
+
+A root stager service (`spaces-integrations-managed-load`, mirroring
+`spaces-secrets-load`) materialises at boot/switch, for **every** user
+in `users.users` with a normal account (empty tree when unmanaged):
+
+```
+/run/spaces-integrations-managed/<user>/          # <user>-owned 0500
+    managed.json                                  # 0400, broker's single read
+    <integration>/                                # 0500, unit credential source
+        managed-config.toml                       # 0400, all managed profiles' config
+        secret-<profile>-<field>                  # 0400, copied from the declared file
+```
+
+- `file =` sourced **config** values are resolved at stage time into
+  `managed-config.toml`; secret files are **copied** (never symlinked)
+  so the unit's credential snapshot is stable.
+- `managed-config.toml` layout = skill-config TOML, one table per
+  profile: `[<integration>.<profile>]\nfield = "value"`.
+- Secret file name convention: `secret-<profile>-<field>`. Profile and
+  field names already match `^[a-z0-9-]+$` / `^[a-z0-9_-]+$`, so the
+  name is unambiguous only by convention: the FIRST `-`-separated
+  segment boundary that matches a declared profile name wins; managed.json
+  carries the authoritative (profile, field) list, consumers never parse
+  the filename.
+- The stager ALWAYS creates `/run/spaces-integrations-managed/<user>/`
+  and the per-integration subdirectory for every integration that has
+  ANY Nix opinion for that user — and bare `<user>/` for all other
+  users. **Invariant (Phase 0.3): a missing credential directory
+  hard-fails the unit (`status=243/CREDENTIALS`), so the per-user dir
+  must exist unconditionally.** Integration units of users with no
+  managed config point at a subdirectory that may be missing — see
+  §10.3 for why that is safe.
+
+### 10.3 Phase 0 result — directory LoadCredential (systemd 260, proven in VM)
+
+1. `LoadCredential=managed:<dir>` loads **each contained file** as its
+   own credential named `managed_<filename>` (systemd joins the
+   credential ID and the filename with `_`). So the scaffold reads
+   `$CREDENTIALS_DIRECTORY/managed_managed-config.toml` and
+   `$CREDENTIALS_DIRECTORY/managed_secret-<profile>-<field>`.
+2. An **empty** directory yields zero credentials and the unit starts
+   normally.
+3. A **missing** directory hard-fails the unit
+   (`status=243/CREDENTIALS`). Consequence: the unit lowering points at
+   the per-user ROOT dir's per-integration subdir only if the stager
+   guarantees it; since the stager only creates subdirs for managed
+   integrations, the unit line instead targets the always-present
+   per-user root:
+
+```
+LoadCredential=managed:/run/spaces-integrations-managed/%u/<integration>
+```
+
+   …with the stager creating `<user>/<integration>/` (possibly empty)
+   for EVERY declared integration × every user, so the path always
+   exists. This keeps the unit line generic (one added line in
+   lib.nix's mkServiceUnit, no per-user unit text).
+
+### 10.4 managed.json schema
+
+Single writer: the stager (at boot/switch). Single reader: the broker.
+
+```json
+{
+  "generation": 4,
+  "integrations": {
+    "mail": {
+      "enable": true,
+      "profiles": {
+        "work": {
+          "config":  { "address": "bob@corp.example", "imap_host": "imap.corp.example" },
+          "secrets": [ "password" ]
+        }
+      }
+    },
+    "signal": { "enable": false }
+  }
+}
+```
+
+- `generation`: monotonically increasing counter the stager bumps on
+  EVERY re-stage (a secret-file-only rotation still changes the file,
+  so the broker's mtime/generation watch fires).
+- `integrations.<name>.enable`: `true` | `false` | key absent = no Nix
+  opinion (user autonomy).
+- `profiles.<profile>.config`: resolved config values (post `file =`
+  resolution) — these are what `list` renders.
+- `profiles.<profile>.secrets`: the declared secret FIELD names (values
+  never appear here; set-status = stat of the staged file).
+
+### 10.5 Broker protocol extension (packages/spaces-integrationd)
+
+- Broker reads `/run/spaces-integrations-managed/$USER/managed.json`
+  when present; re-checked by mtime per request AND on a coarse timer.
+- `ProfileInfo` gains:
+  - `managed: bool` — profile is Nix-managed (read-only);
+  - `shadowed: bool` — this managed profile shadows a same-named user
+    profile (hint for the GUI subtitle).
+- `IntegrationInfo` gains `enabledByNix: *bool` (JSON: `true` | `false`
+  | field absent) — the Nix enable verdict, absent = no opinion.
+- Managed profiles fold into `Profiles` in the `list` reply: config
+  values from managed.json, secret set-status via stat of
+  `secret-<profile>-<field>`; a managed profile REPLACES (shadows) a
+  same-named user profile in the reply.
+- Rejections (Ack op:"error", stable messages):
+  - `set-field` / `remove-profile` naming a managed profile →
+    `profile '<p>' is managed by system configuration`;
+  - `enable` / `disable` on an integration with a Nix enable verdict →
+    `integration '<i>' enable state is managed by system configuration`.
+- Managed complete profiles count toward enable-completeness gating.
+- Reconcile (extends ReconcileEnabled): folds Nix enable verdicts into
+  enabled.json with per-entry provenance (`"source": "nix"`);
+  starts/stops sockets accordingly. Nix `enable = false` overrides a
+  pre-existing user enable. Removing the Nix verdict (an enabled.json
+  entry has `source:"nix"` but managed.json no longer carries a
+  verdict) drops the entry, restoring user autonomy. The pi-sessiond
+  gateway stays UNTOUCHED — enabled.json remains its single input.
+- On managed.json change (mtime/generation): re-reconcile + tryRestart
+  affected integration units (same ownership pattern as after GUI
+  writes).
+
+### 10.6 Scaffold merge (packages/spaces-integration-mcp)
+
+Single merge point: `store_profile()` (and `store_profiles()`) merge
+managed credentials OVER the user blobs:
+
+- user blobs: `$CREDENTIALS_DIRECTORY/config` + `/secrets` (unchanged);
+- managed: `$CREDENTIALS_DIRECTORY/managed_managed-config.toml` (TOML,
+  same skill-config layout) + `managed_secret-<profile>-<field>` files.
+- Effective profiles = user blobs ∪ managed; a managed profile name
+  WINS wholesale (shadow, not per-field merge).
+- **Service-author contract:** integrations MUST read values through
+  the scaffold (`store_profile`/`store_profiles`); reading the raw
+  credential blobs directly bypasses managed provisioning.
+  integration-mail's IMAP authcmd is fixed to go through the scaffold.
+
+### 10.7 GUI (programs/pi-chat)
+
+- Managed profile: static text rows (NOT disabled inputs) for config
+  values; "set" badge for secrets (never values); lock glyph + subtitle
+  "managed by system configuration"; edit/remove affordances HIDDEN.
+- Shadowed: extra subtitle "replaces your locally configured account".
+- `enabledByNix` present: enable/disable buttons replaced by a static
+  label ("enabled by system configuration" / "disabled by system
+  configuration").
+- Add-account stays available on multiProfile integrations; drafts
+  pre-block managed profile names (broker rejects anyway).
+- Every new user-visible string lands in i18n/en.json AND all other
+  locale files in the same change.
