@@ -2,13 +2,15 @@
 //
 // Mounts the real SettingsWindow pointed at a fake broker socket and
 // exposes visual-tree introspection over IPC so the driver can assert:
-//   - the setup button appears ONLY for enabled + setup-capable
-//     integrations,
+//   - the setup button appears for every setup-capable integration
+//     (enabled or disabled — the provisioning path),
 //   - the QR Image element becomes visible (with the streamed png) after
 //     the broker's qr event,
 //   - a `done` event flips the pane to its success state and auto-closes
 //     the flow (setupFor clears),
-//   - an `error` event surfaces the error text and keeps the pane open.
+//   - an `error` event surfaces the error text and keeps the pane open,
+//   - the connecting phase shows feedback text and hides the manual
+//     field rows of the integration being set up.
 //
 // The bridge auto-lists on startup, so the driver waits on the delegates
 // materialising (setupBtn-<name> existing) rather than any test-only

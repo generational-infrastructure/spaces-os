@@ -79,7 +79,8 @@
     "integrations-setup-error": "设置失败: {error}",
     "integrations-setup-cancel": "取消",
     "integrations-setup-submit": "提交",
-    "integrations-setup-prompt": "输入请求的值。"
+    "integrations-setup-prompt": "输入请求的值。",
+    "integrations-setup-connecting": "正在启动设置…"
   },
   "menu": {
     "open-chat": "打开聊天",

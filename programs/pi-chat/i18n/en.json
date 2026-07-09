@@ -79,7 +79,8 @@
     "integrations-setup-error": "Setup failed: {error}",
     "integrations-setup-cancel": "Cancel",
     "integrations-setup-submit": "Submit",
-    "integrations-setup-prompt": "Enter the requested value."
+    "integrations-setup-prompt": "Enter the requested value.",
+    "integrations-setup-connecting": "Starting setup…"
   },
   "menu": {
     "open-chat": "Open Chat",

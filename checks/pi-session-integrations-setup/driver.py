@@ -15,7 +15,12 @@ depends on:
   - a text-field/secret-field prompt shows an input (masked for secret-field),
     and each submitted reply reaches the broker verbatim as a {"value":...}
     line (observed via the stats sidecar),
-  - the error path surfaces the error text and keeps the pane open.
+  - the error path surfaces the error text and keeps the pane open,
+  - the connecting phase (pane open, no event yet) shows feedback text —
+    the pane must never look frozen,
+  - a field-bearing integration's manual field rows (ProfileEditor) hide
+    while its setup pane is open (setup owns provisioning) and return
+    after the pane closes.
 
 No pi, no LLM, no compositor. Usage:
   driver.py <quickshell_bin> <test_dir> <plugin_dir> <work_dir>
@@ -121,8 +126,27 @@ def main() -> None:
         # Prompt flow: proton streams a text-field then a secret-field. The
         # panel shows an input (masked for secret-field); each submitted reply
         # reaches the broker verbatim.
+        # Field-bearing integration: manual rows visible before setup starts.
+        if ipc("visibleOf", "profileEditor-proton") != "true":
+            die("proton manual field rows should be visible before setup")
+
         if ipc("click", "setupBtn-proton") != "ok":
             die("could not click the proton setup button")
+
+        # Connecting phase: feedback text must show (the broker delays the
+        # first prompt so this state is observable), and the manual field
+        # rows must hide while the pane is open.
+        if ipc("setupPhase") != "connecting":
+            die(
+                f"setup should open in the connecting phase (phase={ipc('setupPhase')!r})"
+            )
+        if not wait_until(
+            lambda: ipc("statusText") not in ("", "missing"), timeout_s=5
+        ):
+            die("connecting phase must show feedback text (pane looks frozen)")
+        if ipc("visibleOf", "profileEditor-proton") != "false":
+            die("proton manual field rows must hide while its setup pane is open")
+
         if not wait_until(lambda: ipc("setupPhase") == "prompt", timeout_s=15):
             die(
                 f"proton setup never reached the prompt phase (phase={ipc('setupPhase')!r})"
@@ -155,6 +179,11 @@ def main() -> None:
             die(
                 f"proton prompt flow never auto-closed after done (setupFor={ipc('setupFor')!r})"
             )
+        # Pane closed — the manual field rows are back.
+        if not wait_until(
+            lambda: ipc("visibleOf", "profileEditor-proton") == "true", timeout_s=10
+        ):
+            die("proton manual field rows should return after the pane closes")
         if not wait_until(
             lambda: stats().get("replies") == ["user@proton.me", "bridge-token"],
             timeout_s=10,

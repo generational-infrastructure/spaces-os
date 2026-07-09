@@ -79,7 +79,8 @@
     "integrations-setup-error": "Einrichtung fehlgeschlagen: {error}",
     "integrations-setup-cancel": "Abbrechen",
     "integrations-setup-submit": "Absenden",
-    "integrations-setup-prompt": "Geben Sie den angeforderten Wert ein."
+    "integrations-setup-prompt": "Geben Sie den angeforderten Wert ein.",
+    "integrations-setup-connecting": "Einrichtung wird gestartet…"
   },
   "menu": {
     "open-chat": "Chat öffnen",

@@ -79,7 +79,8 @@
     "integrations-setup-error": "設定に失敗しました: {error}",
     "integrations-setup-cancel": "キャンセル",
     "integrations-setup-submit": "送信",
-    "integrations-setup-prompt": "要求された値を入力してください。"
+    "integrations-setup-prompt": "要求された値を入力してください。",
+    "integrations-setup-connecting": "セットアップを開始しています…"
   },
   "menu": {
     "open-chat": "チャットを開く",

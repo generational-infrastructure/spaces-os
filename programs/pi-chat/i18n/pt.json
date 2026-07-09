@@ -79,7 +79,8 @@
     "integrations-setup-error": "A configuração falhou: {error}",
     "integrations-setup-cancel": "Cancelar",
     "integrations-setup-submit": "Enviar",
-    "integrations-setup-prompt": "Introduza o valor solicitado."
+    "integrations-setup-prompt": "Introduza o valor solicitado.",
+    "integrations-setup-connecting": "A iniciar a configuração…"
   },
   "menu": {
     "open-chat": "Abrir chat",

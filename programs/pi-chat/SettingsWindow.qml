@@ -421,6 +421,11 @@ FloatingWindow {
                 text: {
                   if (root.setupPhase === root.phaseDone) return I18n.tr("settings.integrations-setup-done");
                   if (root.setupPhase === root.phaseError) return I18n.tr("settings.integrations-setup-error", { error: root.setupErrorText });
+                  // The connecting phase would otherwise render nothing —
+                  // the pane must never look frozen while the helper spawns
+                  // (proton takes seconds to start its transient Bridge).
+                  if (root.setupText === "" && root.setupPhase === root.phaseConnecting)
+                    return I18n.tr("settings.integrations-setup-connecting");
                   return root.setupText;
                 }
                 color: root.setupPhase === root.phaseError ? Color.mError : Color.mOnSurfaceVariant
@@ -440,8 +445,12 @@ FloatingWindow {
           }
 
           // Multi-account: each provisioned profile, plus an "add account" draft.
+          // Manual provisioning rows hide while this integration's setup
+          // pane is open: setup owns provisioning for the duration (typing
+          // into the store editor mid-flow invites conflicting writes and
+          // confuses the two surfaces). They return when the pane closes.
           ColumnLayout {
-            visible: intRow.modelData.multiProfile === true
+            visible: intRow.modelData.multiProfile === true && root.setupFor !== intRow.modelData.name
             Layout.fillWidth: true
             spacing: Style.marginS
 
@@ -483,7 +492,8 @@ FloatingWindow {
 
           // Single-account: the implicit "default" profile, no profile chrome.
           ProfileEditor {
-            visible: intRow.modelData.multiProfile !== true
+            objectName: "profileEditor-" + (intRow.modelData.name || "")
+            visible: intRow.modelData.multiProfile !== true && root.setupFor !== intRow.modelData.name
             Layout.fillWidth: true
             intName: intRow.modelData.name
             profileName: "default"

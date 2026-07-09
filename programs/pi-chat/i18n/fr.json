@@ -79,7 +79,8 @@
     "integrations-setup-error": "Échec de la configuration : {error}",
     "integrations-setup-cancel": "Annuler",
     "integrations-setup-submit": "Envoyer",
-    "integrations-setup-prompt": "Saisissez la valeur demandée."
+    "integrations-setup-prompt": "Saisissez la valeur demandée.",
+    "integrations-setup-connecting": "Démarrage de la configuration…"
   },
   "menu": {
     "open-chat": "Ouvrir le chat",

@@ -39,7 +39,21 @@ STATE = {
     "signal": {"description": "Signal", "enabled": True, "setup": True},
     "mail": {"description": "Email (IMAP/SMTP)", "enabled": False, "setup": True},
     "caldav": {"description": "Calendar (CalDAV)", "enabled": True, "setup": True},
-    "proton": {"description": "Proton Mail", "enabled": True, "setup": True},
+    "proton": {
+        "description": "Proton Mail",
+        "enabled": True,
+        "setup": True,
+        # Field-bearing: the panel renders manual field rows from these, and
+        # must HIDE them while the proton setup pane is open (setup owns
+        # provisioning; the rows return when the pane closes).
+        "config": [{"name": "email", "description": "Proton account email address"}],
+        "secrets": [
+            {
+                "name": "bridge_password",
+                "description": "Proton Bridge per-account password",
+            }
+        ],
+    },
 }
 LOCK = threading.Lock()
 STATS_PATH = None
@@ -83,8 +97,8 @@ def list_reply() -> dict:
                 # Link/Setup button on it.
                 "setup": info["setup"],
                 "multiProfile": False,
-                "config": [],
-                "secrets": [],
+                "config": info.get("config", []),
+                "secrets": info.get("secrets", []),
                 "profiles": [],
             }
         )
@@ -111,7 +125,9 @@ def stream_setup(conn: socket.socket, name: str) -> None:
     (the caller closes the connection — the panel treats EOF as flow end).
     """
     info = STATE.get(name)
-    if info is None or not info.get("setup") or not info.get("enabled"):
+    # Setup-capability is the only gate — setup on a DISABLED integration is
+    # the provisioning path (mirrors the real broker's prepareSetup).
+    if info is None or not info.get("setup"):
         send_line(conn, {"event": "error", "error": f"{name!r} is not setup-capable"})
         return
     # Pause between events so the panel (and the driver) can observe each
@@ -134,6 +150,10 @@ def stream_setup(conn: socket.socket, name: str) -> None:
         # Prompt flow: text-field email -> reply -> secret-field password ->
         # reply -> done. Each reply is recorded so the driver can assert it
         # reached the broker verbatim (and secret-field masking on the panel).
+        # The pre-prompt pause keeps the "connecting" phase observable: the
+        # driver asserts the pane shows feedback text before any event lands
+        # (a real helper takes seconds to spawn its transient Bridge).
+        time.sleep(0.8)
         send_line(
             conn,
             {"event": "text-field", "field": "email", "label": "Proton account email"},

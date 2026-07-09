@@ -79,7 +79,8 @@
     "integrations-setup-error": "Instellen mislukt: {error}",
     "integrations-setup-cancel": "Annuleren",
     "integrations-setup-submit": "Verzenden",
-    "integrations-setup-prompt": "Voer de gevraagde waarde in."
+    "integrations-setup-prompt": "Voer de gevraagde waarde in.",
+    "integrations-setup-connecting": "Installatie wordt gestart…"
   },
   "menu": {
     "open-chat": "Chat openen",

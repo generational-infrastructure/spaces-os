@@ -79,7 +79,8 @@
     "integrations-setup-error": "Konfiguracja nie powiodła się: {error}",
     "integrations-setup-cancel": "Anuluj",
     "integrations-setup-submit": "Wyślij",
-    "integrations-setup-prompt": "Wprowadź żądaną wartość."
+    "integrations-setup-prompt": "Wprowadź żądaną wartość.",
+    "integrations-setup-connecting": "Uruchamianie konfiguracji…"
   },
   "menu": {
     "open-chat": "Otwórz czat",

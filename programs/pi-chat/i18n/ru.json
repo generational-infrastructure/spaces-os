@@ -79,7 +79,8 @@
     "integrations-setup-error": "Не удалось выполнить настройку: {error}",
     "integrations-setup-cancel": "Отмена",
     "integrations-setup-submit": "Отправить",
-    "integrations-setup-prompt": "Введите запрошенное значение."
+    "integrations-setup-prompt": "Введите запрошенное значение.",
+    "integrations-setup-connecting": "Запуск настройки…"
   },
   "menu": {
     "open-chat": "Открыть чат",
