@@ -24,11 +24,11 @@ __pycache__/
 # so debugging memory state from this checkout doesn't dirty the tree.
 .sediment/
 
-# agent-vm workdir (qcow2 + qmp.sock)
+# agent-vm workdir (qcow2 + serial log; sockets live under /tmp)
 .agent-vm/
 
-# remote-agent-vm workdir (server/client qcow2 + qmp.socks + serial logs)
+# remote-agent-vm workdir (server/client qcow2 + serial logs; sockets under /tmp)
 .remote-agent-vm/
 
-# test-vm/agent-vm swtpm runtime state (pid, lock, TPM blob, log)
+# legacy swtpm runtime state (now under /tmp; kept for old checkouts)
 test-machine-swtpm/

@@ -2,8 +2,10 @@
 #
 # One-node instantiation of the shared VM driver (./lib.nix), which owns
 # the repo-root state-dir discovery, ssh/wait/QMP verbs, swtpm reaping,
-# and the x86_64-only stub. All state — qcow2 disk, QMP socket, serial
-# console log — lives in `<repo-root>/.agent-vm/`.
+# and the x86_64-only stub. Regular state — qcow2 disk, serial console
+# log — lives in `<repo-root>/.agent-vm/`; unix sockets (QMP, swtpm)
+# land under /tmp instead, since a socket anywhere in the worktree
+# breaks flake path: fetches ("has an unsupported type").
 #
 # Typical flow:
 #   agent-vm run &           # in the background / another terminal

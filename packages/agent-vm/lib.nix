@@ -50,6 +50,14 @@ let
       fi
       d=$(dirname "$d")
     done
+
+    # Unix sockets (QMP, swtpm control) must live OUTSIDE the repo: a
+    # socket anywhere in the worktree breaks every `nix build` on the
+    # flake ("has an unsupported type" during the path: fetch). Key the
+    # dir to the state-dir path so concurrent checkouts don't collide.
+    sock_base="${stateDirName}"
+    sock_dir="/tmp/''${sock_base#.}-$(printf %s "$state_dir" | sha256sum | cut -c1-12)"
+    mkdir -p -- "$sock_dir"
   '';
 
   reap = builtins.readFile ./reap-swtpm.sh;
@@ -128,7 +136,7 @@ in
           }
           node_sock() {
             case "$1" in
-          ${eachSep "\n" (n: "    ${n}) echo \"$state_dir/${n}-qmp.sock\" ;;")}
+          ${eachSep "\n" (n: "    ${n}) echo \"$sock_dir/${n}-qmp.sock\" ;;")}
               *) echo "${name}: unknown node '$1' (use ${nodeAlt})" >&2; return 2 ;;
             esac
           }
@@ -146,13 +154,16 @@ in
           let
             v = node n;
             envs = [
-              "${env.qmp}=\"$state_dir/${n}-qmp.sock\""
+              "${env.qmp}=\"$sock_dir/${n}-qmp.sock\""
               "${env.serial}=\"$state_dir/${n}.serial\""
             ]
             ++ lib.optional (v ? vnc && v.vnc != null) "${env.vnc}=${v.vnc}"
             ++ [
               "NIX_DISK_IMAGE=\"$state_dir/${diskOf n}\""
-              "NIX_SWTPM_DIR=${n}-swtpm"
+              # ABSOLUTE and outside the repo: swtpm serves unix sockets in
+              # this dir, and any socket inside the worktree breaks flake
+              # path: fetches ("has an unsupported type").
+              "NIX_SWTPM_DIR=\"$sock_dir/${n}-swtpm\""
               "QEMU_KERNEL_PARAMS=\"\${QEMU_KERNEL_PARAMS:-} loglevel=7\""
             ];
           in
@@ -172,9 +183,9 @@ in
             ''
               run)
                 mkdir -p -- "$state_dir"
-                rm -f -- ${eachSep " " (n: "\"$state_dir/${n}-qmp.sock\"")}
+                rm -f -- ${eachSep " " (n: "\"$sock_dir/${n}-qmp.sock\"")}
               ${eachSep "\n" (n: "  : >\"$state_dir/${n}.serial\"")}
-                echo "${name}: state at $state_dir"
+                echo "${name}: state at $state_dir (sockets: $sock_dir)"
                 cd "$state_dir"
 
                 # The qemu-vm runner's swtpm daemon can outlive a hard-killed
@@ -182,7 +193,7 @@ in
                 # wedging every later launch on the TPM state lock — reap orphans
                 # before launching; abort if one still serves a live VM. Distinct
                 # per-node state dirs keep the swtpms off each other's lockfile.
-              ${eachSep "\n" (n: "  reap_swtpm ${n}-swtpm")}
+              ${eachSep "\n" (n: "  reap_swtpm \"$sock_dir/${n}-swtpm\"")}
 
                 # loglevel=7 so kernel boot info reaches the serial logs; the
                 # test-machine baseline has loglevel=4 (warnings only).
@@ -200,15 +211,16 @@ in
                 mkdir -p -- "$state_dir"
                 rm -f -- "$qmp"
                 : >"$serial"
-                echo "${name}: state at $state_dir (serial: $serial)"
+                echo "${name}: state at $state_dir (serial: $serial, sockets: $sock_dir)"
                 cd "$state_dir"
-                # The qemu-vm runner resolves NIX_SWTPM_DIR relative to $PWD
-                # (default test-machine-swtpm — here, under $state_dir thanks to
-                # the cd above) and its swtpm daemon can outlive a hard-killed QEMU
-                # (a killed supervisor, dropped terminal), wedging every later launch
-                # on the TPM state lock. Reap any orphan first; abort if that
-                # swtpm still serves a live VM.
-                reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
+                # swtpm serves unix sockets in NIX_SWTPM_DIR, so it must live
+                # outside the repo (any worktree socket breaks flake path:
+                # fetches), and its daemon can outlive a hard-killed QEMU
+                # (a killed supervisor, dropped terminal), wedging every later
+                # launch on the TPM state lock. Reap any orphan first; abort
+                # if that swtpm still serves a live VM.
+                export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$sock_dir/test-machine-swtpm}"
+                reap_swtpm "$NIX_SWTPM_DIR"
                 export ${env.qmp}="$qmp"
                 export ${env.serial}="$serial"
                 export NIX_DISK_IMAGE="$state_dir/${diskOf only}"
@@ -222,7 +234,7 @@ in
 
         guiLaunchOne = n: ''
           gui_run_${san n}=(${(node n).guiVm}/bin/run-*-vm)
-          NIX_DISK_IMAGE="$state_dir/gui-${diskOf n}" NIX_SWTPM_DIR=gui-${n}-swtpm "''${gui_run_${san n}[0]}" &
+          NIX_DISK_IMAGE="$state_dir/gui-${diskOf n}" NIX_SWTPM_DIR="$sock_dir/gui-${n}-swtpm" "''${gui_run_${san n}[0]}" &
           pid_gui_${san n}=$!
 
         '';
@@ -236,7 +248,7 @@ in
             cd "$state_dir"
             # Same swtpm hygiene as `run`; the GUI twins keep their own
             # per-node TPM state next to their own qcow2s.
-          ${eachSep "\n" (n: "  reap_swtpm gui-${n}-swtpm")}
+          ${eachSep "\n" (n: "  reap_swtpm \"$sock_dir/gui-${n}-swtpm\"")}
 
           ${each guiLaunchOne}
             # shellcheck disable=SC2064
@@ -295,6 +307,7 @@ in
                 sel="''${1:-}"
                 if [ "$#" -gt 0 ]; then shift; fi
                 sshport=$(node_port "$sel")
+                ssh_settle "$sshport"
                 export SSHPASS=test
                 exec sshpass -e ssh "''${ssh_common[@]}" -p "$sshport" test@localhost "$@"
                 ;;
@@ -302,6 +315,7 @@ in
           else
             ''
               ssh)
+                ssh_settle ${port only}
                 export SSHPASS=test
                 exec sshpass -e ssh "''${ssh_common[@]}" -p ${port only} test@localhost "$@"
                 ;;
@@ -395,7 +409,7 @@ in
         cliScript = lib.concatStrings [
           (stateDirDiscovery stateDirName)
           (lib.optionalString (!multi) ''
-            qmp="$state_dir/qmp.sock"
+            qmp="$sock_dir/qmp.sock"
             serial="$state_dir/serial.log"
           '')
           "\n"
@@ -416,6 +430,21 @@ in
                 -o PreferredAuthentications=password \
                 -o PubkeyAuthentication=no \
                 test@localhost true 2>/dev/null
+            }
+
+            # Quiet readiness gate for the `ssh` verb. An `ssh` issued before
+            # the guest sshd answers the forwarded port prints "connect ...:
+            # Connection refused" on stderr — noise in an agent's terminal.
+            # Poll ssh_alive quietly for a short window first; then fall
+            # through to exec the real ssh either way, so a genuinely-down VM
+            # still surfaces one clean error instead of a burst. Bounded by
+            # AGENT_VM_SSH_SETTLE seconds (0 disables the gate).
+            ssh_settle() {
+              deadline=$(( $(date +%s) + "''${AGENT_VM_SSH_SETTLE:-60}" ))
+              while [ "$(date +%s)" -lt "$deadline" ]; do
+                ssh_alive "$1" && return 0
+                sleep 1
+              done
             }
 
           ''
@@ -489,12 +518,13 @@ in
             export NIX_DISK_IMAGE="$state_dir/${disk}"
 
             ${reap}
-            # The runner resolves NIX_SWTPM_DIR relative to $PWD (default
-            # test-machine-swtpm) and its swtpm daemon can outlive a
-            # hard-killed QEMU, wedging every later launch on the TPM state
-            # lock. Reap any orphan first; abort if that swtpm still serves
-            # a live VM.
-            reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"
+            # swtpm serves unix sockets in NIX_SWTPM_DIR, so it must live
+            # outside the repo (a worktree socket breaks flake path: fetches),
+            # and its daemon can outlive a hard-killed QEMU, wedging every
+            # later launch on the TPM state lock. Reap any orphan first;
+            # abort if that swtpm still serves a live VM.
+            export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$sock_dir/${name}-swtpm}"
+            reap_swtpm "$NIX_SWTPM_DIR"
 
           ''
           preRun
