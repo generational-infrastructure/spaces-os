@@ -156,9 +156,9 @@ def _framebuffer_size() -> tuple[int, int]:
     niri picks for the virtual display and can change between boots.
 
     The scratch file lives beside the QMP socket, NOT in /tmp: QEMU may
-    run under a private-tmp sandbox (e.g. launched from a systemd/pueue
-    service), so its /tmp differs from ours — but the socket directory
-    is a path both ends already share.
+    run under a private-tmp sandbox (e.g. launched from a systemd unit
+    with PrivateTmp), so its /tmp differs from ours — but the socket
+    directory is a path both ends already share.
     """
     scratch = pathlib.Path(QMP_PATH).parent / f".fbsize-{os.getpid()}.png"
     try:

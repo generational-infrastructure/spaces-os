@@ -178,9 +178,9 @@ in
                 cd "$state_dir"
 
                 # The qemu-vm runner's swtpm daemon can outlive a hard-killed
-                # QEMU (the trap below, pueue kill, dropped terminal), wedging
-                # every later launch on the TPM state lock — reap orphans before
-                # launching; abort if one still serves a live VM. Distinct
+                # QEMU (the trap below, a killed supervisor, dropped terminal),
+                # wedging every later launch on the TPM state lock — reap orphans
+                # before launching; abort if one still serves a live VM. Distinct
                 # per-node state dirs keep the swtpms off each other's lockfile.
               ${eachSep "\n" (n: "  reap_swtpm ${n}-swtpm")}
 
@@ -204,8 +204,8 @@ in
                 cd "$state_dir"
                 # The qemu-vm runner resolves NIX_SWTPM_DIR relative to $PWD
                 # (default test-machine-swtpm — here, under $state_dir thanks to
-                # the cd above) and its swtpm daemon can outlive a hard-killed
-                # QEMU (pueue kill, dropped terminal), wedging every later launch
+                # the cd above) and its swtpm daemon can outlive a hard-killed QEMU
+                # (a killed supervisor, dropped terminal), wedging every later launch
                 # on the TPM state lock. Reap any orphan first; abort if that
                 # swtpm still serves a live VM.
                 reap_swtpm "''${NIX_SWTPM_DIR:-test-machine-swtpm}"

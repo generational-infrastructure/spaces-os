@@ -56,9 +56,10 @@ let
     "-display none"
     "-vnc \${${env.vnc}:-127.0.0.1:99}"
     "-qmp unix:\${${env.qmp}},server=on,wait=off"
-    # Persist boot/journal output to a file: pueue captures the
-    # wrapper's stdout but QEMU's -serial stdio bytes never reach
-    # that log, so route serial straight to the env.serial file.
+    # Persist boot/journal output to a file: a supervising process
+    # captures the wrapper's stdout but QEMU's -serial stdio bytes
+    # never reach that log, so route serial straight to the env.serial
+    # file.
     "-serial file:\${${env.serial}}"
   ];
 in

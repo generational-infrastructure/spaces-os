@@ -6,7 +6,7 @@
 # console log — lives in `<repo-root>/.agent-vm/`.
 #
 # Typical flow:
-#   agent-vm run &           # or via pueue / another terminal
+#   agent-vm run &           # in the background / another terminal
 #   agent-vm wait
 #   agent-vm ssh systemctl --user is-active niri
 #   agent-vm key alt-a

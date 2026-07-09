@@ -3,11 +3,11 @@
 #
 # nixpkgs' qemu-vm runner starts `swtpm socket --tpmstate dir=<D> … --daemon`
 # and stops it via a bash coproc that fires `swtpm_ioctl --stop` when QEMU
-# exits. A hard kill of the whole process group (pueue kill, closed terminal,
-# host crash) takes the coproc down WITH QEMU, so the swtpm daemon survives,
-# holding a POSIX write lock on <D>/.lock. The next launch's swtpm then dies
-# with "SWTPM_NVRAM_Lock_Dir: Could not lock access to lockfile" and the
-# runner exits 1 before QEMU ever starts.
+# exits. A hard kill of the whole process group (a killed supervisor, closed
+# terminal, host crash) takes the coproc down WITH QEMU, so the swtpm daemon
+# survives, holding a POSIX write lock on <D>/.lock. The next launch's swtpm
+# then dies with "SWTPM_NVRAM_Lock_Dir: Could not lock access to lockfile" and
+# the runner exits 1 before QEMU ever starts.
 #
 # Returns 0 when the dir is clean or an orphan was reaped (safe to launch);
 # returns 1 when a live qemu-system still references that swtpm's control

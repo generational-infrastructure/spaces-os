@@ -14,8 +14,7 @@ exchange.
 
 ## Verified environment (build-gates)
 
-Probed on the target host as uid 1000, via `pueue` (runs outside the agent
-sandbox):
+Probed on the target host as uid 1000 (outside the agent sandbox):
 
 | Fact | Value | Implication |
 |---|---|---|

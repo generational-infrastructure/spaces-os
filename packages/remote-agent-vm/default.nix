@@ -13,7 +13,7 @@
 # client reaches the server with no host involvement. Every verb takes a
 # <server|client> selector; otherwise the ergonomics mirror agent-vm:
 #
-#   pueue add -- nix run .#remote-agent-vm -- run     # background; long-running
+#   nix run .#remote-agent-vm -- run                  # background; long-running
 #   nix run .#remote-agent-vm -- wait                 # both ssh answer
 #   nix run .#remote-agent-vm -- ssh client systemctl --user is-active niri
 #   nix run .#remote-agent-vm -- key client alt-a     # open the chat panel

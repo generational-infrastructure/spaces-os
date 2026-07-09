@@ -36,7 +36,7 @@ the headless `agent-vm` wrapper. All state lands in
 `<repo>/.agent-vm/`; no env vars, no flags.
 
 ```
-pueue add -- nix run .#agent-vm -- run    # background; long-running
+nix run .#agent-vm -- run                 # background; long-running
 nix run .#agent-vm -- wait                # block until sshd answers
 nix run .#agent-vm -- ssh 'systemctl --user is-active niri'
 nix run .#agent-vm -- key alt-a           # open the chat panel
@@ -79,7 +79,7 @@ For scripted / agent-driven runs, `run` boots both headless (QMP + VNC) and
 every verb takes a `<server|client>` selector:
 
 ```
-pueue add -- nix run '.#remote-agent-vm' -- run   # background; headless
+nix run '.#remote-agent-vm' -- run                # background; headless
 nix run '.#remote-agent-vm' -- wait               # both answer ssh
 nix run '.#remote-agent-vm' -- click client 970 767
 nix run '.#remote-agent-vm' -- type  client 'hello from the remote executor'
