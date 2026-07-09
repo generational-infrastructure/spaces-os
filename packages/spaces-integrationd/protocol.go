@@ -73,6 +73,9 @@ type IntegrationInfo struct {
 	Secrets      []FieldInfo   `json:"secrets"`  // schema (sorted by name)
 	Profiles     []ProfileInfo `json:"profiles"` // provisioned accounts
 	Setup        bool          `json:"setup"`    // definition exposes a setup flow
+	// EnabledByNix is the Nix enable verdict (true|false); absent = no Nix
+	// opinion (user autonomy). The GUI renders a static enable label when set.
+	EnabledByNix *bool `json:"enabledByNix,omitempty"`
 }
 
 type FieldInfo struct {
@@ -87,6 +90,11 @@ type ProfileInfo struct {
 	Config   map[string]string `json:"config"`
 	Secrets  map[string]bool   `json:"secrets"`
 	Complete bool              `json:"complete"` // all required fields present
+	// Managed marks a Nix-managed (read-only) profile. Shadowed marks that this
+	// managed profile replaces a same-named user profile (GUI subtitle hint);
+	// the user copy is never deleted and reappears when the Nix config is gone.
+	Managed  bool `json:"managed,omitempty"`
+	Shadowed bool `json:"shadowed,omitempty"`
 }
 
 // Definition mirrors the world-readable /etc/spaces-integrations/<name>.json the
@@ -128,4 +136,8 @@ type EnabledState struct {
 
 type IntegrationState struct {
 	Enabled bool `json:"enabled"`
+	// Source records provenance: "nix" when a Nix enable verdict set this entry
+	// (reconcile owns it), empty for a user (GUI) enable. A "nix" entry whose
+	// verdict later disappears is dropped by reconcile, restoring user autonomy.
+	Source string `json:"source,omitempty"`
 }

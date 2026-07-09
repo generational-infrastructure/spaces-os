@@ -30,6 +30,7 @@ type testEnv struct {
 	sock        string
 	defsDir     string
 	stateDir    string
+	managedRoot string
 	sysctlLog   string
 	runtimeRoot string
 }
@@ -81,6 +82,7 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 	dir := t.TempDir()
 	defsDir := filepath.Join(dir, "defs")
 	stateDir := filepath.Join(dir, "state")
+	managedRoot := filepath.Join(dir, "managed")
 	runtimeDir := filepath.Join(dir, "run")
 	// The setup sockets live at %t/spaces-integration-<name>-setup.sock; %t in
 	// the tests is a short MkdirTemp dir so the AF_UNIX path stays under the
@@ -90,7 +92,7 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(runtimeRoot) })
-	for _, d := range []string{defsDir, stateDir, runtimeDir} {
+	for _, d := range []string{defsDir, stateDir, runtimeDir, managedRoot} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -115,10 +117,10 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	srv := NewServer(defsDir, stateDir, runtimeDir, runtimeRoot,
+	srv := NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot,
 		[]string{credsEnc}, []string{credsDec}, []string{sysctl}, []string{"skill-config"})
 	go srv.Serve(l)
-	return &testEnv{t: t, srv: srv, sock: sock, defsDir: defsDir, stateDir: stateDir, sysctlLog: sysctlLog, runtimeRoot: runtimeRoot}
+	return &testEnv{t: t, srv: srv, sock: sock, defsDir: defsDir, stateDir: stateDir, managedRoot: managedRoot, sysctlLog: sysctlLog, runtimeRoot: runtimeRoot}
 }
 
 // roundtripRaw sends one raw line and returns the single reply line parsed into
@@ -1193,5 +1195,270 @@ func TestSetupParkUnitsStoppedStarted(t *testing.T) {
 	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 5 })
 	if !equalStrings(calls, want) {
 		t.Fatalf("want park/unpark order %v, got %v", want, calls)
+	}
+}
+
+// writeManaged drops managed.json into the injected managedRoot with a
+// strictly-increasing mtime, so the broker's mtime-keyed cache always observes
+// the change even when two writes land within one fs mtime tick.
+func (e *testEnv) writeManaged(body string) {
+	e.t.Helper()
+	path := filepath.Join(e.managedRoot, "managed.json")
+	var prev time.Time
+	if fi, err := os.Stat(path); err == nil {
+		prev = fi.ModTime()
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	next := time.Now()
+	if !prev.IsZero() {
+		next = prev.Add(time.Second)
+	}
+	if err := os.Chtimes(path, next, next); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// writeManagedSecret stages a managed secret credential file so its stat-based
+// set-status reads true (§10.5).
+func (e *testEnv) writeManagedSecret(integration, profile, field, value string) {
+	e.t.Helper()
+	dir := filepath.Join(e.managedRoot, integration)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secret-"+profile+"-"+field), []byte(value), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func boolField(m map[string]any, key string) bool {
+	v, _ := m[key].(bool)
+	return v
+}
+
+func hasCall(calls []string, want string) bool {
+	for _, c := range calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A managed profile REPLACES a same-named user profile in the reply (shadow):
+// config comes from managed.json, the flags mark it managed+shadowed, and the
+// integration's Nix enable verdict surfaces as enabledByNix. A user-only
+// profile passes through unmanaged.
+func TestListOverlaysManagedProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.setField("github", "corp", "owner", "userowned")
+	e.setField("github", "corp", "token", "user-tok")
+	e.setField("github", "personal", "token", "p")
+
+	e.writeManaged(`{
+	  "generation": 1,
+	  "integrations": {
+	    "github": {
+	      "enable": true,
+	      "profiles": {
+	        "corp": { "config": {"owner": "acme"}, "secrets": ["token"] }
+	      }
+	    }
+	  }
+	}`)
+	e.writeManagedSecret("github", "corp", "token", "sealed")
+
+	gh := e.githubInfo()
+	if gh["enabledByNix"] != true {
+		t.Fatalf("want enabledByNix=true, got %v", gh["enabledByNix"])
+	}
+	corp := profileByName(gh, "corp")
+	if corp == nil {
+		t.Fatal("managed corp profile missing")
+	}
+	if !boolField(corp, "managed") {
+		t.Fatalf("want managed=true, got %v", corp)
+	}
+	if !boolField(corp, "shadowed") {
+		t.Fatalf("want shadowed=true (user corp existed), got %v", corp)
+	}
+	if got := corp["config"].(map[string]any)["owner"]; got != "acme" {
+		t.Fatalf("managed config must win: want owner=acme, got %v", got)
+	}
+	if corp["secrets"].(map[string]any)["token"] != true {
+		t.Fatalf("staged managed secret must read set, got %v", corp["secrets"])
+	}
+	if corp["complete"] != true {
+		t.Fatalf("managed profile with required secret staged must be complete, got %v", corp)
+	}
+	if personal := profileByName(gh, "personal"); personal == nil || boolField(personal, "managed") || boolField(personal, "shadowed") {
+		t.Fatalf("user-only profile must pass through unmanaged, got %v", personal)
+	}
+}
+
+// A managed profile with no same-named user twin is managed but NOT shadowed,
+// and an integration with no enable key reports no enabledByNix verdict.
+func TestListManagedOnlyProfileNotShadowed(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"solo":{"config":{"owner":"x"},"secrets":["token"]}}}}}`)
+	e.writeManagedSecret("github", "solo", "token", "s")
+	gh := e.githubInfo()
+	if gh["enabledByNix"] != nil {
+		t.Fatalf("no enable key must leave enabledByNix absent, got %v", gh["enabledByNix"])
+	}
+	solo := profileByName(gh, "solo")
+	if solo == nil || !boolField(solo, "managed") {
+		t.Fatalf("want managed solo profile, got %v", solo)
+	}
+	if boolField(solo, "shadowed") {
+		t.Fatalf("managed-only profile must not be shadowed, got %v", solo)
+	}
+}
+
+// A managed secret's set-status is the stat of its staged file: unstaged reads
+// unset and (for a required secret) leaves the profile incomplete.
+func TestListManagedSecretSetStatus(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	corp := profileByName(e.githubInfo(), "corp")
+	if corp["secrets"].(map[string]any)["token"] != false {
+		t.Fatalf("unstaged managed secret must read unset, got %v", corp["secrets"])
+	}
+	if corp["complete"] != false {
+		t.Fatalf("profile missing required secret must be incomplete, got %v", corp)
+	}
+}
+
+// set-field naming a managed profile is rejected with the stable message; a
+// non-managed profile name is still writable.
+func TestSetFieldRejectedOnManagedProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
+	e.wantError(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: "corp", Field: "owner", Value: "x"}),
+		"profile 'corp' is managed by system configuration")
+	e.wantOK(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: "work", Field: "token", Value: "x"}))
+}
+
+// remove-profile naming a managed profile is rejected (the shadowed user copy is
+// untouched; the managed row cannot be removed at runtime).
+func TestRemoveProfileRejectedOnManagedProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
+	e.wantError(e.roundtrip(Request{Op: "remove-profile", Integration: "github", Profile: "corp"}),
+		"profile 'corp' is managed by system configuration")
+}
+
+// enable/disable on an integration carrying a Nix enable verdict are rejected;
+// a rejected enable never touches systemctl.
+func TestEnableRejectedByVerdict(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}),
+		"integration 'github' enable state is managed by system configuration")
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("rejected enable must not touch systemctl, got %v", calls)
+	}
+}
+
+func TestDisableRejectedByVerdict(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":false}}}`)
+	e.wantError(e.roundtrip(Request{Op: "disable", Integration: "github"}),
+		"integration 'github' enable state is managed by system configuration")
+}
+
+// A managed complete profile counts toward the enable-completeness gate: with no
+// user profile at all, enable is blocked until the managed profile's required
+// secret is staged, then succeeds off the managed profile alone.
+func TestEnableGatedByManagedCompleteProfile(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "no complete profile")
+	e.writeManagedSecret("github", "corp", "token", "s")
+	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
+	if !e.enabledState().Integrations["github"].Enabled {
+		t.Fatal("want github enabled via managed complete profile")
+	}
+}
+
+// reconcile folds a verdict true into enabled.json with source nix and starts
+// the socket.
+func TestReconcileFoldsVerdictTrue(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	if !hasCall(e.systemctlCalls(), "start spaces-integration-github.socket") {
+		t.Fatalf("verdict true must start the socket, got %v", e.systemctlCalls())
+	}
+	st := e.enabledState().Integrations["github"]
+	if !st.Enabled || st.Source != "nix" {
+		t.Fatalf("want github {enabled:true, source:nix}, got %+v", st)
+	}
+}
+
+// reconcile folds a verdict false into enabled.json with source nix and STOPS
+// the unit — a Nix false overrides a pre-existing user enable.
+func TestReconcileNixFalseOverridesUserEnable(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"github": {Enabled: true}}})
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":false}}}`)
+	e.srv.ReconcileEnabled()
+	if !hasCall(e.systemctlCalls(), "stop spaces-integration-github.socket spaces-integration-github.service") {
+		t.Fatalf("nix false must stop the unit, got %v", e.systemctlCalls())
+	}
+	st := e.enabledState().Integrations["github"]
+	if st.Enabled || st.Source != "nix" {
+		t.Fatalf("want github {enabled:false, source:nix}, got %+v", st)
+	}
+}
+
+// When a Nix verdict disappears, reconcile drops the source-nix entry (restoring
+// user autonomy) and try-restarts the affected unit.
+func TestReconcileDropsRemovedVerdict(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	if st := e.enabledState().Integrations["github"]; st.Source != "nix" {
+		t.Fatalf("setup: want source nix, got %+v", st)
+	}
+	e.writeManaged(`{"generation":2,"integrations":{}}`)
+	e.srv.reconcileManaged()
+	if _, ok := e.enabledState().Integrations["github"]; ok {
+		t.Fatalf("source-nix entry must be dropped when the verdict disappears")
+	}
+	if !hasCall(e.systemctlCalls(), "try-restart spaces-integration-github.service") {
+		t.Fatalf("removed verdict must try-restart the affected unit, got %v", e.systemctlCalls())
+	}
+}
+
+// A generation bump (with a changed managed section) triggers re-reconcile and
+// a try-restart of the changed unit.
+func TestGenerationBumpReReconciles(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	e.srv.ReconcileEnabled()
+	before := len(e.systemctlCalls())
+	e.writeManaged(`{"generation":2,"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"b"},"secrets":["token"]}}}}}`)
+	e.srv.reconcileManaged()
+	after := e.systemctlCalls()
+	if len(after) <= before {
+		t.Fatalf("generation bump must re-reconcile, before=%d after=%v", before, after)
+	}
+	if !hasCall(after, "try-restart spaces-integration-github.service") {
+		t.Fatalf("generation bump must try-restart the changed unit, got %v", after)
+	}
+}
+
+// An unchanged managed.json triggers nothing on the coarse timer path.
+func TestReconcileManagedNoopWhenUnchanged(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	n := len(e.systemctlCalls())
+	e.srv.reconcileManaged()
+	if got := len(e.systemctlCalls()); got != n {
+		t.Fatalf("unchanged managed.json must not trigger systemctl, before=%d after=%d", n, got)
 	}
 }

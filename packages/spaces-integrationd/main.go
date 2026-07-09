@@ -71,11 +71,23 @@ func defaultRuntimeDir() string {
 	return os.TempDir()
 }
 
+// defaultManagedRoot: the Nix stager's per-user staged tree,
+// /run/spaces-integrations-managed/$USER (§10.2). The env override exists mainly
+// for tests, which inject a temp dir like the other path knobs.
+func defaultManagedRoot() string {
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("LOGNAME")
+	}
+	return filepath.Join("/run/spaces-integrations-managed", user)
+}
+
 func main() {
 	socketPath := envOr("SPACES_INTEGRATIOND_SOCKET", defaultSocket())
 	defsDir := envOr("SPACES_INTEGRATIOND_DEFS_DIR", defaultDefsDir)
 	stateDir := envOr("SPACES_INTEGRATIOND_STATE_DIR", defaultStateDir())
 	runtimeDir := envOr("SPACES_INTEGRATIOND_RUNTIME_DIR", defaultRuntimeDir())
+	managedRoot := envOr("SPACES_INTEGRATIOND_MANAGED_ROOT", defaultManagedRoot())
 	credsEncrypt := strings.Fields(envOr("SPACES_INTEGRATIOND_CREDS_ENCRYPT", defaultCredsEncrypt))
 	credsDecrypt := strings.Fields(envOr("SPACES_INTEGRATIOND_CREDS_DECRYPT", defaultCredsDecrypt))
 	systemctl := strings.Fields(envOr("SPACES_INTEGRATIOND_SYSTEMCTL", defaultSystemctl))
@@ -104,9 +116,11 @@ func main() {
 		l.Close()
 	}()
 
-	srv := NewServer(defsDir, stateDir, runtimeDir, filepath.Dir(socketPath), credsEncrypt, credsDecrypt, systemctl, skillConfig)
-	log.Printf("listening on %s (defs=%s state=%s)", socketPath, defsDir, stateDir)
-	// Restore the GUI-chosen run state (start-only) before accepting clients.
+	srv := NewServer(defsDir, stateDir, managedRoot, runtimeDir, filepath.Dir(socketPath), credsEncrypt, credsDecrypt, systemctl, skillConfig)
+	log.Printf("listening on %s (defs=%s state=%s managed=%s)", socketPath, defsDir, stateDir, managedRoot)
+	// Fold Nix verdicts + restore run state before accepting clients, then watch
+	// managed.json on a coarse timer for re-stages that land while idle.
 	srv.ReconcileEnabled()
+	go srv.watchManaged(managedTickInterval)
 	srv.Serve(l)
 }

@@ -42,6 +42,7 @@ var fieldPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 type Server struct {
 	defsDir      string
 	stateDir     string
+	managedRoot  string // Nix-managed staged tree root (managed.json + per-integration creds)
 	runtimeDir   string // scratch base for staging work dirs (store.go workDir), distinct from runtimeRoot
 	runtimeRoot  string // %t user runtime root: the twin setup sockets (…-setup.sock) live directly here
 	selfUid      uint32
@@ -50,12 +51,19 @@ type Server struct {
 	systemctl    []string // argv prefix: <prefix...> start|stop <units...>
 	skillConfig  []string // argv prefix: <prefix...> <verb> ...
 	mu           sync.Mutex
+	// managed.json cache, all guarded by mu: parsed state, its file mtime, and
+	// whether a load has happened (to distinguish a fresh start from an absent
+	// file). managedState() re-stats per call and reloads on an mtime change.
+	managedCache  ManagedState
+	managedMtime  time.Time
+	managedLoaded bool
 }
 
-func NewServer(defsDir, stateDir, runtimeDir, runtimeRoot string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
+func NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
 	return &Server{
 		defsDir:      defsDir,
 		stateDir:     stateDir,
+		managedRoot:  managedRoot,
 		runtimeDir:   runtimeDir,
 		runtimeRoot:  runtimeRoot,
 		selfUid:      uint32(os.Getuid()),
@@ -175,32 +183,56 @@ const (
 	setupDialInterval = 50 * time.Millisecond
 )
 
-// ReconcileEnabled restores the GUI-chosen run state at startup: for every
-// integration enabled.json marks on AND that still has a definition, start its
-// .socket unit. START ONLY — reconcile never stops anything (a unit the GUI
-// never enabled is left untouched). Per-integration failures are logged, never
-// fatal, and never block the remaining integrations.
+// ReconcileEnabled reconciles run state at startup (and is re-invoked whenever
+// managed.json changes): it folds Nix enable verdicts into enabled.json, then
+// starts the sockets of every enabled+defined integration. It is the ONE place
+// reconcile may STOP a unit — and only for a Nix enable=false verdict, which
+// overrides a pre-existing user enable. A user-enabled unit the GUI never
+// disabled is otherwise left untouched. Per-integration failures are logged,
+// never fatal, and never block the remaining integrations.
 func (s *Server) ReconcileEnabled() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.reconcileLocked()
+}
+
+// reconcileLocked is ReconcileEnabled's body; caller holds s.mu. Kept separate
+// so the managed-change timer can reconcile under the lock it already holds.
+func (s *Server) reconcileLocked() {
 	defs := s.loadDefs()
 	st := s.loadState()
+	managed := s.managedState()
+	if foldVerdicts(&st, managed) {
+		if err := s.saveState(st); err != nil {
+			log.Printf("reconcile: save enabled.json: %v", err)
+		}
+	}
 	names := make([]string, 0, len(st.Integrations))
 	for name := range st.Integrations {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if !st.Integrations[name].Enabled {
+		entry := st.Integrations[name]
+		if entry.Enabled {
+			if _, ok := defs[name]; !ok {
+				log.Printf("reconcile: skip %s (no definition)", name)
+				continue
+			}
+			unit := socketUnit(name)
+			if msg, err := s.runSystemctl("start", unit); err != nil {
+				log.Printf("reconcile: start %s: %s", unit, msg)
+			}
 			continue
 		}
-		if _, ok := defs[name]; !ok {
-			log.Printf("reconcile: skip %s (no definition)", name)
-			continue
-		}
-		unit := socketUnit(name)
-		if msg, err := s.runSystemctl("start", unit); err != nil {
-			log.Printf("reconcile: start %s: %s", unit, msg)
+		// A Nix enable=false verdict actively stops the unit (overrides a user
+		// enable); a plain user-disabled entry is left alone.
+		if entry.Source == "nix" {
+			sock := socketUnit(name)
+			svc := serviceUnit(name)
+			if msg, err := s.runSystemctl("stop", sock, svc); err != nil {
+				log.Printf("reconcile: stop %s %s: %s", sock, svc, msg)
+			}
 		}
 	}
 }
@@ -495,7 +527,15 @@ func (s *Server) removeProfileDispatch(integration, profile string) Ack {
 	}
 	s.mu.Lock()
 	d, ok := s.loadDefs()[integration]
+	managed := s.managedState()
 	s.mu.Unlock()
+	// A Nix-managed profile is read-only (§10.5): the user copy it shadows is
+	// untouched, but the managed row itself cannot be removed at runtime.
+	if mi, mok := managed.Integrations[integration]; mok {
+		if _, isManaged := mi.Profiles[profile]; isManaged {
+			return errAck("profile '" + profile + "' is managed by system configuration")
+		}
+	}
 	if ok && d.Setup {
 		return s.removeProfileWithHelper(integration, profile, d)
 	}
@@ -672,6 +712,7 @@ func (s *Server) list() any {
 	defer s.mu.Unlock()
 	defs := s.loadDefs()
 	st := s.loadState()
+	managed := s.managedState()
 
 	names := make([]string, 0, len(defs))
 	for name := range defs {
@@ -687,6 +728,11 @@ func (s *Server) list() any {
 			log.Printf("list %s: %v", name, err)
 			profiles = []ProfileInfo{}
 		}
+		var enabledByNix *bool
+		if mi, ok := managed.Integrations[name]; ok {
+			profiles = s.mergeManagedProfiles(d, profiles, mi)
+			enabledByNix = mi.Enable
+		}
 		infos = append(infos, IntegrationInfo{
 			Name:         name,
 			Description:  d.Description,
@@ -696,6 +742,7 @@ func (s *Server) list() any {
 			Secrets:      fieldInfos(d.Secrets),
 			Profiles:     profiles,
 			Setup:        d.Setup,
+			EnabledByNix: enabledByNix,
 		})
 	}
 	return ListReply{Op: "ok", Integrations: infos}
@@ -719,6 +766,13 @@ func (s *Server) setField(integration, profile, field, value string) Ack {
 	d, ok := defs[integration]
 	if !ok {
 		return errAck("unknown integration: " + integration)
+	}
+	// A Nix-managed profile is read-only (§10.5): reject the write with the
+	// stable message the GUI keys its lock affordance off.
+	if mi, ok := s.managedState().Integrations[integration]; ok {
+		if _, managed := mi.Profiles[profile]; managed {
+			return errAck("profile '" + profile + "' is managed by system configuration")
+		}
 	}
 	_, isConfig := d.Config[field]
 	_, isSecret := d.Secrets[field]
@@ -814,6 +868,11 @@ func (s *Server) enable(integration string) Ack {
 	if !ok {
 		return errAck("unknown integration: " + integration)
 	}
+	// A Nix enable verdict owns the run state (§10.5): the user cannot flip it.
+	managed := s.managedState()
+	if mi, ok := managed.Integrations[integration]; ok && mi.Enable != nil {
+		return errAck("integration '" + integration + "' enable state is managed by system configuration")
+	}
 
 	// A field-less definition (config={}, secrets={}) has no per-profile fields
 	// to complete and, correspondingly, no LoadCredential[Encrypted] sources
@@ -824,6 +883,10 @@ func (s *Server) enable(integration string) Ack {
 		profiles, err := s.storeProfiles(d)
 		if err != nil {
 			return errAck("read store: " + err.Error())
+		}
+		// Managed complete profiles count toward the gate too.
+		if mi, ok := managed.Integrations[integration]; ok {
+			profiles = s.mergeManagedProfiles(d, profiles, mi)
 		}
 		complete := false
 		for _, p := range profiles {
@@ -873,6 +936,10 @@ func (s *Server) disable(integration string) Ack {
 	defs := s.loadDefs()
 	if _, ok := defs[integration]; !ok {
 		return errAck("unknown integration: " + integration)
+	}
+	// A Nix enable verdict owns the run state (§10.5): the user cannot flip it.
+	if mi, ok := s.managedState().Integrations[integration]; ok && mi.Enable != nil {
+		return errAck("integration '" + integration + "' enable state is managed by system configuration")
 	}
 
 	sock := socketUnit(integration)
