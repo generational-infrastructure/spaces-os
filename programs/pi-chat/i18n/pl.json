@@ -80,7 +80,12 @@
     "integrations-setup-cancel": "Anuluj",
     "integrations-setup-submit": "Wyślij",
     "integrations-setup-prompt": "Wprowadź żądaną wartość.",
-    "integrations-setup-connecting": "Uruchamianie konfiguracji…"
+    "integrations-setup-connecting": "Uruchamianie konfiguracji…",
+    "integrations-managed": "Zarządzane przez konfigurację systemu",
+    "integrations-shadowed": "Zastępuje Twoje lokalnie skonfigurowane konto",
+    "integrations-enabled-by-nix": "Włączone przez konfigurację systemu",
+    "integrations-disabled-by-nix": "Wyłączone przez konfigurację systemu",
+    "integrations-profile-managed-conflict": "Ta nazwa jest zarządzana przez konfigurację systemu."
   },
   "menu": {
     "open-chat": "Otwórz czat",

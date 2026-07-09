@@ -80,7 +80,12 @@
     "integrations-setup-cancel": "Annuleren",
     "integrations-setup-submit": "Verzenden",
     "integrations-setup-prompt": "Voer de gevraagde waarde in.",
-    "integrations-setup-connecting": "Installatie wordt gestart…"
+    "integrations-setup-connecting": "Installatie wordt gestart…",
+    "integrations-managed": "Beheerd door de systeemconfiguratie",
+    "integrations-shadowed": "Vervangt je lokaal geconfigureerde account",
+    "integrations-enabled-by-nix": "Ingeschakeld door de systeemconfiguratie",
+    "integrations-disabled-by-nix": "Uitgeschakeld door de systeemconfiguratie",
+    "integrations-profile-managed-conflict": "Die naam wordt beheerd door de systeemconfiguratie."
   },
   "menu": {
     "open-chat": "Chat openen",

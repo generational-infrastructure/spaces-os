@@ -80,7 +80,12 @@
     "integrations-setup-cancel": "キャンセル",
     "integrations-setup-submit": "送信",
     "integrations-setup-prompt": "要求された値を入力してください。",
-    "integrations-setup-connecting": "セットアップを開始しています…"
+    "integrations-setup-connecting": "セットアップを開始しています…",
+    "integrations-managed": "システム構成によって管理されています",
+    "integrations-shadowed": "ローカルで設定したアカウントを置き換えます",
+    "integrations-enabled-by-nix": "システム構成によって有効化されています",
+    "integrations-disabled-by-nix": "システム構成によって無効化されています",
+    "integrations-profile-managed-conflict": "この名前はシステム構成によって管理されています。"
   },
   "menu": {
     "open-chat": "チャットを開く",

@@ -80,7 +80,12 @@
     "integrations-setup-cancel": "取消",
     "integrations-setup-submit": "提交",
     "integrations-setup-prompt": "输入请求的值。",
-    "integrations-setup-connecting": "正在启动设置…"
+    "integrations-setup-connecting": "正在启动设置…",
+    "integrations-managed": "由系统配置管理",
+    "integrations-shadowed": "替换您本地配置的账户",
+    "integrations-enabled-by-nix": "由系统配置启用",
+    "integrations-disabled-by-nix": "由系统配置禁用",
+    "integrations-profile-managed-conflict": "该名称由系统配置管理。"
   },
   "menu": {
     "open-chat": "打开聊天",

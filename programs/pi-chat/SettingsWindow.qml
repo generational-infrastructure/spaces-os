@@ -131,6 +131,12 @@ FloatingWindow {
     property var secretStatus: ({})
     property bool removable: false
     property bool showName: true
+    // Nix-managed account (§10.7): config values render as static rows,
+    // secrets as a "set" badge, and edit/remove affordances are NOT
+    // instantiated (the broker rejects mutations on a managed profile).
+    property bool managed: false
+    // This managed account shadows a same-named locally-configured one.
+    property bool shadowed: false
     Layout.fillWidth: true
     spacing: Style.marginXS
 
@@ -145,15 +151,81 @@ FloatingWindow {
         pointSize: Style.fontSizeS
       }
       Item { Layout.fillWidth: true }
-      NButton {
-        visible: pe.removable
-        text: I18n.tr("settings.integrations-profile-remove")
-        onClicked: integrations.removeProfile(pe.intName, pe.profileName)
+      // Remove is a user-only affordance: never instantiated for a managed
+      // profile, so the read-only tree carries no interactive children.
+      Loader {
+        active: pe.removable && !pe.managed
+        visible: active
+        sourceComponent: NButton {
+          objectName: "profileRemove-" + pe.intName + "-" + pe.profileName
+          text: I18n.tr("settings.integrations-profile-remove")
+          onClicked: integrations.removeProfile(pe.intName, pe.profileName)
+        }
       }
     }
 
+    // Managed provenance: lock glyph + "managed by system configuration",
+    // plus the shadow subtitle when this replaces a local account. Shown
+    // even for the nameless single-account default (showName=false).
+    ColumnLayout {
+      visible: pe.managed
+      Layout.fillWidth: true
+      spacing: Style.marginXXS
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.marginXS
+        NIcon {
+          icon: "lock"
+          pointSize: Style.fontSizeS
+          color: Color.mOnSurfaceVariant
+        }
+        NText {
+          objectName: "lockBadge-" + pe.intName + "-" + pe.profileName
+          Layout.fillWidth: true
+          text: I18n.tr("settings.integrations-managed")
+          color: Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeXS
+          wrapMode: Text.Wrap
+        }
+      }
+      NText {
+        objectName: "shadowBadge-" + pe.intName + "-" + pe.profileName
+        visible: pe.shadowed
+        Layout.fillWidth: true
+        text: I18n.tr("settings.integrations-shadowed")
+        color: Color.mOnSurfaceVariant
+        pointSize: Style.fontSizeXS
+        wrapMode: Text.Wrap
+      }
+    }
+
+    // Config — managed: static "name / value" rows (never editable).
     Repeater {
-      model: pe.configSchema
+      model: pe.managed ? pe.configSchema : []
+      delegate: RowLayout {
+        id: cfgStaticRow
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NText {
+          text: cfgStaticRow.modelData.name
+          color: Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeS
+        }
+        NText {
+          objectName: "cfgRow-" + pe.intName + "-" + pe.profileName + "-" + cfgStaticRow.modelData.name
+          Layout.fillWidth: true
+          text: (pe.configValues && pe.configValues[cfgStaticRow.modelData.name]) || ""
+          color: Color.mOnSurface
+          pointSize: Style.fontSizeS
+          wrapMode: Text.Wrap
+        }
+      }
+    }
+
+    // Config — user-editable: input + Save (unmanaged accounts only).
+    Repeater {
+      model: pe.managed ? [] : pe.configSchema
       delegate: RowLayout {
         id: cfgRow
         required property var modelData
@@ -166,6 +238,7 @@ FloatingWindow {
         }
         NTextInput {
           id: cfgInput
+          objectName: "cfgInput-" + pe.intName + "-" + pe.profileName + "-" + cfgRow.modelData.name
           Layout.fillWidth: true
           text: (pe.configValues && pe.configValues[cfgRow.modelData.name]) || ""
           placeholderText: cfgRow.modelData.description || cfgRow.modelData.name
@@ -178,8 +251,28 @@ FloatingWindow {
       }
     }
 
+    // Secrets — managed: static "set"/"not set" badge (never the value).
     Repeater {
-      model: pe.secretSchema
+      model: pe.managed ? pe.secretSchema : []
+      delegate: RowLayout {
+        id: secStaticRow
+        required property var modelData
+        Layout.fillWidth: true
+        spacing: Style.marginS
+        NText {
+          objectName: "secretBadge-" + pe.intName + "-" + pe.profileName + "-" + secStaticRow.modelData.name
+          text: secStaticRow.modelData.name + " · " + ((pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name])
+            ? I18n.tr("settings.integrations-secret-set")
+            : I18n.tr("settings.integrations-secret-unset"))
+          color: (pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeS
+        }
+      }
+    }
+
+    // Secrets — user-editable: masked input + Save (unmanaged accounts only).
+    Repeater {
+      model: pe.managed ? [] : pe.secretSchema
       delegate: RowLayout {
         id: secRow
         required property var modelData
@@ -194,6 +287,7 @@ FloatingWindow {
         }
         NTextInput {
           id: secInput
+          objectName: "secInput-" + pe.intName + "-" + pe.profileName + "-" + secRow.modelData.name
           Layout.fillWidth: true
           echoMode: TextInput.Password
           placeholderText: secRow.modelData.description || secRow.modelData.name
@@ -283,6 +377,9 @@ FloatingWindow {
         delegate: ColumnLayout {
           id: intRow
           required property var modelData
+          // Names of this integration's Nix-managed profiles — the add-account
+          // draft refuses to reuse one (the broker rejects it anyway, §10.7).
+          readonly property var managedNames: (intRow.modelData.profiles || []).filter(p => p && p.managed === true).map(p => p.name)
           Layout.fillWidth: true
           spacing: Style.marginXS
 
@@ -316,13 +413,33 @@ FloatingWindow {
                 integrations.startSetup(intRow.modelData.name);
               }
             }
-            NButton {
-              text: intRow.modelData.enabled
-                ? I18n.tr("settings.integrations-disable")
-                : I18n.tr("settings.integrations-enable")
-              onClicked: {
-                if (intRow.modelData.enabled) integrations.disable(intRow.modelData.name);
-                else integrations.enable(intRow.modelData.name);
+            // Nix owns the enable verdict? Replace the toggle with a static
+            // label; neither button is instantiated. Absent verdict
+            // (enabledByNix === undefined) ⇒ the user keeps control.
+            Loader {
+              active: intRow.modelData.enabledByNix === undefined
+              visible: active
+              sourceComponent: NButton {
+                objectName: "enableToggle-" + (intRow.modelData.name || "")
+                text: intRow.modelData.enabled
+                  ? I18n.tr("settings.integrations-disable")
+                  : I18n.tr("settings.integrations-enable")
+                onClicked: {
+                  if (intRow.modelData.enabled) integrations.disable(intRow.modelData.name);
+                  else integrations.enable(intRow.modelData.name);
+                }
+              }
+            }
+            Loader {
+              active: intRow.modelData.enabledByNix !== undefined
+              visible: active
+              sourceComponent: NText {
+                objectName: "enableManagedLabel-" + (intRow.modelData.name || "")
+                text: intRow.modelData.enabledByNix === true
+                  ? I18n.tr("settings.integrations-enabled-by-nix")
+                  : I18n.tr("settings.integrations-disabled-by-nix")
+                color: Color.mOnSurfaceVariant
+                pointSize: Style.fontSizeS
               }
             }
           }
@@ -468,25 +585,44 @@ FloatingWindow {
                 secretStatus: profRow.modelData.secrets || ({})
                 removable: true
                 showName: true
+                managed: profRow.modelData.managed === true
+                shadowed: profRow.modelData.shadowed === true
               }
             }
 
             NTextInput {
               id: newProfile
+              objectName: "addProfileInput-" + (intRow.modelData.name || "")
               Layout.fillWidth: true
               placeholderText: I18n.tr("settings.integrations-profile-add")
             }
-            // Draft editor for the typed-in account name; saving any field
-            // creates the profile (the broker materialises it on first set-field).
-            ProfileEditor {
-              visible: newProfile.text.length > 0
+            // Reusing a Nix-managed profile name is rejected inline (and by
+            // the broker): the draft editor is suppressed while it collides.
+            NText {
+              objectName: "draftError-" + (intRow.modelData.name || "")
+              visible: newProfile.text.length > 0 && intRow.managedNames.indexOf(newProfile.text) >= 0
               Layout.fillWidth: true
-              intName: intRow.modelData.name
-              profileName: newProfile.text
-              configSchema: intRow.modelData.config || []
-              secretSchema: intRow.modelData.secrets || []
-              removable: false
-              showName: false
+              text: I18n.tr("settings.integrations-profile-managed-conflict")
+              color: Color.mError
+              pointSize: Style.fontSizeS
+              wrapMode: Text.Wrap
+            }
+            // Draft editor for the typed-in account name; saving any field
+            // creates the profile (the broker materialises it on first
+            // set-field). Not instantiated while the name collides with a
+            // managed profile, so no stray editable rows leak into the tree.
+            Loader {
+              active: newProfile.text.length > 0 && intRow.managedNames.indexOf(newProfile.text) < 0
+              visible: active
+              Layout.fillWidth: true
+              sourceComponent: ProfileEditor {
+                intName: intRow.modelData.name
+                profileName: newProfile.text
+                configSchema: intRow.modelData.config || []
+                secretSchema: intRow.modelData.secrets || []
+                removable: false
+                showName: false
+              }
             }
           }
 
@@ -503,6 +639,8 @@ FloatingWindow {
             secretStatus: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0].secrets : ({})
             removable: false
             showName: false
+            managed: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? (intRow.modelData.profiles[0].managed === true) : false
+            shadowed: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? (intRow.modelData.profiles[0].shadowed === true) : false
           }
         }
       }

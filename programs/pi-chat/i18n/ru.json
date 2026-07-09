@@ -80,7 +80,12 @@
     "integrations-setup-cancel": "Отмена",
     "integrations-setup-submit": "Отправить",
     "integrations-setup-prompt": "Введите запрошенное значение.",
-    "integrations-setup-connecting": "Запуск настройки…"
+    "integrations-setup-connecting": "Запуск настройки…",
+    "integrations-managed": "Управляется конфигурацией системы",
+    "integrations-shadowed": "Заменяет вашу локально настроенную учётную запись",
+    "integrations-enabled-by-nix": "Включено конфигурацией системы",
+    "integrations-disabled-by-nix": "Отключено конфигурацией системы",
+    "integrations-profile-managed-conflict": "Это имя управляется конфигурацией системы."
   },
   "menu": {
     "open-chat": "Открыть чат",

@@ -31,10 +31,18 @@ QtObject {
   // Set by the parent (the broker socket address). Empty ⇒ inert.
   property string sockPath: ""
 
-  // Mirror of the broker's `list` reply. Each entry:
-  //   { name, description, enabled, setup, multiProfile, config, secrets, profiles }
+  // Mirror of the broker's `list` reply, assigned verbatim (see _onReply).
+  // Each entry:
+  //   { name, description, enabled, setup, multiProfile, config, secrets,
+  //     profiles, enabledByNix? }
   // `setup` (bool) is surfaced verbatim: the panel gates the Link/Setup
-  // button on it.
+  // button on it. `enabledByNix` (bool, ABSENT when Nix has no opinion) is
+  // the Nix enable verdict — present ⇒ the panel shows a static
+  // system-managed label instead of the enable/disable toggle (§10.5/§10.7).
+  // Each `profiles[]` entry is { name, config, secrets, complete } plus, for
+  // Nix-managed accounts, `managed: true` (read-only) and `shadowed: true`
+  // (this managed profile shadows a same-named local one). All fields pass
+  // straight through — the panel renders managed accounts read-only from them.
   property var integrations: []
 
   // True once a `list` has succeeded — lets the UI tell "still connecting"
