@@ -42,8 +42,11 @@ pkgs.writeShellApplication {
   text = ''
     # Pin every Bridge / GPG / pass path under one user-owned state root and
     # drop the session bus so Bridge deterministically selects the `pass`
-    # keychain (facts doc: pass-keychain determinism).
-    state="''${XDG_STATE_HOME:-$HOME/.local/state}/protonmail-bridge"
+    # keychain (facts doc: pass-keychain determinism). The root honors the
+    # SPACES_PROTON_BRIDGE_STATE pin every other consumer agrees on (manifest
+    # env, Landlock grant, tmpfiles rule, both Python modules); the XDG
+    # fallback remains for unmanaged/manual runs.
+    state="''${SPACES_PROTON_BRIDGE_STATE:-''${XDG_STATE_HOME:-$HOME/.local/state}/protonmail-bridge}"
     export XDG_CONFIG_HOME="$state/config"
     export XDG_DATA_HOME="$state/data"
     export XDG_CACHE_HOME="$state/cache"
