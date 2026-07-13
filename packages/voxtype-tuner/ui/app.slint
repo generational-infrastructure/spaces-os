@@ -219,9 +219,11 @@ component LangChip {
 component ComboTrigger {
     in property <string> value;
     in property <bool> enabled: true;
+    in property <length> trigger-height: Theme.control-height;
+    in property <bool> highlighted: false;
     callback opened;
 
-    height: Theme.control-height;
+    height: root.trigger-height;
     min-width: 64px;
 
     accessible-role: combobox;
@@ -244,11 +246,11 @@ component ComboTrigger {
     }
 
     body := Rectangle {
-        border-radius: Theme.radius-m;
+        border-radius: root.trigger-height >= 40px ? 11px : Theme.radius-m;
         background: ta.pressed ? Theme.control-pressed
             : ta.has-hover ? Theme.control-hover : Theme.control-bg;
-        border-width: 1px;
-        border-color: Theme.border-strong;
+        border-width: root.highlighted ? 1.5px : 1px;
+        border-color: root.highlighted ? Theme.focus-ring : Theme.border-strong;
         animate background { duration: Theme.anim-base; }
 
         HorizontalLayout {
@@ -348,6 +350,233 @@ component DeviceRow {
         clicked => {
             root.activated();
         }
+    }
+}
+
+// Model rows need richer state than the device picker: the reference popup
+// shows selected/ready rows, the active download row with progress and cancel,
+// and absent rows with their own Download pill. The row remains one list item:
+// selecting a label changes the model, while the trailing pill selects + starts
+// that row's download.
+component ModelRow {
+    in property <string> text;
+    in property <string> state: "absent"; // "user" | "system" | "absent"
+    in property <bool> selected: false;
+    in property <bool> downloading: false;
+    in property <int> progress: 0;
+    in property <string> download-tooltip;
+    in property <string> cancel-tooltip;
+    callback activated;
+    callback download-requested;
+    callback cancel-requested;
+
+    height: 44px;
+
+    property <bool> ready: root.state == "user" || root.state == "system";
+    property <color> leading-tone: root.downloading ? Theme.focus-ring
+        : root.ready ? Theme.success-text
+        : Theme.text-faint;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.activated(); }
+
+    plate := Rectangle {
+        x: Theme.space-xs;
+        width: parent.width - 2 * Theme.space-xs;
+        border-radius: Theme.radius-key;
+        background: root.selected ? Theme.window-bg
+            : label-touch.pressed ? Theme.pressed-overlay
+            : label-touch.has-hover ? Theme.hover-overlay : transparent;
+        animate background { duration: Theme.anim-base; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: Theme.space-s;
+            padding-right: Theme.space-s;
+            spacing: Theme.space-s;
+
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    glyph: root.downloading ? "download"
+                        : root.ready ? "check" : "plus-circle";
+                    size: 16px;
+                    tint: root.leading-tone;
+                }
+            }
+
+            Text {
+                text: root.text;
+                color: root.ready || root.downloading
+                    ? Theme.text-primary : Theme.text-secondary;
+                font-family: Theme.font-family;
+                font-size: 13.5px;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            if root.ready && !root.downloading: Text {
+                text: root.state;
+                color: Theme.text-faint;
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+
+            if root.downloading: VerticalLayout {
+                alignment: center;
+
+                HorizontalLayout {
+                    width: 136px;
+                    height: 28px;
+                    spacing: Theme.space-xs;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 72px;
+                        height: 28px;
+                        border-radius: self.height / 2;
+                        background: Theme.control-bg;
+
+                        progress-track := Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 48px;
+                            height: 5px;
+                            border-radius: self.height / 2;
+                            background: Theme.selection-inactive;
+                            clip: true;
+
+                            Rectangle {
+                                x: 0px;
+                                y: 0px;
+                                width: parent.width * root.progress / 100;
+                                height: parent.height;
+                                border-radius: parent.border-radius;
+                                background: Theme.focus-ring;
+                            }
+                        }
+                    }
+
+                    Text {
+                        width: 30px;
+                        height: 28px;
+                        text: "\{root.progress}%";
+                        color: Theme.focus-ring;
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: self.height / 2;
+                        background: cancel-touch.pressed ? Theme.control-pressed
+                            : cancel-touch.has-hover ? Theme.control-hover
+                            : transparent;
+                        accessible-role: button;
+                        accessible-label: "Cancel " + root.text + " download";
+                        accessible-description: root.cancel-tooltip;
+                        accessible-enabled: true;
+                        accessible-action-default => { root.cancel-requested(); }
+                        Tooltip { TipCard { text: root.cancel-tooltip; } }
+
+                        Icon {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            glyph: "close";
+                            size: 14px;
+                            tint: Theme.text-faint;
+                        }
+
+                        cancel-scope := FocusScope {
+                            accessible-role: button;
+                            accessible-label: "Cancel " + root.text + " download";
+                            accessible-description: root.cancel-tooltip;
+                            accessible-action-default => { root.cancel-requested(); }
+                            key-pressed(event) => {
+                                if (event.text == " " || event.text == Key.Return) {
+                                    root.cancel-requested();
+                                    return accept;
+                                }
+                                reject
+                            }
+                        }
+
+                        cancel-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.cancel-requested(); }
+                        }
+                    }
+                }
+            }
+
+            if !root.ready && !root.downloading: VerticalLayout {
+                alignment: center;
+
+                download-touch := Rectangle {
+                    width: 102px;
+                    height: 28px;
+                    border-radius: self.height / 2;
+                    background: download-pill-touch.pressed ? Theme.control-pressed
+                        : download-pill-touch.has-hover ? Theme.control-hover
+                        : Theme.control-bg;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    accessible-role: button;
+                    accessible-label: "Download";
+                    accessible-description: root.download-tooltip;
+                    accessible-enabled: true;
+                    accessible-action-default => { root.download-requested(); }
+                    Tooltip { TipCard { text: root.download-tooltip; } }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            height: 16px;
+                            padding-left: Theme.space-s;
+                            padding-right: Theme.space-s;
+                            spacing: Theme.space-xs;
+                            alignment: center;
+
+                            Icon {
+                                glyph: "download";
+                                size: 13px;
+                                tint: Theme.text-primary;
+                            }
+
+                            Text {
+                                text: "Download";
+                                color: Theme.text-primary;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                font-weight: Theme.weight-semibold;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    download-pill-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.download-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    label-touch := TouchArea {
+        x: 0px;
+        width: root.downloading ? parent.width - 180px
+            : root.ready ? parent.width - 120px
+            : parent.width - 180px;
+        mouse-cursor: pointer;
+        clicked => { root.activated(); }
     }
 }
 
@@ -951,17 +1180,21 @@ export component MainWindow inherits Window {
     // The availability state behind that caption: "user" (in the user models
     // dir), "system" (config-provided absolute path, e.g. the module's store
     // path), "absent" (neither). Set from Python by the same probe as the
-    // caption. Drives the Download button so the flashy fetch action can
-    // never be offered for a model that is already available.
+    // caption. The selected value drives the trigger status, while the per-row
+    // list below drives the popup's ready/downloading/download affordances.
     in-out property <string> model-state: "absent";
+    in-out property <[string]> model-state-list;
     // True when model-status carries a download failure. The wording ("failed:
     // …") carries the meaning. Kept wired for Python and read by the caption.
     in-out property <bool> model-status-error;
-    // True while a download runs. Set from Python. Relabels the Download
-    // button to its Stop action so a second fetch can't start while one is in
-    // flight (voxtype's downloader has no lock, so concurrent fetches into
-    // one model dir corrupt each other). A click then cancels instead.
+    // True while a download runs. Set from Python. The popup row for
+    // downloading-model becomes the progress/cancel row so a second fetch can't
+    // start while one is in flight (voxtype's downloader has no lock, so
+    // concurrent fetches into one model dir corrupt each other). A click on that
+    // row's close affordance cancels instead.
     in-out property <bool> downloading;
+    in-out property <string> downloading-model: "";
+    in-out property <int> download-progress-percent: 0;
     // True while a transcribe subprocess runs. Set from Python on the UI
     // thread, cleared in the marshalled completion. Gates the Transcribe
     // button (functional double-fire guard) and drives the busy caption.
@@ -1038,7 +1271,6 @@ export component MainWindow inherits Window {
     // voxtype source. Kept to one or two plain sentences.
     out property <string> tt-engine: "The transcription engine. Whisper (whisper.cpp, batch) is the default. Parakeet (ONNX) can also stream live. Nemotron is a fork build with its model baked in.";
     out property <string> tt-model: "The model this engine loads. Larger models are generally more accurate but slower and bigger to download.";
-    out property <string> tt-model-status: "Where the selected model is: “ready (user download)” is in your local models folder, “ready (system)” is provided by the system config at a fixed path, and “not downloaded” means nothing is on disk yet.";
     out property <string> tt-download: root.downloading
         ? "Stop the download and delete the partial files."
         : root.model-list.length == 0
@@ -1174,6 +1406,8 @@ export component MainWindow inherits Window {
     // warning steering the user back.
     private property <bool> stream-focus-lost: root.streaming
         && !transcription-output.has-focus;
+    private property <bool> model-popup-open: false;
+    private property <bool> model-download-pending: false;
 
     VerticalLayout {
         // --- In-app titlebar: app identity + optional scheme override. The
@@ -1308,7 +1542,7 @@ export component MainWindow inherits Window {
                                 x: 0;
                                 y: parent.height + Theme.space-xs;
                                 width: device-anchor.width;
-                                close-policy: PopupClosePolicy.close-on-click-outside;
+                                close-policy: PopupClosePolicy.no-auto-close;
 
                                 device-popup-card := Rectangle {
                                     background: Theme.content-bg;
@@ -1766,9 +2000,10 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // Model → status chip header + dropdown + Download pill. The
-                    // Download stays a dedicated button + status chip (never a
-                    // per-row fetch folded into the dropdown).
+                    // Model → dropdown. Download/cancel and availability live inside
+                    // the popup rows, matching the Spaces reference: the trigger stays
+                    // focused on selection, while row state carries ready/system/user,
+                    // in-flight progress, and absent download.
                     VerticalLayout {
                         spacing: Theme.space-xs;
                         HorizontalLayout {
@@ -1786,98 +2021,94 @@ export component MainWindow inherits Window {
                             Rectangle {
                                 horizontal-stretch: 1;
                             }
-                            // Three-state availability, named by the word + dot
-                            // together. Absent when there is no model (nemotron
-                            // bakes its in, so there is nothing to show).
-                            if root.model-status != "": model-download-status := StatusChip {
-                                text: root.model-status;
-                                tone: root.downloading ? "downloading"
-                                    : (root.model-state == "user" || root.model-state == "system")
-                                        ? "ready" : "absent";
-                                accessible-description: root.tt-model-status;
-                                Tooltip { TipCard { text: root.tt-model-status; } }
-                            }
                         }
-                        HorizontalLayout {
-                            spacing: Theme.space-s;
-                            // A combo-styled trigger + popup list (the device
-                            // picker's pattern), NOT a std ComboBox: the cupertino
-                            // ComboBox paints its steppers and selection box in the
-                            // persistent cupertino blue, which violates "blue =
-                            // focus only". This is fully Theme-tokened (blue lives
-                            // only in the focus ring). The wiring is unchanged: the
-                            // rows drive model-index and fire model-changed, and the
-                            // value reads model-list[model-index] like sel-model, so
-                            // a programmatic seed/reset shows the right label.
-                            model-anchor := Rectangle {
-                                horizontal-stretch: 1;
-                                height: Theme.control-height;
+                        // A combo-styled trigger + popup list (the device picker's
+                        // pattern), NOT a std ComboBox: the cupertino ComboBox
+                        // paints its steppers and selection box in persistent
+                        // cupertino blue, which violates "blue = focus only".
+                        // This is fully Theme-tokened. The rows drive model-index,
+                        // fire model-changed, and optionally start/cancel downloads.
+                        model-anchor := Rectangle {
+                            height: 42px;
 
-                                model-combo := ComboTrigger {
-                                    width: 100%;
-                                    value: root.model-list[root.model-index];
-                                    // nemotron bakes in its model, so its list is
-                                    // empty: grey it out.
-                                    enabled: root.model-list.length > 0;
-                                    accessible-description: root.tt-model;
-                                    Tooltip { TipCard { text: root.tt-model; } }
-                                    opened => {
-                                        model-popup.show();
-                                    }
+                            model-combo := ComboTrigger {
+                                width: 100%;
+                                trigger-height: 42px;
+                                highlighted: root.model-popup-open;
+                                value: root.model-list[root.model-index];
+                                // nemotron bakes in its model, so its list is
+                                // empty: grey it out.
+                                enabled: root.model-list.length > 0;
+                                accessible-description: root.tt-model;
+                                Tooltip { TipCard { text: root.tt-model; } }
+                                opened => {
+                                    root.model-popup-open = true;
+                                    model-popup.show();
                                 }
+                            }
 
-                                model-popup := PopupWindow {
-                                    x: 0;
-                                    y: parent.height + Theme.space-xs;
-                                    width: model-anchor.width;
-                                    close-policy: PopupClosePolicy.close-on-click-outside;
+                            model-popup := PopupWindow {
+                                x: 0;
+                                y: parent.height + Theme.space-xs;
+                                width: model-anchor.width;
+                                height: min(root.model-list.length * 44px + 2 * Theme.space-xs, 150px);
+                                close-policy: PopupClosePolicy.close-on-click-outside;
 
-                                    Rectangle {
-                                        background: Theme.content-bg;
-                                        border-radius: Theme.radius-l;
-                                        border-width: 1px;
-                                        border-color: Theme.border-soft;
-                                        drop-shadow-blur: 18px;
-                                        drop-shadow-color: Theme.shadow;
-                                        drop-shadow-offset-y: 6px;
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    background: Theme.content-bg;
+                                    border-radius: Theme.radius-field;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    drop-shadow-blur: 24px;
+                                    drop-shadow-color: Theme.shadow;
+                                    drop-shadow-offset-y: 8px;
+
+                                    ScrollView {
+                                        width: 100%;
+                                        height: 100%;
+                                        vertical-scrollbar-policy: as-needed;
+                                        horizontal-scrollbar-policy: always-off;
 
                                         VerticalLayout {
                                             padding: Theme.space-xs;
 
-                                            for label[i] in root.model-list: DeviceRow {
+                                            for label[i] in root.model-list: ModelRow {
                                                 text: label;
+                                                state: i < root.model-state-list.length
+                                                    ? root.model-state-list[i] : "absent";
                                                 selected: i == root.model-index;
+                                                downloading: root.downloading
+                                                    && root.downloading-model == label;
+                                                progress: root.download-progress-percent;
+                                                download-tooltip: root.tt-download;
+                                                cancel-tooltip: root.tt-download;
                                                 activated => {
                                                     root.model-index = i;
                                                     root.model-changed(root.model-list[i]);
+                                                    root.model-popup-open = false;
                                                     model-popup.close();
+                                                }
+                                                download-requested => {
+                                                    root.model-index = i;
+                                                    root.model-changed(root.model-list[i]);
+                                                    root.model-download-pending = true;
+                                                }
+                                                cancel-requested => {
+                                                    root.download-model();
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                            // Primary only while the selected model is absent:
-                            // fetching it is then what unblocks every transcribe.
-                            // An available model demotes it to a neutral pill and
-                            // disables it (styleguide disabled rule), so the accent
-                            // never advertises a pointless re-fetch. While a fetch
-                            // runs it relabels to Stop and drops the accent, so
-                            // cancel never reads as the view's primary. Fixed width
-                            // so the Download↔Stop relabel never reflows the combo.
-                            model-download := Pill {
-                                width: 124px;
-                                // match the model-combo dropdown height on this row
-                                height: Theme.control-height;
-                                text: root.downloading ? "■ Stop" : "Download";
-                                kind: root.model-state == "absent" && !root.downloading
-                                    ? "primary" : "secondary";
-                                enabled: root.downloading
-                                    || (root.model-list.length > 0
-                                        && root.model-state == "absent");
-                                accessible-description: root.tt-download;
-                                Tooltip { TipCard { text: root.tt-download; } }
-                                clicked => {
+
+                            model-download-dispatch := Timer {
+                                interval: 1ms;
+                                running: root.model-download-pending;
+                                triggered => {
+                                    root.model-download-pending = false;
                                     root.download-model();
                                 }
                             }

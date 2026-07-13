@@ -10,6 +10,7 @@ backend can never freeze the UI.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import itertools
 import logging
@@ -474,13 +475,21 @@ def configure(
         meter.pause()
         recorder.toggle()
 
+    def model_availability_for(engine: str, model: str) -> models.ModelAvailability:
+        return models.model_availability(engine, model, startup.model_paths)
+
     def current_availability() -> models.ModelAvailability:
         # The three-state probe for the live selection, fed with the config
         # layers' absolute model references so a system-provisioned store-path
         # model reads as available (and transcribable) without any download.
-        return models.model_availability(
-            instance.sel_engine, instance.sel_model, startup.model_paths
-        )
+        return model_availability_for(instance.sel_engine, instance.sel_model)
+
+    def model_rows() -> list[str]:
+        rows: list[str] = []
+        for i in range(instance.model_list.row_count()):
+            value = instance.model_list.row_data(i)
+            rows.append(str(value) if value is not None else "")
+        return rows
 
     # The one live scratch-daemon session (single-flight, like the download
     # guard: `instance.streaming` is flipped on the UI thread) plus a
@@ -643,17 +652,28 @@ def configure(
 
     def refresh_model_status() -> None:
         # UI thread (engine/model-changed callbacks and startup): direct writes.
-        # model_state drives the Download button's primary/enabled bindings, while
-        # model_status is the human caption. One probe feeds both so they can
-        # never disagree. Any selection-driven refresh also clears the failure
-        # tint. A past download failure must not color a fresh model's status.
+        # model_state drives the selected row, model_state_list drives every row
+        # in the open dropdown, and model_status is the human caption. One probe
+        # path feeds them so the popup can never disagree with the trigger.
+        # Any selection-driven refresh also clears the failure tint. A past
+        # download failure must not color a fresh model's status.
         refresh_streaming_gate()
         instance.model_status_error = False
         if not instance.sel_model:
             instance.model_status = ""
             instance.model_state = "absent"
+            instance.model_state_list = slint.ListModel([])
             return
-        state = current_availability().state
+        state_by_model = [
+            model_availability_for(instance.sel_engine, model).state
+            for model in model_rows()
+        ]
+        instance.model_state_list = slint.ListModel(state_by_model)
+        state = (
+            state_by_model[instance.model_index]
+            if 0 <= instance.model_index < len(state_by_model)
+            else current_availability().state
+        )
         instance.model_state = state
         instance.model_status = _STATUS_CAPTIONS[state]
 
@@ -689,7 +709,11 @@ def configure(
         refresh_model_status()
         refresh_modified()
 
-    def on_model_changed(_value: str) -> None:
+    def on_model_changed(value: str) -> None:
+        rows = model_rows()
+        if value:
+            with contextlib.suppress(ValueError):
+                instance.model_index = rows.index(value)
         end_stream_session()
         refresh_model_status()
         refresh_modified()
@@ -876,7 +900,7 @@ def configure(
     # outcome in both race directions. The generation check still drops a
     # stale completion should the state ever move on underneath it.
     download_gen = itertools.count()
-    download_state: dict[str, Any] = {"gen": None, "cancel": None}
+    download_state: dict[str, Any] = {"gen": None, "cancel": None, "model": ""}
 
     def on_download() -> None:
         # UI thread. One button, two verbs (mirroring Record→Stop and
@@ -907,7 +931,10 @@ def configure(
         handle = CancelHandle()
         download_state["gen"] = gen
         download_state["cancel"] = handle
+        download_state["model"] = model
         instance.downloading = True
+        instance.downloading_model = model
+        instance.download_progress_percent = 0
         instance.model_status = "downloading…"  # UI thread: immediate feedback
         instance.model_status_error = False
 
@@ -921,6 +948,14 @@ def configure(
             def apply_progress() -> None:
                 if instance.downloading and not handle.cancelled():
                     instance.model_status = format_download_progress(progress)
+                    if progress.total_bytes and progress.total_bytes > 0:
+                        instance.download_progress_percent = min(
+                            100,
+                            max(
+                                0,
+                                round(progress.done_bytes * 100 / progress.total_bytes),
+                            ),
+                        )
 
             native.invoke_from_event_loop(apply_progress)
 
@@ -939,7 +974,10 @@ def configure(
                     return
                 download_state["gen"] = None
                 download_state["cancel"] = None
+                download_state["model"] = ""
                 instance.downloading = False
+                instance.downloading_model = ""
+                instance.download_progress_percent = 0
                 fetched = models.model_availability(
                     engine, model, startup.model_paths
                 ).state

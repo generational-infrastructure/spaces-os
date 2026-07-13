@@ -70,6 +70,7 @@ class FakeWindow:
         self.copy_feedback = ""
         self.model_status = ""
         self.model_state = "absent"
+        self.model_state_list: Any = None
         self.model_status_error = False
         self.take_status = ""
         # Take playback state: whether the take is actively playing (drives the
@@ -83,6 +84,8 @@ class FakeWindow:
         self.input_available = True
         # Guards against concurrent downloads/transcribes, toggled by the wiring.
         self.downloading = False
+        self.downloading_model = ""
+        self.download_progress_percent = 0
         self.transcribing = False
         self.recording = False
         self.streaming = False
@@ -949,6 +952,7 @@ class SeededWindow:
         self.device_index = 0
         self.model_status = ""
         self.model_state = "absent"
+        self.model_state_list: Any = None
         self.model_status_error = False
         self.take_status = ""
         self.playing = False
@@ -956,6 +960,8 @@ class SeededWindow:
         self.input_level = 0.0
         self.input_available = True
         self.downloading = False
+        self.downloading_model = ""
+        self.download_progress_percent = 0
         self.transcribing = False
         self.recording = False
         self.transcription = ""
@@ -1405,6 +1411,30 @@ def test_model_status_distinguishes_system_user_and_absent(
     win.model_changed("tiny")
     assert win.model_status == "ready (user download) ✓"
     assert win.model_state == "user"
+
+
+def test_model_state_list_tracks_every_dropdown_row(tmp_path: pathlib.Path) -> None:
+    # The model popup renders one row per catalog entry, each with its own
+    # installed/downloading/download affordance. Python must therefore expose the
+    # row states for the whole visible list, not only the selected model caption.
+    weights = tmp_path / "fake-store" / "abc123-ggml-small.bin"
+    weights.parent.mkdir()
+    weights.write_bytes(b"ggml")
+    root = pathlib.Path(models.models_dir())
+    root.mkdir(parents=True)
+    (root / "ggml-tiny.bin").write_bytes(b"ggml")
+
+    win = SeededWindow()
+    app.configure(
+        win,
+        startup=_startup(model_paths={("whisper", "small"): str(weights)}),
+    )
+
+    rows = _rows(win.model_list)
+    states = _rows(win.model_state_list)
+    assert states[rows.index("tiny")] == "user"
+    assert states[rows.index("small")] == "system"
+    assert states[rows.index("base.en")] == "absent"
 
 
 def test_engine_switch_refreshes_model_state_immediately(

@@ -33,8 +33,6 @@ CONTROL_TOOLTIPS: dict[str, str] = {
     "engine-combo": "tt-engine",
     "model-combo": "tt-model",
     "device-combo": "tt-device",
-    "model-download": "tt-download",
-    "model-download-status": "tt-model-status",
     "vad-check": "tt-vad",
     "vad-threshold-combo": "tt-vad-threshold",
     "maxdur-combo": "tt-maxdur",
@@ -50,6 +48,11 @@ CONTROL_TOOLTIPS: dict[str, str] = {
     "defaults-reset": "tt-reset",
     "config-apply": "tt-apply",
     "config-revert": "tt-revert",
+}
+
+ROW_ACTION_TOOLTIPS: dict[str, str] = {
+    "download-touch": "download-tooltip",
+    "cancel-touch": "cancel-tooltip",
 }
 
 
@@ -89,6 +92,14 @@ def test_every_control_is_wired_to_a_tooltip_property() -> None:
         assert f"Tooltip {{ TipCard {{ text: root.{tt}; }} }}" in text, (
             f"{control_id} has no hover Tooltip bound to root.{tt}"
         )
+    for control_id, prop in ROW_ACTION_TOOLTIPS.items():
+        assert f"{control_id} :=" in text, f"{control_id} not found in app.slint"
+        assert f"accessible-description: root.{prop};" in text, (
+            f"{control_id} has no accessible-description bound to root.{prop}"
+        )
+        assert f"Tooltip {{ TipCard {{ text: root.{prop}; }} }}" in text, (
+            f"{control_id} has no hover Tooltip bound to root.{prop}"
+        )
 
 
 def test_every_tooltip_property_has_nonempty_text() -> None:
@@ -96,9 +107,10 @@ def test_every_tooltip_property_has_nonempty_text() -> None:
     # branch. A blank relabel (e.g. an empty "Stop" variant) must fail here.
     defs = _tooltip_definitions(_source())
     expected = set(CONTROL_TOOLTIPS.values())
-    assert set(defs) == expected, (
+    assert set(defs) == expected | {"tt-download"}, (
         f"tt-* properties drifted from the control list: "
-        f"missing={expected - set(defs)} extra={set(defs) - expected}"
+        f"missing={(expected | {'tt-download'}) - set(defs)} "
+        f"extra={set(defs) - (expected | {'tt-download'})}"
     )
     for name, value in defs.items():
         literals = _string_literals(value)
@@ -131,3 +143,19 @@ def test_reactive_tooltips_cover_both_states() -> None:
         # two distinct multi-word messages so both states say something real.
         messages = {lit for lit in _string_literals(value) if " " in lit.strip()}
         assert len(messages) >= 2, f"{name} lacks distinct per-state messages"
+
+
+def test_model_download_row_keeps_popup_open() -> None:
+    # Selecting a model closes the popup; pressing a row's Download affordance
+    # must keep it open so the same row can become the progress/cancel row.
+    text = _source()
+    dispatch = re.search(
+        r"model-download-dispatch := Timer \{(?P<body>.*?)\n\s*\}",
+        text,
+        re.DOTALL,
+    )
+    assert dispatch is not None
+    body = dispatch.group("body")
+    assert "root.download-model();" in body
+    assert "model-popup.close();" not in body
+    assert "root.model-popup-open = false;" not in body
