@@ -11,15 +11,16 @@ import base64
 import contextlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import threading
 import time
 
-from conftest import _write_exec
 import grpc
 import integration_proton_setup as setup
 import pytest
+from conftest import _write_exec
 
 # Throwaway self-signed localhost cert (CN + SAN = 127.0.0.1, matching Bridge's
 # internal/certs/tls.go). Private key is a test artifact, never a real secret.
@@ -552,6 +553,21 @@ def test_fido_only_account_is_use_totp_error(bench, tmp_path):
     terms = _terminals(events)
     assert len(terms) == 1 and terms[0]["event"] == "error"
     assert "TOTP" in terms[0]["error"]
+    assert _set_fields(events) == []
+
+
+def test_missing_bridge_binary_is_error_event(bench, tmp_path, monkeypatch):
+    """With no protonmail-bridge on PATH the helper must still emit exactly one
+    terminal error event naming the binary — never exit silently with none."""
+    path = os.pathsep.join(
+        p for p in os.environ["PATH"].split(os.pathsep) if p != bench["bin"]
+    )
+    monkeypatch.setenv("PATH", path)
+    assert shutil.which("protonmail-bridge") is None
+    events, _rec = _run_helper(tmp_path, {}, {"action": "link"}, _REPLIES)
+    terms = _terminals(events)
+    assert len(terms) == 1 and terms[0]["event"] == "error"
+    assert "protonmail-bridge" in terms[0]["error"]
     assert _set_fields(events) == []
 
 

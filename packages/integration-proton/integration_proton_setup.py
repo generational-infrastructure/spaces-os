@@ -47,14 +47,14 @@ import grpc
 from google.protobuf.empty_pb2 import Empty
 from google.protobuf.wrappers_pb2 import StringValue
 
-# The MCP server's socket-activation accept mechanism is reused verbatim, and
-# the store reader is used to resolve a profile's email in remove mode.
-from spaces_integration_mcp import _listen, store_profile
-
 # Pinned mail-server ports (STARTTLS both ways) the Bridge must expose and the
 # Bridge state root are single-sourced in the server module, which pins the
 # same values for himalaya/msmtp.
 from integration_proton import IMAP_PORT, SMTP_PORT, _state_root
+
+# The MCP server's socket-activation accept mechanism is reused verbatim, and
+# the store reader is used to resolve a profile's email in remove mode.
+from spaces_integration_mcp import _listen, store_profile
 
 SERVER_NAME = "integration-proton-setup"
 
@@ -228,7 +228,10 @@ def _bridge():
         os.unlink(cfg_path)
 
     binary = shutil.which(BRIDGE_BINARY) or BRIDGE_BINARY
-    proc = subprocess.Popen([binary, "--grpc"], env=env)
+    try:
+        proc = subprocess.Popen([binary, "--grpc"], env=env)
+    except OSError as exc:
+        raise _Fail(f"{BRIDGE_BINARY} is not installed or not on PATH") from exc
     channel = None
     try:
         cfg = _poll_config(cfg_path)
@@ -363,9 +366,7 @@ def _await_users_loaded(events):
             ):
                 return
     except grpc.RpcError as exc:
-        raise _Fail(
-            f"lost contact with Proton Bridge loading users: {_rpc_text(exc)}"
-        )
+        raise _Fail(f"lost contact with Proton Bridge loading users: {_rpc_text(exc)}")
     raise _Fail("Proton Bridge closed the stream before loading users")
 
 
@@ -407,9 +408,7 @@ def _export_cert(stub, md):
     (<state>/config/protonmail/bridge-v3/cert.pem). Bridge v3 keeps the cert
     in its vault and never writes cert.pem on its own; without this export
     every mail tool fails the precheck forever."""
-    folder = os.path.join(
-        _bridge_env()["XDG_CONFIG_HOME"], "protonmail", "bridge-v3"
-    )
+    folder = os.path.join(_bridge_env()["XDG_CONFIG_HOME"], "protonmail", "bridge-v3")
     stub.ExportTLSCertificates(StringValue(value=folder), metadata=md)
     cert = os.path.join(folder, "cert.pem")
     deadline = time.monotonic() + _CERT_EXPORT_DEADLINE
