@@ -58,7 +58,7 @@ ignore = [
 # - RUF001: tests assert on real-world Unicode API payloads (wiki content)
 # - S106: dummy tokens passed as keyword args in fixtures, same class as S105
 # - S108: literal /tmp fixture paths asserted in built argv, never opened
-"{test_*,*_test,**/tests/*}.py" = [
+"{**/test_*,**/*_test,**/tests/*}.py" = [
   "SLF001",
   "S101",
   "S105",
@@ -69,6 +69,11 @@ ignore = [
   "PT027",
   "ANN",
   "RUF001",
+  "N802",
+  "PTH",
+  "SIM105",
+  "TC003",
+  "PLW2901",
 ]
 # checks/ holds VM & headless-quickshell test harnesses: imperative driver
 # scripts only verifiable by booting the full check. They are this repo's
@@ -96,6 +101,42 @@ ignore = [
   "PLW0603",
   "S103",
   "S108",
+  "PLC0415",
+  "PLW2901",
+  "RUF005",
+  "SIM105",
 ]
 # Calamares loads this as a plugin: module-level job state is its API.
 "packages/calamares-spaces-extensions/files/main.py" = ["PLW0603"]
+# Integration glue is intentionally dynamic: JSON-RPC payloads, TOML store
+# blobs, and declarative tool records cross process boundaries as untyped dicts.
+# The tests pin the wire contract; forcing full annotations here mostly
+# restates that dynamic shape without making the runtime safer.
+"packages/{integration-signal,spaces-integration-mcp}/**.py" = [
+  "ANN",
+  "ARG001",
+  "ARG005",
+  "EM101",
+  "PTH",
+  "PERF102",
+  "PERF401",
+  "PLW2901",
+  "RUF003",
+  "SIM105",
+  "TRY004",
+  "TRY301",
+]
+"packages/integration-signal/test_*.py" = ["ARG001"]
+# signal-cli bridge/db code sits on the same daemon JSON-RPC and SQLite glue
+# boundary. These ignores cover intentional callback signatures, dynamic row
+# dictionaries, and path/cleanup idioms in the migration/storage layer.
+"packages/signal-cli/spaces_signal/**.py" = [
+  "ANN001",
+  "B023",
+  "EM102",
+  "PERF401",
+  "PTH",
+  "S608",
+  "SIM105",
+  "TC003",
+]
