@@ -114,7 +114,7 @@ in
       PURE DATA namespace: this module defines the options; the
       spaces-integrations module lowers them into a root stager and a per-user
       staged credential tree under /run/spaces-integrations-managed. Keyed by
-      username (must exist in users.users).
+      username (must be a normal user in users.users).
     '';
     type = lib.types.attrsOf (
       lib.types.submodule {

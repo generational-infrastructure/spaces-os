@@ -48,7 +48,9 @@ in
   # assertion instead of a raw attribute-missing throw.
   #   users        = config.spaces.users
   #   integrations = config.services.spaces-integrations.integrations
-  #   knownUsers   = builtins.attrNames config.users.users
+  #   knownUsers   = attrNames of the NORMAL users in config.users.users — the
+  #                  exact set the stager stages for, so validation can never
+  #                  accept a user staging would silently skip
   mkManaged =
     {
       users,
@@ -94,11 +96,12 @@ in
 
       perUser =
         uname: uconf:
-        # the user must exist in users.users
+        # the user must be stageable: an existing NORMAL user (system users are
+        # never staged, so accepting one here would silently stage nothing)
         [
           {
             assertion = lib.elem uname knownUsers;
-            message = "spaces.users.${uname}: unknown user '${uname}' (not in users.users)";
+            message = "spaces.users.${uname}: user '${uname}' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
           }
         ]
         ++ lib.concatLists (lib.mapAttrsToList (perIntegration uname) uconf.integrations);

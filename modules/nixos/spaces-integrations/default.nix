@@ -385,15 +385,17 @@ let
   managed = integLib.mkManaged {
     users = usersCfg;
     integrations = cfg.integrations;
-    knownUsers = builtins.attrNames config.users.users;
+    # Validate against the SAME set staging filters to (normal users): a
+    # declared system user must fail eval, not silently stage nothing.
+    knownUsers = builtins.attrNames normalUsers;
   };
 
   inherit (integLib) managedRoot;
   normalUsers = lib.filterAttrs (_: u: u.isNormalUser) config.users.users;
   allIntegrationNames = lib.attrNames cfg.integrations;
   # Stage only for users that are BOTH declared in spaces.users AND normal: the
-  # per-user dir loop owns dir creation for normal users, and a non-existent
-  # username is reported by mkManaged (never silently staged into a bad chown).
+  # per-user dir loop owns dir creation for normal users, and a non-normal or
+  # non-existent username is reported by mkManaged (never silently skipped).
   stagedUsers = lib.filterAttrs (uname: _: normalUsers ? ${uname}) usersCfg;
 
   userOwn = uname: "-o ${uname} -g ${config.users.users.${uname}.group}";
@@ -489,7 +491,7 @@ let
     uname: refs: iname: ientry:
     let
       own = userOwn uname;
-      intDir = "${managedRoot}/${uname}/${iname}";
+      intDir = "${rootRef}/${uname}/${iname}";
     in
     lib.optionals (ientry.profiles != { }) (
       [ "cttmp=\"$(mktemp)\"" ]
@@ -514,7 +516,7 @@ let
     uname: uconf:
     let
       own = userOwn uname;
-      userDir = "${managedRoot}/${uname}";
+      userDir = "${rootRef}/${uname}";
       mi = managedIntegrationsOf uconf;
       refs = fileRefsOf mi;
     in
@@ -534,21 +536,48 @@ let
       ++ lib.concatLists (lib.mapAttrsToList (perIntegrationScript uname refs) mi)
     );
 
-  # The full stager body. Every normal user gets a per-user root (0500,
-  # user-owned) plus a subdir for EVERY declared integration (Phase 0.3: a
-  # MISSING credential dir hard-fails the unit, so it must exist unconditionally;
-  # an empty one is fine). Users with Nix opinions then get managed.json + the
-  # per-integration managed-config.toml/secret files.
+  # Shell-level root of the staged tree. The indirection exists for the cheap
+  # stager-lifecycle check, which runs the script in a sandbox against a tmp
+  # root via SPACES_MANAGED_ROOT; on a real host the env var is never set and
+  # lib.nix's managedRoot literal wins.
+  rootVar = "managed_root=\"\${SPACES_MANAGED_ROOT:-${managedRoot}}\"";
+  rootRef = "\"$managed_root\"";
+
+  # The full stager body. The stager OWNS the whole tree: stale state from a
+  # previous generation is removed first — per-user dirs of users no longer
+  # normal/declared are deleted, and every current user's subtree is cleared
+  # before restaging (so a dropped profile/integration leaves no orphan
+  # secret-* or managed.json behind). Then every normal user gets a per-user
+  # root (0500, user-owned) plus a subdir for EVERY declared integration
+  # (Phase 0.3: a MISSING credential dir hard-fails the unit, so it must exist
+  # unconditionally; an empty one is fine). Users with Nix opinions then get
+  # managed.json + the per-integration managed-config.toml/secret files.
   managedStagerScript = lib.concatStringsSep "\n" (
     [
       "set -eu"
-      "install -d -m 0755 -o root -g root ${managedRoot}"
+      rootVar
+      "install -d -m 0755 -o root -g root ${rootRef}"
+      # Sweep per-user dirs that no current normal user owns. Deletion is
+      # scoped strictly under $managed_root; the leading "" case pattern keeps
+      # the statement valid when there are no normal users at all.
+      "for d in ${rootRef}/*; do"
+      "  [ -e \"$d\" ] || continue"
+      "  case \"$(basename \"$d\")\" in"
+      "    \"\"${lib.concatMapStrings (u: "|${u}") (lib.attrNames normalUsers)}) ;;"
+      "    *) rm -rf \"$d\" ;;"
+      "  esac"
+      "done"
     ]
     ++ lib.concatLists (
       lib.mapAttrsToList (
         uname: _:
-        [ "install -d -m 0500 ${userOwn uname} ${managedRoot}/${uname}" ]
-        ++ map (iname: "install -d -m 0500 ${userOwn uname} ${managedRoot}/${uname}/${iname}") allIntegrationNames
+        [
+          # Clear the user's staged subtree before restaging: the fresh
+          # install below rebuilds it, so anything not re-declared is gone.
+          "rm -rf ${rootRef}/${uname}"
+          "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}"
+        ]
+        ++ map (iname: "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}/${iname}") allIntegrationNames
       ) normalUsers
     )
     ++ lib.concatLists (lib.mapAttrsToList mkUserManagedScript stagedUsers)

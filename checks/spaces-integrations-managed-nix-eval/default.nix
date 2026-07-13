@@ -21,7 +21,6 @@
 { pkgs, inputs, ... }:
 let
   inherit (inputs.nixpkgs) lib;
-  pkgsSelf = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
 
   mkSystem =
     extra:
@@ -30,12 +29,10 @@ let
       modules = [ inputs.self.nixosModules.spaces-integrations ] ++ extra;
     };
 
-  # Reuse lib.nix's pure validator directly (the SAME code default.nix feeds
-  # config.assertions), so the message contract is tested at its source.
-  integLib = import ../../modules/nixos/spaces-integrations/lib.nix {
-    inherit pkgs lib;
-    inherit (pkgsSelf.pi-sessiond) seccompDenylist;
-  };
+  # Nothing here imports lib.nix directly: the assertions are read from the
+  # evaluated MODULE (badSystem.config.assertions), so the check pins
+  # default.nix's wiring of mkManaged (incl. which user set it validates
+  # against), not just lib.nix in isolation.
 
   # A field-bearing multi-profile integration + a field-less one (signal's shape).
   sampleIntegrations = {
@@ -126,20 +123,18 @@ let
           # profiles on a field-less integration
           demosignal.profiles.default = { };
         };
-        # unknown user (not in users.users)
+        # unknown user (not in users.users at all)
         ghost.integrations.demomail.enable = true;
+        # existing but NON-normal user: passes users.users, must still fail —
+        # staging filters to normal users, so accepting root would silently
+        # stage nothing.
+        root.integrations.demomail.enable = true;
       };
     }
   ];
 
   failedMessages = map (a: a.message) (
-    lib.filter (a: !a.assertion) (
-      integLib.mkManaged {
-        users = badSystem.config.spaces.users;
-        integrations = badSystem.config.services.spaces-integrations.integrations;
-        knownUsers = builtins.attrNames badSystem.config.users.users;
-      }
-    ).assertions
+    lib.filter (a: !a.assertion) badSystem.config.assertions
   );
   hasMessage = m: lib.elem m failedMessages;
 
@@ -171,17 +166,20 @@ let
   # Exact byte fragments the stager script MUST contain, computed in Nix so the
   # build shell never has to re-escape them.
   wantAll = [
-    # tree skeleton (§10.2): root + per-user root + per-integration subdirs
-    "install -d -m 0755 -o root -g root /run/spaces-integrations-managed"
-    "install -d -m 0500 -o alice -g users /run/spaces-integrations-managed/alice/demomail"
+    # tree skeleton (§10.2): root + per-user root + per-integration subdirs.
+    # Paths go through $managed_root, whose default is the lib.nix literal —
+    # the SPACES_MANAGED_ROOT override exists for the stager-lifecycle check.
+    "managed_root=\"\${SPACES_MANAGED_ROOT:-/run/spaces-integrations-managed}\""
+    "install -d -m 0755 -o root -g root \"$managed_root\""
+    "install -d -m 0500 -o alice -g users \"$managed_root\"/alice/demomail"
     # Phase 0.3 invariant: EVERY declared integration × EVERY user gets a subdir,
     # even a user with no Nix opinion (bob) and an integration alice never configured.
-    "/run/spaces-integrations-managed/alice/demosignal"
-    "install -d -m 0500 -o bob -g users /run/spaces-integrations-managed/bob/demomail"
+    "\"$managed_root\"/alice/demosignal"
+    "install -d -m 0500 -o bob -g users \"$managed_root\"/bob/demomail"
     # managed.json (§10.4): generation bumped at runtime, resolved config
     "gen=\"$(date +%s)\""
     "\"generation\": $generation"
-    "/run/spaces-integrations-managed/alice/managed.json"
+    "\"$managed_root\"/alice/managed.json"
     "\"demomail\": { \"enable\": true, \"profiles\""
     "\"address\": \"bob@corp.example\""
     # file= config resolved at stage time into managed.json (as jq arg $f0)
@@ -198,13 +196,13 @@ let
     # file= config resolved into the toml too (jq @json = a valid basic string)
     "imap_host = %s"
     "jq -rn --arg v \"$f0\""
-    "/run/spaces-integrations-managed/alice/demomail/managed-config.toml"
+    "\"$managed_root\"/alice/demomail/managed-config.toml"
     # secret files: COPIED (never symlinked), named secret-<profile>-<field>
-    "/run/spaces-integrations-managed/alice/demomail/secret-work-password"
+    "\"$managed_root\"/alice/demomail/secret-work-password"
     "/run/secrets/mail-work-password"
   ];
   # …and one it must NOT: an unmanaged user gets no managed.json.
-  wantNone = [ "/run/spaces-integrations-managed/bob/managed.json" ];
+  wantNone = [ "\"$managed_root\"/bob/managed.json" ];
 in
 # ── 1. rendered MCP unit: the managed directory credential (§10.3) ───────────
 # field-bearing integration → config credential THEN the managed dir, in order.
@@ -222,7 +220,8 @@ assert hasMessage "spaces.users.alice.integrations.nope: unknown integration 'no
 assert hasMessage "spaces.users.alice.integrations.demomail.profiles.no-imap: missing required config field 'imap_host'";
 assert hasMessage "spaces.users.alice.integrations.demomail.profiles.no-pass: missing required secret 'password'";
 assert hasMessage "spaces.users.alice.integrations.demosignal: integration 'demosignal' declares no config or secret fields; only 'enable' is allowed, not profiles";
-assert hasMessage "spaces.users.ghost: unknown user 'ghost' (not in users.users)";
+assert hasMessage "spaces.users.ghost: user 'ghost' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
+assert hasMessage "spaces.users.root: user 'root' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
 
 # ── 3. a literal secret is a type error (never an accepted store value) ───────
 assert !literalSecretEvaluates;
