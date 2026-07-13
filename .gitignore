@@ -32,5 +32,6 @@ packages/integration-proton/bridge_pb2*.py
 # remote-agent-vm workdir (server/client qcow2 + serial logs; sockets under /tmp)
 .remote-agent-vm/
 
-# legacy swtpm runtime state (now under /tmp; kept for old checkouts)
+# legacy swtpm runtime state (now under ~/.local/state/agent-vm; kept for
+# old checkouts)
 test-machine-swtpm/

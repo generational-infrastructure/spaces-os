@@ -51,13 +51,25 @@ let
       d=$(dirname "$d")
     done
 
-    # Unix sockets (QMP, swtpm control) must live OUTSIDE the repo: a
-    # socket anywhere in the worktree breaks every `nix build` on the
-    # flake ("has an unsupported type" during the path: fetch). Key the
-    # dir to the state-dir path so concurrent checkouts don't collide.
+    # QMP unix sockets must live OUTSIDE the repo: a socket anywhere in the
+    # worktree breaks every `nix build` on the flake ("has an unsupported
+    # type" during the path: fetch). Key both runtime dirs to the state-dir
+    # path so concurrent checkouts don't collide (moving/renaming a checkout
+    # re-keys them; the `path` marker below identifies orphans).
     sock_base="${stateDirName}"
-    sock_dir="/tmp/''${sock_base#.}-$(printf %s "$state_dir" | sha256sum | cut -c1-12)"
+    state_key="$(printf %s "$state_dir" | sha256sum | cut -c1-12)"
+    sock_dir="/tmp/''${sock_base#.}-$state_key"
     mkdir -p -- "$sock_dir"
+
+    # swtpm state is NOT a socket dir: it holds the guest TPM's persistent
+    # NVRAM (tpm2-00.permall) alongside swtpm's own control sockets. It must
+    # survive host reboots (anything the guest sealed against its TPM dies
+    # with it), so it lives under XDG state — still outside the repo, which
+    # keeps swtpm's sockets away from the flake path: fetch.
+    swtpm_root="''${XDG_STATE_HOME:-$HOME/.local/state}/''${sock_base#.}/$state_key"
+    mkdir -p -- "$swtpm_root"
+    chmod 700 -- "$swtpm_root"
+    printf %s "$state_dir" > "$swtpm_root/path"
   '';
 
   reap = builtins.readFile ./reap-swtpm.sh;
@@ -160,10 +172,9 @@ in
             ++ lib.optional (v ? vnc && v.vnc != null) "${env.vnc}=${v.vnc}"
             ++ [
               "NIX_DISK_IMAGE=\"$state_dir/${diskOf n}\""
-              # ABSOLUTE and outside the repo: swtpm serves unix sockets in
-              # this dir, and any socket inside the worktree breaks flake
-              # path: fetches ("has an unsupported type").
-              "NIX_SWTPM_DIR=\"$sock_dir/${n}-swtpm\""
+              # Persistent per-node TPM NVRAM (+ swtpm's own sockets), keyed
+              # to this checkout; see stateDirDiscovery.
+              "NIX_SWTPM_DIR=\"$swtpm_root/${n}-swtpm\""
               "QEMU_KERNEL_PARAMS=\"\${QEMU_KERNEL_PARAMS:-} loglevel=7\""
             ];
           in
@@ -193,7 +204,7 @@ in
                 # wedging every later launch on the TPM state lock — reap orphans
                 # before launching; abort if one still serves a live VM. Distinct
                 # per-node state dirs keep the swtpms off each other's lockfile.
-              ${eachSep "\n" (n: "  reap_swtpm \"$sock_dir/${n}-swtpm\"")}
+              ${eachSep "\n" (n: "  reap_swtpm \"$swtpm_root/${n}-swtpm\"")}
 
                 # loglevel=7 so kernel boot info reaches the serial logs; the
                 # test-machine baseline has loglevel=4 (warnings only).
@@ -213,13 +224,13 @@ in
                 : >"$serial"
                 echo "${name}: state at $state_dir (serial: $serial, sockets: $sock_dir)"
                 cd "$state_dir"
-                # swtpm serves unix sockets in NIX_SWTPM_DIR, so it must live
-                # outside the repo (any worktree socket breaks flake path:
-                # fetches), and its daemon can outlive a hard-killed QEMU
-                # (a killed supervisor, dropped terminal), wedging every later
-                # launch on the TPM state lock. Reap any orphan first; abort
-                # if that swtpm still serves a live VM.
-                export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$sock_dir/test-machine-swtpm}"
+                # NIX_SWTPM_DIR holds the guest's persistent TPM NVRAM plus
+                # swtpm's control sockets (outside the repo: a worktree socket
+                # breaks flake path: fetches). The swtpm daemon can outlive a
+                # hard-killed QEMU (a killed supervisor, dropped terminal),
+                # wedging every later launch on the TPM state lock. Reap any
+                # orphan first; abort if that swtpm still serves a live VM.
+                export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$swtpm_root/${only}-swtpm}"
                 reap_swtpm "$NIX_SWTPM_DIR"
                 export ${env.qmp}="$qmp"
                 export ${env.serial}="$serial"
@@ -234,7 +245,7 @@ in
 
         guiLaunchOne = n: ''
           gui_run_${san n}=(${(node n).guiVm}/bin/run-*-vm)
-          NIX_DISK_IMAGE="$state_dir/gui-${diskOf n}" NIX_SWTPM_DIR="$sock_dir/gui-${n}-swtpm" "''${gui_run_${san n}[0]}" &
+          NIX_DISK_IMAGE="$state_dir/gui-${diskOf n}" NIX_SWTPM_DIR="$swtpm_root/gui-${n}-swtpm" "''${gui_run_${san n}[0]}" &
           pid_gui_${san n}=$!
 
         '';
@@ -246,9 +257,9 @@ in
           gui)
             mkdir -p -- "$state_dir"
             cd "$state_dir"
-            # Same swtpm hygiene as `run`; each GUI twin gets its own
-            # per-node swtpm dir under $sock_dir.
-          ${eachSep "\n" (n: "  reap_swtpm \"$sock_dir/gui-${n}-swtpm\"")}
+            # Same swtpm hygiene as `run`; each GUI twin keeps its own
+            # per-node TPM state keyed to its own qcow2, under $swtpm_root.
+          ${eachSep "\n" (n: "  reap_swtpm \"$swtpm_root/gui-${n}-swtpm\"")}
 
           ${each guiLaunchOne}
             # shellcheck disable=SC2064
@@ -377,7 +388,7 @@ in
                   log <node> [tail args]    print/follow a guest serial console
 
                   <node> is ${eachSep " or " (n: "'${n}' (${(node n).description or n})")}.
-                State lives at $state_dir.
+                State lives at $state_dir (TPM state: $swtpm_root).
               ''
             ]
           else
@@ -400,7 +411,7 @@ in
                   click <x> <y> [b]  click button b (left/right/middle) at (x, y)
                   log [tail args]    print/follow the guest serial console
 
-                State lives at $state_dir.
+                State lives at $state_dir (TPM state: $swtpm_root).
               ''
             ];
 
@@ -518,12 +529,12 @@ in
             export NIX_DISK_IMAGE="$state_dir/${disk}"
 
             ${reap}
-            # swtpm serves unix sockets in NIX_SWTPM_DIR, so it must live
-            # outside the repo (a worktree socket breaks flake path: fetches),
-            # and its daemon can outlive a hard-killed QEMU, wedging every
-            # later launch on the TPM state lock. Reap any orphan first;
-            # abort if that swtpm still serves a live VM.
-            export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$sock_dir/${name}-swtpm}"
+            # NIX_SWTPM_DIR holds the guest's persistent TPM NVRAM plus
+            # swtpm's control sockets (outside the repo: a worktree socket
+            # breaks flake path: fetches). The swtpm daemon can outlive a
+            # hard-killed QEMU, wedging every later launch on the TPM state
+            # lock. Reap any orphan first; abort if it serves a live VM.
+            export NIX_SWTPM_DIR="''${NIX_SWTPM_DIR:-$swtpm_root/${name}-swtpm}"
             reap_swtpm "$NIX_SWTPM_DIR"
 
           ''
