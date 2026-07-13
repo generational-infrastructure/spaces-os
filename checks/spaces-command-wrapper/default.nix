@@ -55,10 +55,11 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
   # The wrapper resolves notify-send by bare name; put the stub first.
   export PATH=${stubNotify}/bin:$PATH
 
-  # Failure path: the wrapper must propagate the exit status (5) and
-  # fire the critical "failed to <label>" toast.
+  # Failure path: the wrapper must propagate the exit status (5),
+  # fire the critical "failed to <label>" toast, AND log the failure
+  # to stdout so the compositor's journal captures it.
   set +e
-  ${failing}/bin/spaces-probe-failing
+  logged=$(${failing}/bin/spaces-probe-failing 2>/dev/null)
   status=$?
   set -e
   [ "$status" -eq 5 ] \
@@ -67,6 +68,8 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
     || { echo "FAIL: failure notification missing" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
   grep -q -- '--urgency=critical' "$NOTIFY_WITNESS" \
     || { echo "FAIL: failure toast not marked critical" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
+  echo "$logged" | grep -q 'failed to do the thing' \
+    || { echo "FAIL: failure not logged to stdout" >&2; exit 1; }
 
   # Success path: no notification at all.
   : > "$NOTIFY_WITNESS"
@@ -98,10 +101,10 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
     || { echo "FAIL: spaces_notify duration arg must set --expire-time=2000" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1; }
 
   # When that same command fails, only the failure toast fires — the
-  # info message must not appear.
+  # info message must not appear — and the failure is logged to stdout.
   : > "$NOTIFY_WITNESS"
   set +e
-  ${notifyingFail}/bin/spaces-probe-notifying-fail
+  logged=$(${notifyingFail}/bin/spaces-probe-notifying-fail 2>/dev/null)
   status=$?
   set -e
   [ "$status" -eq 7 ] \
@@ -111,6 +114,8 @@ pkgs.runCommand "spaces-command-wrapper-test" { } ''
   if grep -q 'did the thing' "$NOTIFY_WITNESS"; then
     echo "FAIL: info toast fired despite command failure" >&2; cat "$NOTIFY_WITNESS" >&2; exit 1
   fi
+  echo "$logged" | grep -q 'failed to do the thing' \
+    || { echo "FAIL: failure not logged to stdout on failing notify wrapper" >&2; exit 1; }
 
   touch $out
 ''
