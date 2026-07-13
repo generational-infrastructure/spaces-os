@@ -17,8 +17,10 @@ link flow:
      human errors; FIDO-only accounts rejected with a use-TOTP hint)
   7. GetUser -> bridge password
   8. SetMailServerSettings (pin 1143/1025 STARTTLS), await the finished event
-  9. Quit the transient Bridge (SIGTERM fallback on the way out)
- 10. set-field email (config) + bridge_password (secret) -> done
+  9. ExportTLSCertificates -> poll for cert.pem on disk (Bridge v3 keeps the
+     cert in its vault; the server's bridge_probe and configs need the file)
+ 10. Quit the transient Bridge (SIGTERM fallback on the way out)
+ 11. set-field email (config) + bridge_password (secret) -> done
 
 remove flow: transient Bridge -> GetUserList -> RemoveUser (match the profile's
 email, else the sole user; none -> idempotent done) -> Quit -> done.
@@ -82,6 +84,10 @@ _CHANNEL_READY_TIMEOUT = 15.0
 _LOGIN_TIMEOUT = 300.0
 _SETTINGS_TIMEOUT = 60.0
 _QUIT_TIMEOUT = 10.0
+# ExportTLSCertificates is a fire-and-forget goroutine server-side (no success
+# event, only error events); poll for cert.pem landing on disk. A local file
+# write either happens promptly or the export failed.
+_CERT_EXPORT_DEADLINE = 30.0
 
 _FIDO_ONLY_MSG = (
     "this account only offers a security key (FIDO2) for two-factor "
@@ -372,6 +378,30 @@ def _match_user(users, profile):
     return None
 
 
+# ── TLS cert export ─────────────────────────────────────────────────
+
+
+def _export_cert(stub, md):
+    """Put Bridge's serving cert on disk where the server module's
+    bridge_probe and the generated himalaya/msmtp configs expect it
+    (<state>/config/protonmail/bridge-v3/cert.pem). Bridge v3 keeps the cert
+    in its vault and never writes cert.pem on its own; without this export
+    every mail tool fails the precheck forever."""
+    folder = os.path.join(
+        _bridge_env()["XDG_CONFIG_HOME"], "protonmail", "bridge-v3"
+    )
+    stub.ExportTLSCertificates(StringValue(value=folder), metadata=md)
+    cert = os.path.join(folder, "cert.pem")
+    deadline = time.monotonic() + _CERT_EXPORT_DEADLINE
+    # The server-side goroutine writes cert.pem then key.pem with no rename;
+    # key.pem appearing means cert.pem is complete.
+    key = os.path.join(folder, "key.pem")
+    while not (os.path.exists(cert) and os.path.exists(key)):
+        if time.monotonic() >= deadline:
+            raise _Fail("Proton Bridge did not export its TLS certificate")
+        time.sleep(_CONFIG_POLL_INTERVAL)
+
+
 # ── flows ───────────────────────────────────────────────────────────
 
 
@@ -413,6 +443,7 @@ def link(conn, reader, profile):
             metadata=md,
         )
         _await_settings(events)
+        _export_cert(stub, md)
 
         with contextlib.suppress(grpc.RpcError):
             stub.Quit(Empty(), metadata=md)

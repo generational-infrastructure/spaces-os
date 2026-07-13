@@ -217,6 +217,11 @@ assert lib.any (lib.hasInfix "/bin/mkdir -p %t/spaces-integration-share/github")
   ghSvc.serviceConfig.ExecStartPre;
 assert lib.any (lib.hasInfix "SPACES_INTEGRATION_SHARED_DIR=%t/spaces-integration-share/github")
   ghSvc.serviceConfig.Environment;
+# tempfile surface: the deny-by-default Landlock domain grants no /tmp, so the
+# unit must point TMPDIR inside its own StateDirectory or every tempfile.mkdtemp
+# in the server dies with "No usable temporary directory found".
+assert lib.any (lib.hasInfix "TMPDIR=%S/spaces-integration-github")
+  ghSvc.serviceConfig.Environment;
 assert lib.hasInfix "/bin/landlock-exec " ghSvc.serviceConfig.ExecStart;
 assert lib.hasInfix "--json %t/spaces-integration-github/landlock.json --"
   ghSvc.serviceConfig.ExecStart;

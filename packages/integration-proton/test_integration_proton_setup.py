@@ -83,7 +83,7 @@ TOKEN = "test-server-token-0001"
 # (temp+rename) into the pinned XDG tree, and records observable calls to
 # PROTON_FAKE_RECORD so tests can assert the flow.
 _FAKE_BRIDGE = r"""#!__PY__
-import json, os, queue, sys, tempfile, threading
+import json, os, queue, sys, tempfile, threading, time
 from concurrent import futures
 
 sys.path.insert(0, os.environ["PROTON_FAKE_PKGDIR"])
@@ -98,7 +98,7 @@ TOKEN = os.environ["PROTON_FAKE_TOKEN"]
 CERT = open(os.environ["PROTON_FAKE_CERT"], "rb").read()
 KEY = open(os.environ["PROTON_FAKE_KEY"], "rb").read()
 
-_rec = {"calls": [], "login_calls": [], "settings": None, "removed": [], "wire_passwords": []}
+_rec = {"calls": [], "login_calls": [], "settings": None, "removed": [], "wire_passwords": [], "export_dirs": []}
 _lock = threading.RLock()
 
 
@@ -226,6 +226,26 @@ class Servicer(pbg.BridgeServicer):
             _rec["removed"].append(request.value)
             _rec["calls"].append("RemoveUser")
             record()
+        return Empty()
+
+    def ExportTLSCertificates(self, request, context):
+        self._tok(context)
+        folder = request.value
+        with _lock:
+            _rec["calls"].append("ExportTLSCertificates")
+            _rec["export_dirs"].append(folder)
+            record()
+        # The real Bridge exports in a fire-and-forget goroutine with no
+        # success event (grpc/service_cert.go); delay the write so a helper
+        # that fails to wait for cert.pem goes red.
+        def write():
+            time.sleep(0.3)
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "cert.pem"), "wb") as f:
+                f.write(CERT)
+            with open(os.path.join(folder, "key.pem"), "wb") as f:
+                f.write(KEY)
+        threading.Thread(target=write, daemon=True).start()
         return Empty()
 
     def Quit(self, request, context):
@@ -433,6 +453,45 @@ def test_happy_path_pins_mail_server_ports(bench, tmp_path):
         "useSSLForImap": False,
         "useSSLForSmtp": False,
     }
+
+
+# ── TLS cert export: Bridge v3 keeps the cert in its vault ───────────
+
+
+def test_link_exports_bridge_tls_cert(bench, tmp_path):
+    """Bridge v3 never writes cert.pem on its own (the cert lives in
+    vault.enc); the server module's bridge_probe requires it on disk. The
+    helper must call ExportTLSCertificates into the bridge-v3 config dir and
+    wait for cert.pem (the export is a fire-and-forget goroutine server-side)
+    before declaring done."""
+    scenario = {
+        "connected_users": [],
+        "login_steps": [{"emit": [{"type": "finished", "userID": "u1"}]}],
+        "users_by_id": {"u1": _USER},
+    }
+    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+
+    certdir = tmp_path / "state" / "config" / "protonmail" / "bridge-v3"
+    assert rec["export_dirs"] == [str(certdir)]
+    # done implies the helper waited out the fake's delayed write
+    assert (certdir / "cert.pem").read_text() == CERT_PEM
+    terms = _terminals(events)
+    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert rec["calls"].index("ExportTLSCertificates") < rec["calls"].index("Quit")
+
+
+def test_already_logged_in_refresh_exports_cert(bench, tmp_path):
+    """The refresh path must export too: it is the recovery route for a state
+    dir onboarded before the export existed (vault present, cert.pem absent)."""
+    scenario = {
+        "connected_users": [_USER],
+        "login_steps": [],
+        "users_by_id": {"u1": _USER},
+    }
+    _events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    certdir = tmp_path / "state" / "config" / "protonmail" / "bridge-v3"
+    assert rec["export_dirs"] == [str(certdir)]
+    assert (certdir / "cert.pem").exists()
 
 
 # ── protocol-order pin: no set-field before login finished ───────────

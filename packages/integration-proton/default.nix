@@ -31,6 +31,9 @@ pkgs.python3Packages.buildPythonApplication {
   # himalaya reads IMAP over Bridge; msmtp is the send detour (himalaya 1.2.0
   # rustls rejects Bridge's CA:TRUE cert, pimalaya/himalaya#633). Mirror mail's
   # PATH prefix so the server (and the msmtp it spawns) resolve both binaries.
+  # bash provides the `sh` himalaya's `sh -c`-wrapped auth.cmd needs — the
+  # confined unit's PATH has no shell (pinned by
+  # checks/spaces-integration-wrapper-shell).
   makeWrapperArgs = [
     "--prefix"
     "PATH"
@@ -38,6 +41,7 @@ pkgs.python3Packages.buildPythonApplication {
     (pkgs.lib.makeBinPath [
       pkgs.himalaya
       pkgs.msmtp
+      pkgs.bash
     ])
   ];
   doCheck = true;

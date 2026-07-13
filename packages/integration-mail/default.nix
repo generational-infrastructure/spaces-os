@@ -15,11 +15,18 @@ pkgs.python3Packages.buildPythonApplication {
     spaces-integration-mcp
     spaces-himalaya-core
   ];
+  # himalaya wraps backend.auth.cmd in `sh -c` (pimalaya process crate) and the
+  # confined unit's PATH carries no shell, so bash (providing bin/sh) must ride
+  # the wrapper PATH or every tool call dies fetching the secret (pinned by
+  # checks/spaces-integration-wrapper-shell).
   makeWrapperArgs = [
     "--prefix"
     "PATH"
     ":"
-    (pkgs.lib.makeBinPath [ pkgs.himalaya ])
+    (pkgs.lib.makeBinPath [
+      pkgs.himalaya
+      pkgs.bash
+    ])
   ];
   doCheck = true;
   nativeCheckInputs = [ pkgs.python3Packages.pytestCheckHook ];
