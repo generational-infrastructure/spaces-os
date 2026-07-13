@@ -24,9 +24,9 @@ import logging
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from . import db as dbmod
 from .jsonrpc import JsonRpcClient, JsonRpcError

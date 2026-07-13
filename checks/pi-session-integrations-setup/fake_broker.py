@@ -81,7 +81,8 @@ def send_line(conn: socket.socket, obj: dict) -> None:
 
 def stream_setup(conn: socket.socket, name: str) -> None:
     """Stream the scripted NDJSON event sequence for `name`, then return
-    (the caller closes the connection — the panel treats EOF as flow end)."""
+    (the caller closes the connection — the panel treats EOF as flow end).
+    """
     info = STATE.get(name)
     if info is None or not info.get("setup") or not info.get("enabled"):
         send_line(conn, {"event": "error", "error": f"{name!r} is not setup-capable"})
@@ -146,7 +147,7 @@ def serve(conn: socket.socket) -> None:
                 _bump("list")
             reply = handle(req)
         send_line(conn, reply)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         try:
             send_line(conn, {"op": "error", "error": str(e)})
         except OSError:

@@ -18,8 +18,8 @@ import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from spaces_signal import bridge as bridge_mod
 from spaces_signal import db as dbmod
@@ -29,7 +29,8 @@ from spaces_signal import db as dbmod
 
 class _Wake:
     """socketpair wake so the fake daemon's accept select() exits
-    instantly on teardown instead of paying an accept-timeout."""
+    instantly on teardown instead of paying an accept-timeout.
+    """
 
     def __init__(self) -> None:
         r, w = socket.socketpair()
@@ -337,7 +338,8 @@ class TestReceiver(BridgeHarness):
 class TestMessageExpiry(BridgeHarness):
     """Disappearing messages must actually leave messages.db. The read
     paths filter expired rows, but without the bridge's periodic sweep
-    the plaintext would persist on disk forever."""
+    the plaintext would persist on disk forever.
+    """
 
     def test_expire_once_deletes_expired_keeps_live(self) -> None:
         past = dbmod.now_ms() - 10_000
@@ -377,7 +379,8 @@ class TestMessageExpiry(BridgeHarness):
 
 class TestMessageExpiryScheduled(unittest.TestCase):
     """The running bridge sweeps on startup (and on its interval), not
-    only when _expire_once is called by hand."""
+    only when _expire_once is called by hand.
+    """
 
     def test_startup_sweep_removes_preexisting_expired(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -611,7 +614,8 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
 class TestDaemonSocketDefault(unittest.TestCase):
     """The daemon socket default couples this module to signal-cli.nix,
     whose RuntimeDirectory=signal-cli exposes the JSON-RPC socket at
-    `$XDG_RUNTIME_DIR/signal-cli/socket`."""
+    `$XDG_RUNTIME_DIR/signal-cli/socket`.
+    """
 
     def setUp(self) -> None:
         self._saved = {

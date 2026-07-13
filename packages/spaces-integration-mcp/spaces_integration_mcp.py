@@ -17,7 +17,6 @@ import json
 import os
 import socket
 import sys
-
 import tomllib
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -50,7 +49,8 @@ def store_profile(profile, kinds=("config", "secrets")):
     blobs ($CREDENTIALS_DIRECTORY/config and .../secrets). The blobs are
     skill-config TOML: a single [<skill>.<profile>] table tree per integration.
     Returns {} when a blob is absent or unparseable — a missing field surfaces
-    as a tool error at the call site, never a crash."""
+    as a tool error at the call site, never a crash.
+    """
     out = {}
     for kind in kinds:
         text = read_credential(kind)
@@ -68,7 +68,8 @@ def store_profile(profile, kinds=("config", "secrets")):
 
 def store_profiles(kinds=("config", "secrets")):
     """Sorted names of every provisioned profile (union across the config and
-    secrets blobs)."""
+    secrets blobs).
+    """
     names = set()
     for kind in kinds:
         text = read_credential(kind)
@@ -88,7 +89,8 @@ def resolve_profile(arguments):
     """Pick the profile a tool call targets: (name, error_text). Uses
     arguments["profile"] when given; else the sole provisioned profile; errors
     when the name is unknown, when several exist and none was named, or when none
-    is provisioned. Mirrors himalaya's default-account behaviour."""
+    is provisioned. Mirrors himalaya's default-account behaviour.
+    """
     profs = store_profiles()
     want = arguments.get("profile")
     if want:
@@ -117,7 +119,8 @@ _FINGERPRINT_HEX = 16
 
 def _advertised(records, multi_profile):
     """The tools/list payload for the records: name/description/inputSchema,
-    with the profile property injected when the server is multi-profile."""
+    with the profile property injected when the server is multi-profile.
+    """
     tools = []
     for rec in records:
         props = dict(rec["schema"].get("properties", {}))
@@ -307,7 +310,8 @@ def _listen(server_name):
 def run(server_name, server_version, tools, call_tool):
     """Bind (socket activation or SPACES_INTEGRATION_SOCKET) and serve until the
     socket closes. `call_tool(name, arguments)` returns `(text, is_error)`.
-    Returns a process exit code."""
+    Returns a process exit code.
+    """
     sock = _listen(server_name)
     if sock is None:
         return 2

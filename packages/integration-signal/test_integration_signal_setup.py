@@ -121,7 +121,8 @@ def _wait_path(path, timeout=5.0):
 def _run_helper(tmp_path, monkeypatch, *, daemon=None, daemon_socket=None):
     """Run `setup.main()` as the socket-activated helper, connect to its
     activation socket as the broker, and return the list of NDJSON events it
-    streams before closing the connection."""
+    streams before closing the connection.
+    """
     monkeypatch.delenv("LISTEN_FDS", raising=False)
     # Keep the daemon-connect backoff snappy for the unreachable case.
     monkeypatch.setattr(setup, "_DAEMON_CONNECT_DEADLINE", 1.0)

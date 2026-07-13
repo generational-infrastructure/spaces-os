@@ -83,7 +83,8 @@ _USERNAME_MAXLEN = 40
 
 def classify_recipient(value):
     """One of 'number', 'uuid', 'username', 'group' — the distinct argument
-    shapes signal-cli's `send` RPC accepts."""
+    shapes signal-cli's `send` RPC accepts.
+    """
     value = value.strip()
     if value.startswith("+"):
         return "number"
@@ -97,7 +98,8 @@ def classify_recipient(value):
 def sanitize_display(name, fallback):
     """Strip Unicode control/format characters (category C*, keeping spaces)
     from an attacker-controlled display name; fall back when nothing readable
-    survives. Blocks RTL-override / zero-width spoofing of the approval card."""
+    survives. Blocks RTL-override / zero-width spoofing of the approval card.
+    """
     if not name:
         return fallback
     cleaned = "".join(
@@ -117,7 +119,8 @@ def is_self_recipient(recipient, accounts):
 
 def _account_id(acct):
     """The id signal-cli's `account` param wants for a linked account:
-    number preferred, uuid fallback."""
+    number preferred, uuid fallback.
+    """
     return acct.get("number") or acct.get("uuid")
 
 
@@ -136,7 +139,8 @@ def _connect_daemon():
 
 def _list_accounts(client):
     """Linked accounts (normalized {uuid, number}); raises when none — an empty
-    account set is 'unlinked', not 'up and idle'."""
+    account set is 'unlinked', not 'up and idle'.
+    """
     try:
         result = client.call("listAccounts")
     except (JsonRpcError, OSError, TimeoutError) as exc:
@@ -159,7 +163,8 @@ def _list_accounts(client):
 def _run_with_daemon(fn, args):
     """The per-tool pipeline: probe the daemon (decision 11), fetch accounts,
     run `fn(args, client, accounts)`, always closing the client. DB-backed
-    tools ignore `client`/`accounts` past the probe but still probe first."""
+    tools ignore `client`/`accounts` past the probe but still probe first.
+    """
     try:
         client = _connect_daemon()
     except SignalError as exc:
@@ -177,7 +182,8 @@ def _run_with_daemon(fn, args):
 
 def _tool(fn):
     """Adapt a `(args, client, accounts)` impl to the scaffold record signature
-    (profile/vals are always None/{} — this is a field-less integration)."""
+    (profile/vals are always None/{} — this is a field-less integration).
+    """
     return lambda args, profile, vals: _run_with_daemon(fn, args)
 
 
@@ -326,7 +332,8 @@ def _contact_stored_name(contact):
 
 def _namespace(client, accounts):
     """Pooled contacts + groups across every linked account. Each entry carries
-    its sanitized display name, raw id, and owning account (for dispatch)."""
+    its sanitized display name, raw id, and owning account (for dispatch).
+    """
     entries = []
     for acct in accounts:
         account_id = _account_id(acct)
@@ -494,14 +501,16 @@ def _levenshtein(a, b):
 
 def _is_confusable(claimed_skel, display):
     """True when `display`'s skeleton equals the claimed name's — a mixed-script
-    homoglyph lookalike (already known to differ from the exact claimed name)."""
+    homoglyph lookalike (already known to differ from the exact claimed name).
+    """
     return _skeleton(display) == claimed_skel
 
 
 def _is_near(t_norm, c_norm):
     """True when `c_norm` is a near-miss of the claimed `t_norm`: within
     `_NEAR_LEV` Levenshtein edits, or a `_SHORT_NEAR_RATIO` normalized distance
-    for short names (<= `_SHORT_MAXLEN`)."""
+    for short names (<= `_SHORT_MAXLEN`).
+    """
     dist = _levenshtein(t_norm, c_norm)
     maxlen = max(len(t_norm), len(c_norm))
     if maxlen == 0:
@@ -516,7 +525,8 @@ def _similarity_scan(claimed, candidates):
     `candidates` is a list of (display, raw_id). Skeleton-equal-but-not-identical
     names are flagged as mixed-script confusables; the rest warn within
     Levenshtein `_NEAR_LEV`, or a normalized `_SHORT_NEAR_RATIO` for short names
-    (<= `_SHORT_MAXLEN`). Raw id beside each."""
+    (<= `_SHORT_MAXLEN`). Raw id beside each.
+    """
     if not claimed:
         return []
     t_norm = _norm(claimed)
@@ -558,7 +568,8 @@ def _dispatch_send(client, entry, body):
 def _unknown_recipient_msg(recipient, *, preview):
     """Notice for a recipient not found in the namespace. The kind->reason tail
     is the single source; `preview` selects the preview's shorter `to: UNKNOWN …`
-    framing, while send's fuller refusal also nudges 'add them on your phone'."""
+    framing, while send's fuller refusal also nudges 'add them on your phone'.
+    """
     group = classify_recipient(recipient) == "group"
     reason = "not a group you've joined" if group else "not in your contacts"
     if preview:

@@ -321,7 +321,8 @@ def list_threads(db: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
 
 def expire_messages(db: sqlite3.Connection) -> int:
     """Physically delete messages past their disappear-after window.
-    Returns the row count deleted."""
+    Returns the row count deleted.
+    """
     cur = db.execute(
         "DELETE FROM messages WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= ?",
         (now_ms(),),

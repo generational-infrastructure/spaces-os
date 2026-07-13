@@ -75,7 +75,8 @@ def _render_qr_png(uri):
 
 def _connect_daemon(path):
     """Connect to the signal-cli daemon JSON-RPC socket, retrying while it warms
-    up. Raises the last OSError once the connect deadline elapses."""
+    up. Raises the last OSError once the connect deadline elapses.
+    """
     deadline = time.monotonic() + _DAEMON_CONNECT_DEADLINE
     while True:
         try:
@@ -88,7 +89,8 @@ def _connect_daemon(path):
 
 def link(conn):
     """Run the device-link flow, streaming NDJSON events to `conn`. Returns after
-    emitting exactly one terminal done/error event."""
+    emitting exactly one terminal done/error event.
+    """
     path = os.environ.get(DAEMON_SOCKET_ENV)
     if not path:
         _emit(
