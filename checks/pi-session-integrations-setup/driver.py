@@ -15,6 +15,9 @@ depends on:
   - a text-field/secret-field prompt shows an input (masked for secret-field),
     and each submitted reply reaches the broker verbatim as a {"value":...}
     line (observed via the stats sidecar),
+  - a submit into a DROPPED setup stream (broker closed, no terminal event)
+    keeps the typed reply in the input and does not flip the pane to the
+    connecting phase — the reply was never delivered,
   - the error path surfaces the error text and keeps the pane open,
   - the connecting phase (pane open, no event yet) shows feedback text —
     the pane must never look frozen,
@@ -207,9 +210,39 @@ def main() -> None:
         if ipc("setupFor") != "caldav":
             die(f"error pane should stay open (setupFor={ipc('setupFor')!r})")
 
+        # Dropped-stream prompt: matrix streams a text-field, then the broker
+        # DROPS the connection without a terminal event. A submit after the
+        # drop must NOT clear the typed reply (possibly a password) or flip
+        # the pane to the connecting phase — sendSetupReply returned false,
+        # nothing was delivered.
+        # (caldav's error pane is still open; clicking a setup button resets.)
+        if ipc("click", "setupBtn-matrix") != "ok":
+            die("could not click the matrix setup button")
+        if not wait_until(lambda: ipc("setupPhase") == "prompt", timeout_s=15):
+            die(
+                f"matrix setup never reached the prompt phase (phase={ipc('setupPhase')!r})"
+            )
+        # Wait for the panel to notice the dropped stream: submitting before
+        # the disconnect is processed could still buffer the write into a
+        # dying socket and legitimately clear the input.
+        if not wait_until(lambda: ipc("setupStreamActive") == "false", timeout_s=10):
+            die("bridge never noticed the dropped matrix setup stream")
+        if ipc("setText", "setupPromptInput", "hunter2") != "ok":
+            die("could not type into the prompt after the stream dropped")
+        if ipc("click", "setupSubmit") != "ok":
+            die("could not click submit after the stream dropped")
+        got = ipc("textOf", "setupPromptInput")
+        if got != "hunter2":
+            die(f"typed reply was cleared by a failed submit (text={got!r})")
+        if ipc("setupPhase") != "prompt":
+            die(
+                "pane must stay in the prompt phase after a failed submit "
+                f"(phase={ipc('setupPhase')!r})"
+            )
+
         sys.stderr.write(
             "PASS: setup-button gate + streamed QR visible + done auto-close + "
-            "re-list + prompt replies + error text\n"
+            "re-list + prompt replies + error text + dropped-stream submit kept\n"
         )
     finally:
         qs.stop()

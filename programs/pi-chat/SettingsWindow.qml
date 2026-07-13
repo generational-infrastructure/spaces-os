@@ -49,6 +49,10 @@ FloatingWindow {
   property string setupPromptLabel: ""
   property bool setupPromptSecret: false
 
+  // Bridge setup-stream liveness, mirrored so headless checks can wait for
+  // the panel to notice a dropped stream before poking at the prompt.
+  readonly property bool setupStreamActive: integrations.setupActive
+
   // Setup-pane lifecycle phases (setupPhase). "connecting" is entered on
   // launch, then the broker's stream drives qr → done | error.
   readonly property string phaseConnecting: "connecting"
@@ -529,7 +533,10 @@ FloatingWindow {
                   text: I18n.tr("settings.integrations-setup-submit")
                   enabled: setupPromptInput.text.length > 0
                   onClicked: {
-                    integrations.sendSetupReply(setupPromptInput.text);
+                    // A dead setup stream (broker dropped without a terminal
+                    // event) must not eat the typed reply: only clear the
+                    // input and leave the prompt once the reply was sent.
+                    if (!integrations.sendSetupReply(setupPromptInput.text)) return;
                     setupPromptInput.text = "";
                     root.setupPhase = root.phaseConnecting;
                   }

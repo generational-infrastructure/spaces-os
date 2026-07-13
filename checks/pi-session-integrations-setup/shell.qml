@@ -80,6 +80,10 @@ QtObject {
       n.text = value;
       return "ok";
     }
+    function textOf(name: string): string {
+      const n = shell._node(name);
+      return n ? String(n.text) : "missing";
+    }
     function echoModeOf(name: string): string {
       const n = shell._node(name);
       if (!n)
@@ -90,5 +94,8 @@ QtObject {
     // Window-level setup-flow state.
     function setupFor(): string { return settingsWin.setupFor; }
     function setupPhase(): string { return settingsWin.setupPhase; }
+    // Bridge setup-stream liveness — the driver waits on this before
+    // submitting into a deliberately dropped stream.
+    function setupStreamActive(): string { return String(settingsWin.setupStreamActive); }
   }
 }

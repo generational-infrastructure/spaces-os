@@ -17,6 +17,8 @@ Scripted integrations:
   - signal : enabled + setup-capable     -> button shown; streams qr/message/done
   - mail   : setup-capable but DISABLED   -> button hidden
   - caldav : enabled + setup-capable     -> button shown; streams error
+  - matrix : enabled + setup-capable     -> streams a text-field prompt, then
+             DROPS the connection (no done/error) — the dead-stream case
 
 Usage: fake_broker.py <sock_path>
 """
@@ -39,6 +41,7 @@ STATE = {
     "signal": {"description": "Signal", "enabled": True, "setup": True},
     "mail": {"description": "Email (IMAP/SMTP)", "enabled": False, "setup": True},
     "caldav": {"description": "Calendar (CalDAV)", "enabled": True, "setup": True},
+    "matrix": {"description": "Matrix", "enabled": True, "setup": True},
     "proton": {
         "description": "Proton Mail",
         "enabled": True,
@@ -173,6 +176,19 @@ def stream_setup(conn: socket.socket, name: str) -> None:
             _record_reply(recv_line(conn))
         time.sleep(0.2)
         send_line(conn, {"event": "done"})
+    elif name == "matrix":
+        # Prompt then DROP: stream a text-field and return WITHOUT a terminal
+        # event — serve() closes the connection (helper crash / broker
+        # restart mid-prompt). The panel must notice the dead stream and
+        # refuse the next submit (keep the typed reply, no phase flip).
+        time.sleep(0.2)
+        send_line(
+            conn,
+            {"event": "text-field", "field": "token", "label": "Matrix access token"},
+        )
+        # Let the prompt line land before the drop so the panel renders the
+        # prompt phase from a still-live stream.
+        time.sleep(0.3)
     else:
         send_line(conn, {"event": "message", "text": "Starting link…"})
         time.sleep(0.4)
