@@ -36,6 +36,7 @@ let
 
   voxtypePackages = inputs.voxtype.packages.${pkgs.stdenv.hostPlatform.system};
   voxtypePkg = voxtypePackages.${cfg.variant};
+  tunerPkg = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.voxtype-tuner;
 
   # The onnx-cuda voxtype wrapper omits libcudart/libcublas from its
   # LD_LIBRARY_PATH, so the CUDA execution provider fails to initialise
@@ -321,6 +322,21 @@ in
         '';
       };
     };
+
+    tuner = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Install voxtype-tuner, a GUI for tuning voxtype parameters.
+          The tuner writes user config overrides to
+          ~/.config/voxtype/config.toml which the daemon prefers over
+          the system-generated config. Disable to omit the tuner from
+          the system profile (e.g., on headless servers where GUI
+          configuration is not needed).
+        '';
+      };
+    };
   };
 
   imports = [ inputs.voxtype.nixosModules.default ];
@@ -343,6 +359,8 @@ in
       enable = true;
       package = voxtypePkg;
     };
+
+    environment.systemPackages = lib.optional cfg.tuner.enable tunerPkg;
 
     # Reference copy of the generated config, read by the voxtype-tuner as
     # "system defaults" ($VOXTYPE_TUNER_DEFAULT_CONFIG fallback). voxtype
