@@ -10,7 +10,8 @@ link flow:
   1. read the broker's action line
   2. spawn `protonmail-bridge --grpc` with the pinned XDG env, poll for
      grpcServerConfig.json, open a TLS + server-token gRPC channel
-  3. subscribe RunEventStream FIRST (login events race the Login call)
+  3. subscribe RunEventStream FIRST (login events race the Login call) and
+     await allUsersLoaded (users load async; listing earlier races to [])
   4. if a user is already connected, skip login (idempotent credential refresh)
   5. prompt email + password -> Login
   6. drive the login event stream (2FA / mailbox-password round-trips; typed
@@ -22,8 +23,9 @@ link flow:
  10. Quit the transient Bridge (SIGTERM fallback on the way out)
  11. set-field email (config) + bridge_password (secret) -> done
 
-remove flow: transient Bridge -> GetUserList -> RemoveUser (match the profile's
-email, else the sole user; none -> idempotent done) -> Quit -> done.
+remove flow: transient Bridge -> await allUsersLoaded -> GetUserList ->
+RemoveUser (match the profile's email, else the sole user; none -> idempotent
+done) -> Quit -> done.
 
 Every outcome emits exactly one terminal done/error line and exits 0 (a flow
 failure is a protocol event, not a crash). No set-field is emitted before the
@@ -349,6 +351,27 @@ def _await_settings(events):
 # ── users ───────────────────────────────────────────────────────────
 
 
+def _await_users_loaded(events):
+    """Block until Bridge reports allUsersLoaded. Users load ASYNC after the
+    gRPC server is up (bridge.goLoad publishes the event when done), and the
+    event is queued server-side until the first RunEventStream subscriber —
+    so a subscriber can never miss it. A GetUserList racing the load sees an
+    empty list: link() would re-prompt full credentials on an already-linked
+    vault, remove() would silently no-op."""
+    try:
+        for ev in events:
+            if (
+                ev.WhichOneof("event") == "app"
+                and ev.app.WhichOneof("event") == "allUsersLoaded"
+            ):
+                return
+    except grpc.RpcError as exc:
+        raise _Fail(
+            f"lost contact with Proton Bridge loading users: {_rpc_text(exc)}"
+        )
+    raise _Fail("Proton Bridge closed the stream before loading users")
+
+
 def _user_email(user):
     return user.addresses[0] if user.addresses else user.username
 
@@ -414,6 +437,7 @@ def link(conn, reader, profile):
             timeout=_LOGIN_TIMEOUT,
         )
 
+        _await_users_loaded(events)
         connected = _connected_user(stub, md)
         if connected is not None:
             user_id = connected.id
@@ -456,6 +480,12 @@ def link(conn, reader, profile):
 
 def remove(conn, reader, profile):
     with _bridge() as (stub, md):
+        events = stub.RunEventStream(
+            pb.EventStreamRequest(ClientPlatform=CLIENT_PLATFORM),
+            metadata=md,
+            timeout=_LOGIN_TIMEOUT,
+        )
+        _await_users_loaded(events)
         users = list(stub.GetUserList(Empty(), metadata=md).users)
         if not users:
             _emit(conn, {"event": "done"})  # nothing to remove — idempotent

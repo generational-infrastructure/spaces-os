@@ -79,12 +79,20 @@ function expandSpecifiers(
   });
 }
 
+// Every integration unit runs with PrivateTmp=disconnected (lib.nix): /tmp and
+// /var/tmp are a per-unit private tmpfs, dying with the unit. landlock-exec
+// applies the policy inside that mount namespace, so the rw grant below
+// attaches to the private tmpfs — never the host /tmp — and tempfile in the
+// server works without widening the real writable surface.
+const PRIVATE_TMP_DIRS = ["/tmp", "/var/tmp"];
+
 // Compose the static spec + the unit-start-resolved paths into a SandboxPolicy.
 // Pure. The integration's writable surface is exactly its StateDirectory (plus
-// any shared exchange dir); its only readable secret surface is the credentials
-// mount; egress is the declared TCP ports. Everything else is denied by
-// buildLandlockPolicy's deny-by-default (which folds in the /nix/store rx +
-// /etc DNS/TLS + /dev node defaults every runtime needs).
+// any shared exchange dir and its private tmpfs); its only readable secret
+// surface is the credentials mount; egress is the declared TCP ports.
+// Everything else is denied by buildLandlockPolicy's deny-by-default (which
+// folds in the /nix/store rx + /etc DNS/TLS + /dev node defaults every runtime
+// needs).
 export function lowerIntegrationPolicy(
   spec: IntegrationPolicySpec,
   resolved: ResolvedPaths,
@@ -107,6 +115,7 @@ export function lowerIntegrationPolicy(
   return {
     rwDirs: [
       ...resolved.stateDirs,
+      ...PRIVATE_TMP_DIRS,
       ...(resolved.sharedDirs ?? []),
       ...(spec.rwDirs ?? []),
       ...extraRw,

@@ -22,10 +22,12 @@ const resolved = {
   credDirs: ["/run/user/1000/credentials/spaces-integration-github"],
 };
 
-test("lowerIntegrationPolicy: StateDirectory is the only writable surface", () => {
+test("lowerIntegrationPolicy: writable surface is StateDirectory + private tmpfs", () => {
   const p = lowerIntegrationPolicy(githubSpec, resolved);
   expect(p.rwDirs).toEqual([
     "/home/alice/.local/state/spaces-integration-github",
+    "/tmp",
+    "/var/tmp",
   ]);
 });
 
@@ -46,8 +48,21 @@ test("lowerIntegrationPolicy: a shared exchange dir joins the writable surface",
   });
   expect(p.rwDirs).toEqual([
     "/home/alice/.local/state/spaces-integration-github",
+    "/tmp",
+    "/var/tmp",
     "/run/user/1000/spaces-exchange/github-alice",
   ]);
+});
+
+test("lowerIntegrationPolicy: the unit-private tmpfs joins the writable surface", () => {
+  // Every integration unit runs with PrivateTmp=disconnected (lib.nix), so
+  // /tmp and /var/tmp are a private per-unit tmpfs — but Landlock is
+  // deny-by-default and landlock-exec applies the policy INSIDE the mount
+  // namespace, so the private tmpfs still needs an explicit rw grant or
+  // tempfile.mkdtemp in the server dies with "No usable temporary directory".
+  const p = lowerIntegrationPolicy(githubSpec, resolved);
+  expect(p.rwDirs).toContain("/tmp");
+  expect(p.rwDirs).toContain("/var/tmp");
 });
 
 test("resolveFromEnv: colon-lists split, absent vars yield empty", () => {
@@ -79,13 +94,16 @@ test("end-to-end: deny-by-default doc grants exactly StateDir(rw) + cred(ro) + 4
     },
   ]);
 
-  // Exactly one read_write bucket, and it is exactly the StateDirectory.
+  // Exactly one read_write bucket: the StateDirectory + the unit-private
+  // tmpfs (PrivateTmp=disconnected — never the host /tmp).
   const rw = doc.pathBeneath.filter((r) =>
     r.allowedAccess.includes("abi.read_write"),
   );
   expect(rw).toHaveLength(1);
   expect(rw[0]!.parent).toEqual([
     "/home/alice/.local/state/spaces-integration-github",
+    "/tmp",
+    "/var/tmp",
   ]);
 
   // The credentials mount is granted read-only (alongside the /etc TLS dirs the

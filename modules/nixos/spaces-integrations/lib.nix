@@ -145,6 +145,13 @@ in
         ProtectControlGroups = true;
         ProtectClock = true;
         ProtectProc = "invisible";
+        # Private per-unit tmpfs for /tmp + /var/tmp (dies with the unit). The
+        # deny-by-default Landlock domain grants no host /tmp; the policy CLI
+        # (lowerIntegrationPolicy) grants /tmp + /var/tmp rw INSIDE this mount
+        # namespace, so tempfile in the server works and the host /tmp stays
+        # invisible. `disconnected` (systemd >= 257) = a fresh tmpfs, not a
+        # private subdir of the host /tmp.
+        PrivateTmp = "disconnected";
         SystemCallArchitectures = "native";
         SystemCallFilter = [
           "@system-service"
@@ -254,13 +261,6 @@ in
             # (lowerIntegrationPolicy), and the server reads it as its clone target.
             Environment = [
               "SPACES_INTEGRATION_SHARED_DIR=${sharedDir}"
-              # The Landlock domain grants no /tmp: the unit's writable surface
-              # is exactly its StateDirectory (+ shared dir). Point TMPDIR
-              # inside it so tempfile/mkstemp in the server (himalaya config
-              # files, msmtprc scratch dirs) work; without this every mail tool
-              # call dies with "No usable temporary directory found". Listed
-              # first so a manifest environment entry can override it.
-              "TMPDIR=%S/${unitName}"
             ]
             ++ lib.mapAttrsToList (k: v: "${k}=${v}") manifest.environment;
             RuntimeDirectory = unitName;

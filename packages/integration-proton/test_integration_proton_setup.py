@@ -146,6 +146,18 @@ class Servicer(pbg.BridgeServicer):
         self.steps = list(SCEN.get("login_steps", []))
         self.i = 0
         self.stop = threading.Event()
+        # Users load ASYNC after the gRPC server is up (bridge.goLoad); the
+        # real Bridge queues allUsersLoaded until the first RunEventStream
+        # subscriber. GetUserList before the load finishes returns [] — a
+        # helper that does not await the event races to an empty list.
+        self.users_loaded = threading.Event()
+        delay = SCEN.get("users_load_delay_ms", 0) / 1000.0
+        def load():
+            if delay:
+                time.sleep(delay)
+            self.users_loaded.set()
+            self.q.put(pb.StreamEvent(app=pb.AppEvent(allUsersLoaded=pb.AllUsersLoadedEvent())))
+        threading.Thread(target=load, daemon=True).start()
 
     def _tok(self, context):
         md = dict(context.invocation_metadata())
@@ -181,7 +193,8 @@ class Servicer(pbg.BridgeServicer):
         with _lock:
             _rec["calls"].append("GetUserList")
             record()
-        return pb.UserListResponse(users=[mk_user(u) for u in SCEN.get("connected_users", [])])
+        users = SCEN.get("connected_users", []) if self.users_loaded.is_set() else []
+        return pb.UserListResponse(users=[mk_user(u) for u in users])
 
     def GetUser(self, request, context):
         self._tok(context)
@@ -568,6 +581,26 @@ def test_already_logged_in_refresh_skips_login(bench, tmp_path):
     assert len(terms) == 1 and terms[0]["event"] == "done"
 
 
+def test_refresh_awaits_users_loaded(bench, tmp_path):
+    """Users load ASYNC after Bridge's gRPC server is up (bridge.goLoad
+    publishes allUsersLoaded when done; the event is queued server-side until
+    the first RunEventStream subscriber). A GetUserList racing the load sees
+    [] and would re-prompt full credentials on an already-linked vault. The
+    helper must await allUsersLoaded before listing users."""
+    scenario = {
+        "connected_users": [_USER],
+        "login_steps": [],
+        "users_by_id": {"u1": _USER},
+        "users_load_delay_ms": 500,
+    }
+    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    kinds = [e.get("event") for e in events]
+    assert "text-field" not in kinds and "secret-field" not in kinds
+    assert rec["login_calls"] == []
+    terms = _terminals(events)
+    assert len(terms) == 1 and terms[0]["event"] == "done"
+
+
 # ── remove verb ─────────────────────────────────────────────────────
 
 
@@ -596,6 +629,21 @@ def test_remove_no_users_is_idempotent_done(bench, tmp_path):
     assert "RemoveUser" not in rec["calls"]
     terms = _terminals(events)
     assert len(terms) == 1 and terms[0]["event"] == "done"
+
+
+def test_remove_awaits_users_loaded(bench, tmp_path):
+    """Same async-load race as the refresh: a remove racing the user load
+    sees [] and would return the idempotent done WITHOUT removing anyone."""
+    scenario = {
+        "connected_users": [_USER],
+        "login_steps": [],
+        "users_by_id": {"u1": _USER},
+        "users_load_delay_ms": 500,
+    }
+    _events, rec = _run_helper(
+        bench, tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
+    )
+    assert rec["removed"] == ["u1"]
 
 
 # ── fake harness self-check: TLS + token validation ─────────────────

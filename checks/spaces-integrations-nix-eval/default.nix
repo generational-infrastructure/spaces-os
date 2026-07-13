@@ -217,11 +217,13 @@ assert lib.any (lib.hasInfix "/bin/mkdir -p %t/spaces-integration-share/github")
   ghSvc.serviceConfig.ExecStartPre;
 assert lib.any (lib.hasInfix "SPACES_INTEGRATION_SHARED_DIR=%t/spaces-integration-share/github")
   ghSvc.serviceConfig.Environment;
-# tempfile surface: the deny-by-default Landlock domain grants no /tmp, so the
-# unit must point TMPDIR inside its own StateDirectory or every tempfile.mkdtemp
-# in the server dies with "No usable temporary directory found".
-assert lib.any (lib.hasInfix "TMPDIR=%S/spaces-integration-github")
-  ghSvc.serviceConfig.Environment;
+# tempfile surface: the deny-by-default Landlock domain grants no host /tmp.
+# Every confined unit gets a private per-unit tmpfs instead
+# (PrivateTmp=disconnected); the policy CLI grants /tmp + /var/tmp rw inside
+# that namespace (landlock-policy-cli.test.ts), so tempfile in the server works
+# without TMPDIR games or host-/tmp exposure.
+assert ghSvc.serviceConfig.PrivateTmp == "disconnected";
+assert !(lib.any (lib.hasInfix "TMPDIR=") ghSvc.serviceConfig.Environment);
 assert lib.hasInfix "/bin/landlock-exec " ghSvc.serviceConfig.ExecStart;
 assert lib.hasInfix "--json %t/spaces-integration-github/landlock.json --"
   ghSvc.serviceConfig.ExecStart;
@@ -260,6 +262,8 @@ assert lib.hasInfix "--json %t/spaces-protonlike-bridge/landlock.json --"
 assert lib.hasInfix "protonmail-bridge-placeholder" bridgeSvc.serviceConfig.ExecStart;
 # resident, not socket-activated.
 assert bridgeSvc.wantedBy == [ ];
+# same private-tmpfs posture as the MCP unit (shared hardening bouquet).
+assert bridgeSvc.serviceConfig.PrivateTmp == "disconnected";
 # PartOf injected by the module (GUI teardown) AND the entry's ConditionPathExists
 # gate carried verbatim — both fold onto the SAME unit's [Unit] section.
 assert bridgeSvc.unitConfig.PartOf == [ "spaces-integration-protonlike.socket" ];
@@ -360,7 +364,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
     [ "$disabledHasGithub" = "no" ] || fail "disabled module still declared a github unit"
 
     # ── 6. the CLI lowers a deny-by-default policy ──────────────────
-    # exactly StateDirectory(rw) + credentials(ro) + 443; nothing else.
+    # exactly StateDirectory + private tmpfs (rw) + credentials(ro) + 443; nothing else.
     policy=$PWD/landlock.json
     env STATE_DIRECTORY=/sample/state CREDENTIALS_DIRECTORY=/sample/cred \
       spaces-landlock-policy --spec "$specFile" --out "$policy"
@@ -369,8 +373,8 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
       || fail "policy IPC scope"
     jq -e '.netPort == [{"allowedAccess":["connect_tcp"],"port":[443]}]' "$policy" >/dev/null \
       || fail "egress not locked to 443"
-    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent] == [["/sample/state"]]' "$policy" >/dev/null \
-      || fail "writable surface != StateDirectory"
+    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent] == [["/sample/state", "/tmp", "/var/tmp"]]' "$policy" >/dev/null \
+      || fail "writable surface != StateDirectory + private tmpfs"
     jq -e 'any(.pathBeneath[]; (.parent | index("/sample/cred")) and (.allowedAccess | index("read_file")) and (.allowedAccess | index("write_file") | not))' "$policy" >/dev/null \
       || fail "credentials mount not read-only"
     jq -e '[.pathBeneath[].parent[]] | (index("/sample") == null) and (index("/home") == null)' "$policy" >/dev/null \
@@ -378,7 +382,7 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
 
     # ── 7. file exchange (step 6): when systemd resolves the shared dir, the CLI
     # folds it into the writable surface — the SAME dir the agent session grants
-    # itself rw. Unset above (section 6) ⇒ rw is StateDirectory only.
+    # itself rw. Unset above (section 6) ⇒ rw is StateDirectory + private tmpfs.
     policy2=$PWD/landlock-shared.json
     env STATE_DIRECTORY=/sample/state CREDENTIALS_DIRECTORY=/sample/cred \
         SPACES_INTEGRATION_SHARED_DIR=/sample/share \
@@ -468,13 +472,14 @@ pkgs.runCommand "spaces-integrations-nix-eval-test"
       || fail "bridge spec missing extraPaths"
     # lower it with the real CLI exactly as the unit would at runtime (no
     # StateDirectory; %h resolves from HOME): egress 443 + bind 1143/1025, and the
-    # rw extraPath (%h expanded) is the only writable surface. Deny-by-default holds.
+    # writable surface is the private tmpfs + the rw extraPath (%h expanded).
+    # Deny-by-default holds.
     bridgepolicy=$PWD/landlock-bridge.json
     env HOME=/home/x spaces-landlock-policy --spec "$bridgeSpecFile" --out "$bridgepolicy"
     jq -e '.netPort == [{"allowedAccess":["connect_tcp"],"port":[443]},{"allowedAccess":["bind_tcp"],"port":[1143,1025]}]' \
       "$bridgepolicy" >/dev/null || fail "bridge ports not lowered to egress 443 + bind 1143/1025"
-    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] == ["/home/x/.local/state/protonmail-bridge"]' \
-      "$bridgepolicy" >/dev/null || fail "bridge writable surface != its %h-expanded state dir"
+    jq -e '[.pathBeneath[] | select(.allowedAccess | index("abi.read_write")) | .parent[]] == ["/tmp", "/var/tmp", "/home/x/.local/state/protonmail-bridge"]' \
+      "$bridgepolicy" >/dev/null || fail "bridge writable surface != private tmpfs + its %h-expanded state dir"
     jq -e '.ruleset[0].handledAccessNet == ["bind_tcp"]' "$bridgepolicy" >/dev/null \
       || fail "bind_tcp not handled (deny-by-default) for the confined bridge"
 
