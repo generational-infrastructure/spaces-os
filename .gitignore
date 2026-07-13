@@ -18,6 +18,8 @@ dist/
 
 # python
 __pycache__/
+# grpcio-tools output regenerated at build/test time from bridge.proto
+packages/integration-proton/bridge_pb2*.py
 
 # sediment writes a project-id config wherever its CLI is invoked
 # from inside a git/jj repo (see get_or_create_project_id). Ignore it
