@@ -1454,3 +1454,89 @@ func TestReconcileManagedNoopWhenUnchanged(t *testing.T) {
 		t.Fatalf("unchanged managed.json must not trigger systemctl, before=%d after=%d", n, got)
 	}
 }
+
+// An RPC (list) landing between a managed.json rewrite and the reconcile tick
+// refreshes the mtime-keyed cache, so a prev-cache-vs-current comparison sees
+// no change. reconcileManaged must compare against its own last-RECONCILED
+// snapshot: the removed verdict still folds and the changed unit still
+// try-restarts.
+func TestReconcileManagedNotSwallowedByRPCCacheRefresh(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	e.writeManaged(`{"generation":2,"integrations":{}}`)
+	e.wantOK(e.roundtrip(Request{Op: "list"})) // refreshes the cache before the tick
+	e.srv.reconcileManaged()
+	if _, ok := e.enabledState().Integrations["github"]; ok {
+		t.Fatalf("verdict removal must fold into enabled.json even after an RPC refreshed the cache")
+	}
+	if !slices.Contains(e.systemctlCalls(), "try-restart spaces-integration-github.service") {
+		t.Fatalf("changed integration must try-restart, got %v", e.systemctlCalls())
+	}
+}
+
+// op=setup forwards its action line to the helper verbatim; only ""/"link" is
+// a legal setup action. Anything else (a raw "remove" would bypass the
+// managed-profile guard and remove-profile's vendor/store atomicity) must be
+// rejected with a setup-stream error event before any unit starts.
+func TestSetupRejectsNonLinkAction(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupDef)
+	conn, err := net.Dial("unix", e.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	req, err := json.Marshal(Request{Op: "setup", Integration: "signal", Action: "remove"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	ev := e.readEvent(bufio.NewReader(conn))
+	if ev["event"] != "error" || !strings.Contains(ev["error"].(string), "action") {
+		t.Fatalf("want an invalid-action error event, got %v", ev)
+	}
+	if calls := e.systemctlCalls(); calls != nil {
+		t.Fatalf("a rejected action must not start setup units, got %v", calls)
+	}
+}
+
+// A malformed managed.json (or a transient read failure) must NOT read as "no
+// Nix opinion anywhere": that would delete every source-nix entry and stop
+// nix-enabled units. The broker keeps the last-good state until a parseable
+// file (or ENOENT) shows up.
+func TestCorruptManagedKeepsLastGoodState(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	n := len(e.systemctlCalls())
+	e.writeManaged(`{"generation": 2, THIS IS NOT JSON`)
+	e.srv.reconcileManaged()
+	st := e.enabledState().Integrations["github"]
+	if !st.Enabled || st.Source != sourceNix {
+		t.Fatalf("corrupt managed.json must keep the last-good verdict, got %+v", st)
+	}
+	for _, c := range e.systemctlCalls()[n:] {
+		if strings.HasPrefix(c, "stop ") {
+			t.Fatalf("corrupt managed.json must not stop units, got %v", e.systemctlCalls())
+		}
+	}
+}
+
+// An ABSENT managed.json is authoritative (no Nix opinion anywhere): deleting
+// the file still reverts source-nix entries — only errors keep the last-good
+// state.
+func TestManagedFileDeletedRevertsNixEntries(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.srv.ReconcileEnabled()
+	if err := os.Remove(filepath.Join(e.managedRoot, "managed.json")); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.reconcileManaged()
+	if _, ok := e.enabledState().Integrations["github"]; ok {
+		t.Fatalf("deleting managed.json must revert the source-nix entry")
+	}
+}

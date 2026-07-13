@@ -57,6 +57,12 @@ type Server struct {
 	managedCache  ManagedState
 	managedMtime  time.Time
 	managedLoaded bool
+	// Last managed state whose verdicts were FOLDED (reconciled), also under
+	// mu. Distinct from managedCache: every RPC refreshes the cache via
+	// managedState(), so reconcileManaged must diff against the state it last
+	// acted on, not the state last observed.
+	managedReconciled       ManagedState
+	managedReconciledLoaded bool
 }
 
 func NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
@@ -216,6 +222,11 @@ func (s *Server) reconcileLocked() {
 	defs := s.loadDefs()
 	st := s.loadState()
 	managed := s.managedState()
+	// Record the state whose verdicts this fold acts on: reconcileManaged
+	// diffs against this snapshot (not the RPC-refreshed cache) to detect the
+	// next managed.json change. Startup's ReconcileEnabled seeds it.
+	s.managedReconciled = managed
+	s.managedReconciledLoaded = true
 	if foldVerdicts(&st, managed) {
 		if err := s.saveState(st); err != nil {
 			log.Printf("reconcile: save enabled.json: %v", err)
@@ -271,13 +282,19 @@ func (s *Server) setup(conn net.Conn, integration, action string) {
 		fail("invalid integration name")
 		return
 	}
+	// Only the link flow is reachable via op=setup. Forwarding an arbitrary
+	// action verbatim would let a raw "remove" bypass the managed-profile
+	// guard and remove-profile's vendor/store atomicity (removeProfileDispatch
+	// owns that flow).
+	if action != "" && action != "link" {
+		fail("invalid setup action '" + action + "' (removes must use op=remove-profile)")
+		return
+	}
+	action = "link"
 	d, enabled, err := s.prepareSetup(integration)
 	if err != nil {
 		fail(err.Error())
 		return
-	}
-	if action == "" {
-		action = "link"
 	}
 
 	// Park single-instance vendor daemons before the setup units start; unpark

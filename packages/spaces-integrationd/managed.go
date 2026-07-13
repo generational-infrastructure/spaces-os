@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -62,8 +63,13 @@ func (s *Server) managedFile() string {
 
 // managedState returns the current managed.json, cached by mtime: it re-stats
 // per call and reloads only when the mtime changed (or the file appeared /
-// disappeared). Caller MUST hold s.mu — the cache fields live under it. An
-// absent file yields the empty state (no Nix opinion anywhere).
+// disappeared). Caller MUST hold s.mu — the cache fields live under it.
+//
+// Only an ABSENT file (ENOENT) is authoritative for "no Nix opinion anywhere"
+// and yields the empty state. Any other stat/read/parse error keeps the
+// last-good cached state (logged): treating a malformed or transiently
+// unreadable file as empty would revert every source-nix entry and stop
+// nix-enabled units on a bad stage.
 //
 // Snapshot immutability: the returned ManagedState is never mutated after
 // publication (readManaged builds fresh maps on every load), so a caller may
@@ -72,43 +78,49 @@ func (s *Server) managedState() ManagedState {
 	path := s.managedFile()
 	fi, err := os.Stat(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			log.Printf("stat managed.json: %v", err)
+		if errors.Is(err, os.ErrNotExist) {
+			s.managedCache = ManagedState{}
+			s.managedMtime = time.Time{}
+			s.managedLoaded = true
+			return s.managedCache
 		}
-		s.managedCache = ManagedState{}
-		s.managedMtime = time.Time{}
-		s.managedLoaded = true
+		log.Printf("stat managed.json: %v (keeping last-good state)", err)
 		return s.managedCache
 	}
 	if s.managedLoaded && fi.ModTime().Equal(s.managedMtime) {
 		return s.managedCache
 	}
-	s.managedCache = readManaged(path)
+	st, err := readManaged(path)
+	if err != nil {
+		// Cache and mtime untouched: the next call retries the load, and a
+		// re-stage with a good file (new mtime) recovers normally.
+		log.Printf("%v (keeping last-good state)", err)
+		return s.managedCache
+	}
+	s.managedCache = st
 	s.managedMtime = fi.ModTime()
 	s.managedLoaded = true
 	return s.managedCache
 }
 
-// readManaged parses managed.json, returning the empty state on any read/parse
-// error so one malformed stage cannot wedge the broker (mirrors loadDefs).
-// Each call builds fresh maps — the result is treated as immutable once cached
-// by managedState (see its snapshot-immutability note).
-func readManaged(path string) ManagedState {
-	empty := ManagedState{Integrations: map[string]ManagedIntegration{}}
+// readManaged parses managed.json. It returns an error instead of an empty
+// state on read/parse failure — the CALLER (managedState) decides what a
+// failure means, because "empty" is a destructive verdict (it reverts every
+// Nix entry). Each call builds fresh maps — the result is treated as immutable
+// once cached by managedState (see its snapshot-immutability note).
+func readManaged(path string) (ManagedState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("read managed.json: %v", err)
-		return empty
+		return ManagedState{}, fmt.Errorf("read managed.json: %w", err)
 	}
 	var st ManagedState
 	if err := json.Unmarshal(data, &st); err != nil {
-		log.Printf("parse managed.json: %v", err)
-		return empty
+		return ManagedState{}, fmt.Errorf("parse managed.json: %w", err)
 	}
 	if st.Integrations == nil {
 		st.Integrations = map[string]ManagedIntegration{}
 	}
-	return st
+	return st, nil
 }
 
 // managedSecretSet reports a managed secret's set-status: the stat of the
@@ -241,11 +253,16 @@ func (s *Server) watchManaged(interval time.Duration) {
 // re-folds verdicts into enabled.json (starting/stopping sockets) and
 // try-restarts every integration whose managed section changed so a unit picks
 // up rotated managed credentials. Same ownership pattern as after a GUI write.
+//
+// The change diff is against the last-RECONCILED snapshot (seeded by startup's
+// ReconcileEnabled, advanced only inside reconcileLocked) — NOT the mtime
+// cache, which any RPC refreshes via managedState(); diffing against the cache
+// would swallow a rewrite that an intervening `list` already observed.
 func (s *Server) reconcileManaged() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	prev := s.managedCache
-	prevLoaded := s.managedLoaded
+	prev := s.managedReconciled
+	prevLoaded := s.managedReconciledLoaded
 	cur := s.managedState()
 	if prevLoaded && reflect.DeepEqual(prev, cur) {
 		return
