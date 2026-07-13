@@ -13,7 +13,7 @@
 // shapes. Std-widgets are compiled with SLINT_STYLE=cupertino (scripts/env.sh
 // and the nix wrapper both set it). Kept Slint 1.16-compatible (see the
 // theme.slint header).
-import { Palette } from "std-widgets.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
 import { Theme, SLSpinner } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Card, Pill, Segmented, Toggle, StatusChip, DiscreteSlider } from "spaces-kit.slint";
@@ -1630,30 +1630,37 @@ export component MainWindow inherits Window {
                             vertical-alignment: top;
                         }
 
-                        transcription-output := TextInput {
+                        transcript-scroll := ScrollView {
                             width: 100%;
                             height: 100%;
-                            // Two-way: Python writes results in. A session's typed
-                            // stream (arriving as ordinary keyboard input while
-                            // the field is focused) reads back out the same
-                            // property.
-                            text <=> root.transcription;
-                            // A flush output surface, not a boxed input: a plain
-                            // Inter paragraph sitting directly on the white card.
-                            // The std TextEdit paints cupertino box chrome no knob
-                            // removes, so this low-level TextInput carries the
-                            // flush look while keeping wrap, read-only, selection,
-                            // and the two-way stream receive.
-                            color: Theme.text-primary;
-                            font-family: Theme.font-family;
-                            font-size: 15px;
-                            single-line: false;
-                            wrap: word-wrap;
-                            // Editable exactly while a session runs. The field is
-                            // the focused receiver of the daemon's typed output.
-                            read-only: !root.streaming;
-                            selection-background-color: Theme.selection;
-                            selection-foreground-color: Theme.on-accent;
+                            vertical-scrollbar-policy: as-needed;
+                            horizontal-scrollbar-policy: always-off;
+
+                            transcription-output := TextInput {
+                                width: transcript-scroll.viewport-width;
+                                min-height: transcript-scroll.viewport-height;
+                                // Two-way: Python writes results in. A session's typed
+                                // stream (arriving as ordinary keyboard input while
+                                // the field is focused) reads back out the same
+                                // property.
+                                text <=> root.transcription;
+                                // A flush output surface, not a boxed input: a plain
+                                // Inter paragraph sitting directly on the white card.
+                                // The std TextEdit paints cupertino box chrome no knob
+                                // removes, so this low-level TextInput carries the
+                                // flush look while keeping wrap, read-only, selection,
+                                // and the two-way stream receive.
+                                color: Theme.text-primary;
+                                font-family: Theme.font-family;
+                                font-size: 15px;
+                                single-line: false;
+                                wrap: word-wrap;
+                                // Editable exactly while a session runs. The field is
+                                // the focused receiver of the daemon's typed output.
+                                read-only: !root.streaming;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.on-accent;
+                            }
                         }
 
                         // Output pane, not an input. A focused TextInput paints a

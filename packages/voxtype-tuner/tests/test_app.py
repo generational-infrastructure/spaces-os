@@ -324,6 +324,22 @@ def test_theme_mode_resolves_and_follows_the_os_scheme(
     assert dark() is False
 
 
+def test_transcript_field_scrolls_only_when_it_overflows() -> None:
+    # The transcript pane is the largest, quietest reading surface in the tuner.
+    # It still needs to handle long dictations, but a permanent scrollbar makes
+    # short results look like an editor. Keep the custom field inside a
+    # ScrollView whose vertical scrollbar is conditional and whose horizontal
+    # scrollbar stays off because the transcript wraps by word.
+    src = app.SLINT_FILE.read_text()
+    transcript_region = src[src.index("transcript-scroll := ScrollView") :]
+
+    assert "transcript-scroll := ScrollView" in transcript_region
+    assert "vertical-scrollbar-policy: as-needed;" in transcript_region
+    assert "horizontal-scrollbar-policy: always-off;" in transcript_region
+    assert "width: transcript-scroll.viewport-width;" in transcript_region
+    assert "wrap: word-wrap;" in transcript_region
+
+
 class _CapturingNative:
     """Stand-in for app.native: captures marshalled callbacks so the test drives
     the "event loop" by draining them, instead of a real Slint loop.
