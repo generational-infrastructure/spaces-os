@@ -232,13 +232,13 @@ in
           path = socketPath;
           description = "Spaces integration socket: ${manifest.description}";
         }
-      // lib.optionalAttrs (manifest.extraServices != [ ]) {
-        # Starting this socket pulls in the integration's backing daemons; the
-        # spaces-integrations module injects the reverse PartOf onto each so a
-        # GUI disable (socket stop) tears them down too.
-        wants = manifest.extraServices;
-        after = manifest.extraServices;
-      };
+        // lib.optionalAttrs (manifest.extraServices != [ ]) {
+          # Starting this socket pulls in the integration's backing daemons; the
+          # spaces-integrations module injects the reverse PartOf onto each so a
+          # GUI disable (socket stop) tears them down too.
+          wants = manifest.extraServices;
+          after = manifest.extraServices;
+        };
     in
     {
       inherit

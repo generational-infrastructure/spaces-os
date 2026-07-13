@@ -3,9 +3,12 @@
 # `mkSpacesCommand` builds a thin wrapper around a shell command. The
 # wrapper runs the command and, if anything in it exits non-zero, posts
 # a desktop notification ("failed to <label>") via `notify-send` and
-# then propagates the original exit status. Every command bound to a
-# spaces keyboard shortcut goes through one of these so a broken
-# shortcut surfaces visibly instead of silently doing nothing.
+# echoes the same message to stdout, then propagates the original exit
+# status. The notification gives the user immediate feedback; the stdout
+# line is captured by the compositor's journal so the failure is also
+# queryable via `journalctl --user`. Every command bound to a spaces
+# keyboard shortcut goes through one of these so a broken shortcut
+# surfaces visibly instead of silently doing nothing.
 #
 # Usage:
 #   mkSpacesCommand = import ./spaces-command.nix pkgs;
@@ -44,6 +47,7 @@ pkgs.writeShellApplication {
       notify-send "''${opts[@]}" "Spaces" "$1" || true
     }
     spaces_notify_failure() {
+      echo "spaces: failed to ${label}"
       notify-send --app-name=spaces --urgency=critical \
         "Spaces" "failed to ${label}" || true
     }

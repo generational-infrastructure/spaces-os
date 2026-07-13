@@ -33,13 +33,14 @@ import time
 
 import qrcode
 
+# The daemon socket env name and connect timeout are owned by the server module;
+# import them so setup and server can't drift.
+from integration_signal import _DAEMON_CONNECT_TIMEOUT, DAEMON_SOCKET_ENV
+
 # The MCP server's socket-activation accept mechanism is reused verbatim so the
 # setup helper binds/inherits its listening socket exactly like the server.
 from spaces_integration_mcp import _listen
 from spaces_signal.jsonrpc import JsonRpcClient, JsonRpcError
-# The daemon socket env name and connect timeout are owned by the server module;
-# import them so setup and server can't drift.
-from integration_signal import DAEMON_SOCKET_ENV, _DAEMON_CONNECT_TIMEOUT
 
 SERVER_NAME = "integration-signal-setup"
 
