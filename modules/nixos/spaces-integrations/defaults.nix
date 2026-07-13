@@ -56,6 +56,13 @@ let
     export PATH=${lib.makeBinPath [ protonWrapper ]}''${PATH:+:$PATH}
     exec ${lib.getExe' pkgsSelf.integration-proton "integration-proton-setup"} "$@"
   '';
+
+  # Proton Bridge single-source bindings: the state root the MCP server, setup
+  # helper, and the confined Bridge daemon all share, and the loopback ports the
+  # daemon binds / the MCP server dials.
+  bridgeState = "%h/.local/state/protonmail-bridge";
+  bridgeImapPort = 1143;
+  bridgeSmtpPort = 1025;
 in
 {
   services.spaces-integrations.integrations = {
@@ -188,8 +195,8 @@ in
       network = lib.mkDefault true;
       connectPorts = lib.mkDefault [
         443
-        1143
-        1025
+        bridgeImapPort
+        bridgeSmtpPort
       ];
       autoRun = lib.mkDefault [
         "envelope_list"
@@ -198,12 +205,12 @@ in
       # Read by the integration-proton server to locate Bridge's serving cert;
       # also consumed by the setup helper to resolve the Bridge state root.
       environment = lib.mkDefault {
-        SPACES_PROTON_BRIDGE_STATE = "%h/.local/state/protonmail-bridge";
+        SPACES_PROTON_BRIDGE_STATE = bridgeState;
       };
       extraPaths = lib.mkDefault [
         {
           # Bridge state root — rw for the cert read + himalaya/msmtp config.
-          source = "%h/.local/state/protonmail-bridge";
+          source = bridgeState;
           mode = "rw";
         }
       ];
@@ -225,16 +232,16 @@ in
           network = true;
           connectPorts = [ 443 ];
           bindPorts = [
-            1143
-            1025
+            bridgeImapPort
+            bridgeSmtpPort
           ];
           extraPaths = [
             {
-              source = "%h/.local/state/protonmail-bridge";
+              source = bridgeState;
               mode = "rw";
             }
           ];
-          unitConfig.ConditionPathExists = "%h/.local/state/protonmail-bridge/config/protonmail/bridge-v3/vault.enc";
+          unitConfig.ConditionPathExists = "${bridgeState}/config/protonmail/bridge-v3/vault.enc";
           restart = true;
         }
       ];

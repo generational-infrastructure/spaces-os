@@ -7,14 +7,16 @@ real grpcServerConfig.json into the pinned XDG tree. The broker side is played
 by a driver that sends the action line, answers prompts, and records events.
 """
 
+import base64
+import contextlib
 import json
 import os
 import socket
-import stat
-import sys
+import subprocess
 import threading
 import time
 
+from conftest import _write_exec
 import grpc
 import integration_proton_setup as setup
 import pytest
@@ -299,11 +301,6 @@ sys.exit(main())
 """
 
 
-def _write_exec(path, text):
-    path.write_text(text.replace("__PY__", sys.executable))
-    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-
 @pytest.fixture(scope="module")
 def bench(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("itps")
@@ -360,7 +357,7 @@ def _drive(activation, action, replies):
     return events
 
 
-def _run_helper(bench, tmp_path, scenario, action, replies):
+def _run_helper(tmp_path, scenario, action, replies):
     run = tmp_path
     state = run / "state"
     (state / "config").mkdir(parents=True)
@@ -428,7 +425,7 @@ def test_happy_path_2fa_links_and_sets_fields(bench, tmp_path):
         ],
         "users_by_id": {"u1": _USER},
     }
-    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     kinds = [e.get("event") for e in events]
     assert "text-field" in kinds and "secret-field" in kinds
@@ -438,11 +435,9 @@ def test_happy_path_2fa_links_and_sets_fields(bench, tmp_path):
     # Wire contract: Bridge base64Decode()s every LoginRequest.password
     # (service_methods.go) — raw bytes fail login with "Cannot decode
     # password". The helper must send std-base64 of the human's reply.
-    import base64 as _b64
-
     assert rec["wire_passwords"] == [
-        _b64.b64encode(_REPLIES["password"].encode()).decode(),
-        _b64.b64encode(_REPLIES["totp"].encode()).decode(),
+        base64.b64encode(_REPLIES["password"].encode()).decode(),
+        base64.b64encode(_REPLIES["totp"].encode()).decode(),
     ]
 
     sf = {e["field"]: e["value"] for e in _set_fields(events)}
@@ -459,7 +454,7 @@ def test_happy_path_pins_mail_server_ports(bench, tmp_path):
         "login_steps": [{"emit": [{"type": "finished", "userID": "u1"}]}],
         "users_by_id": {"u1": _USER},
     }
-    _events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    _events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     assert rec["settings"] == {
         "imapPort": 1143,
         "smtpPort": 1025,
@@ -482,7 +477,7 @@ def test_link_exports_bridge_tls_cert(bench, tmp_path):
         "login_steps": [{"emit": [{"type": "finished", "userID": "u1"}]}],
         "users_by_id": {"u1": _USER},
     }
-    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     certdir = tmp_path / "state" / "config" / "protonmail" / "bridge-v3"
     assert rec["export_dirs"] == [str(certdir)]
@@ -501,7 +496,7 @@ def test_already_logged_in_refresh_exports_cert(bench, tmp_path):
         "login_steps": [],
         "users_by_id": {"u1": _USER},
     }
-    _events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    _events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     certdir = tmp_path / "state" / "config" / "protonmail" / "bridge-v3"
     assert rec["export_dirs"] == [str(certdir)]
     assert (certdir / "cert.pem").exists()
@@ -519,7 +514,7 @@ def test_no_set_field_before_login_finished(bench, tmp_path):
         ],
         "users_by_id": {"u1": _USER},
     }
-    events, _rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, _rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     kinds = [e.get("event") for e in events]
     first_set = next(i for i, k in enumerate(kinds) if k == "set-field")
@@ -538,7 +533,7 @@ def test_free_user_gives_paid_plan_hint_and_no_set_field(bench, tmp_path):
         "login_steps": [{"emit": [{"type": "error", "errType": 1, "message": "free"}]}],
         "users_by_id": {},
     }
-    events, _rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, _rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     terms = _terminals(events)
     assert len(terms) == 1 and terms[0]["event"] == "error"
     assert "paid Proton plan" in terms[0]["error"]
@@ -553,7 +548,7 @@ def test_fido_only_account_is_use_totp_error(bench, tmp_path):
         ],
         "users_by_id": {},
     }
-    events, _rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, _rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     terms = _terminals(events)
     assert len(terms) == 1 and terms[0]["event"] == "error"
     assert "TOTP" in terms[0]["error"]
@@ -569,7 +564,7 @@ def test_already_logged_in_refresh_skips_login(bench, tmp_path):
         "login_steps": [],
         "users_by_id": {"u1": _USER},
     }
-    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     kinds = [e.get("event") for e in events]
     assert "text-field" not in kinds and "secret-field" not in kinds
@@ -593,7 +588,7 @@ def test_refresh_awaits_users_loaded(bench, tmp_path):
         "users_by_id": {"u1": _USER},
         "users_load_delay_ms": 500,
     }
-    events, rec = _run_helper(bench, tmp_path, scenario, {"action": "link"}, _REPLIES)
+    events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     kinds = [e.get("event") for e in events]
     assert "text-field" not in kinds and "secret-field" not in kinds
     assert rec["login_calls"] == []
@@ -611,7 +606,7 @@ def test_remove_calls_remove_user_then_done(bench, tmp_path):
         "users_by_id": {"u1": _USER},
     }
     events, rec = _run_helper(
-        bench, tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
+        tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
     )
     assert rec["removed"] == ["u1"]
     assert "RemoveUser" in rec["calls"] and "Quit" in rec["calls"]
@@ -623,7 +618,7 @@ def test_remove_calls_remove_user_then_done(bench, tmp_path):
 def test_remove_no_users_is_idempotent_done(bench, tmp_path):
     scenario = {"connected_users": [], "login_steps": [], "users_by_id": {}}
     events, rec = _run_helper(
-        bench, tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
+        tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
     )
     assert rec["removed"] == []
     assert "RemoveUser" not in rec["calls"]
@@ -641,7 +636,7 @@ def test_remove_awaits_users_loaded(bench, tmp_path):
         "users_load_delay_ms": 500,
     }
     _events, rec = _run_helper(
-        bench, tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
+        tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
     )
     assert rec["removed"] == ["u1"]
 
@@ -662,9 +657,8 @@ def test_fake_bridge_rejects_bad_token(bench, tmp_path):
 
     env = setup._bridge_env()
     cfg_path = setup._config_path(env)
-    with __import__("contextlib").suppress(FileNotFoundError):
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(cfg_path)
-    import subprocess
 
     proc = subprocess.Popen(["protonmail-bridge", "--grpc"], env=env)
     try:

@@ -31,9 +31,14 @@ let
   # @system-service is the allowlist baseline; this set is subtracted. Blocked
   # calls fail EPERM not SIGSYS (libuv's io_uring probe), matching sandbox.ts.
   denySyscalls = builtins.fromJSON (builtins.readFile seccompDenylist);
+
+  # Root of the per-user staged credential trees (agent-integrations §10.2).
+  # Single-sourced: default.nix's root stager creates the tree here, and every
+  # MCP unit's `managed` LoadCredential (below) points into it.
+  managedRoot = "/run/spaces-integrations-managed";
 in
 {
-  inherit jsonFormat;
+  inherit jsonFormat managedRoot;
 
   # Eval-time validation of `spaces.users` against the integration manifests
   # (agent-integrations §10.1). Pure: default.nix feeds it the resolved option
@@ -255,7 +260,7 @@ in
           specFile = jsonFormat.generate "${key}-policy-spec.json" (mkPolicySpec {
             inherit (entry) connectPorts bindPorts extraPaths;
           });
-          policyPath = "%t/${key}/landlock.json";
+          entryPolicyPath = "%t/${key}/landlock.json";
         in
         {
           inherit key specFile;
@@ -269,9 +274,9 @@ in
               # Lower the per-user policy into this unit's own runtime dir, then
               # exec the vendor daemon confined by it. No shared dir / credentials.
               ExecStartPre = [
-                "${landlockPolicyCli} --spec ${specFile} --out ${policyPath}"
+                "${landlockPolicyCli} --spec ${specFile} --out ${entryPolicyPath}"
               ];
-              ExecStart = "${landlockExec} --json ${policyPath} -- ${entry.command}";
+              ExecStart = "${landlockExec} --json ${entryPolicyPath} -- ${entry.command}";
               Environment = lib.mapAttrsToList (k: v: "${k}=${v}") entry.environment;
               # Only the runtime dir (holds the lowered policy); no StateDirectory
               # — the daemon's state lives where `extraPaths` grants it.
@@ -346,7 +351,7 @@ in
             # the subdir.
             LoadCredential =
               lib.optional hasConfig "config:${storeDir}/config.toml"
-              ++ [ "managed:/run/spaces-integrations-managed/%u/${name}" ];
+              ++ [ "managed:${managedRoot}/%u/${name}" ];
             LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
           }
           // hardeningServiceConfig manifest.network;

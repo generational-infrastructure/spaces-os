@@ -11,10 +11,12 @@
 #   - /etc/spaces-integrations/<name>.json — the world-readable definition the
 #     gateway / broker / panel read (posture + secret prompts + autoRun).
 #
-# All lowering lives in ./lib.nix (backend-agnostic); this file only maps that
-# neutral data onto the NixOS user-unit / etc surfaces, so a home-manager
-# adapter can reuse the same lib. The broker (step 2) owns enable/disable +
-# secret provisioning at runtime — using an integration stays rootless (req 10).
+# Most lowering lives in ./lib.nix (backend-agnostic): unit shapes, policy
+# specs, definitions, and the managed-profile validation (mkManaged). This file
+# maps that neutral data onto the NixOS user-unit / etc surfaces AND owns the
+# root stager script that materialises the per-user managed credential trees.
+# The broker (step 2) owns enable/disable + secret provisioning at runtime —
+# using an integration stays rootless (req 10).
 # Bundled by modules/nixos/spaces.nix; inert until enabled AND integrations declared.
 { inputs, ... }:
 {
@@ -386,7 +388,7 @@ let
     knownUsers = builtins.attrNames config.users.users;
   };
 
-  managedRoot = "/run/spaces-integrations-managed";
+  inherit (integLib) managedRoot;
   normalUsers = lib.filterAttrs (_: u: u.isNormalUser) config.users.users;
   allIntegrationNames = lib.attrNames cfg.integrations;
   # Stage only for users that are BOTH declared in spaces.users AND normal: the

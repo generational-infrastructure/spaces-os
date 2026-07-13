@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1238,15 +1239,6 @@ func boolField(m map[string]any, key string) bool {
 	return v
 }
 
-func hasCall(calls []string, want string) bool {
-	for _, c := range calls {
-		if c == want {
-			return true
-		}
-	}
-	return false
-}
-
 // A managed profile REPLACES a same-named user profile in the reply (shadow):
 // config comes from managed.json, the flags mark it managed+shadowed, and the
 // integration's Nix enable verdict surfaces as enabledByNix. A user-only
@@ -1389,11 +1381,11 @@ func TestReconcileFoldsVerdictTrue(t *testing.T) {
 	e := newTestEnv(t, 0)
 	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
-	if !hasCall(e.systemctlCalls(), "start spaces-integration-github.socket") {
+	if !slices.Contains(e.systemctlCalls(), "start spaces-integration-github.socket") {
 		t.Fatalf("verdict true must start the socket, got %v", e.systemctlCalls())
 	}
 	st := e.enabledState().Integrations["github"]
-	if !st.Enabled || st.Source != "nix" {
+	if !st.Enabled || st.Source != sourceNix {
 		t.Fatalf("want github {enabled:true, source:nix}, got %+v", st)
 	}
 }
@@ -1405,11 +1397,11 @@ func TestReconcileNixFalseOverridesUserEnable(t *testing.T) {
 	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"github": {Enabled: true}}})
 	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":false}}}`)
 	e.srv.ReconcileEnabled()
-	if !hasCall(e.systemctlCalls(), "stop spaces-integration-github.socket spaces-integration-github.service") {
+	if !slices.Contains(e.systemctlCalls(), "stop spaces-integration-github.socket spaces-integration-github.service") {
 		t.Fatalf("nix false must stop the unit, got %v", e.systemctlCalls())
 	}
 	st := e.enabledState().Integrations["github"]
-	if st.Enabled || st.Source != "nix" {
+	if st.Enabled || st.Source != sourceNix {
 		t.Fatalf("want github {enabled:false, source:nix}, got %+v", st)
 	}
 }
@@ -1420,7 +1412,7 @@ func TestReconcileDropsRemovedVerdict(t *testing.T) {
 	e := newTestEnv(t, 0)
 	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
-	if st := e.enabledState().Integrations["github"]; st.Source != "nix" {
+	if st := e.enabledState().Integrations["github"]; st.Source != sourceNix {
 		t.Fatalf("setup: want source nix, got %+v", st)
 	}
 	e.writeManaged(`{"generation":2,"integrations":{}}`)
@@ -1428,7 +1420,7 @@ func TestReconcileDropsRemovedVerdict(t *testing.T) {
 	if _, ok := e.enabledState().Integrations["github"]; ok {
 		t.Fatalf("source-nix entry must be dropped when the verdict disappears")
 	}
-	if !hasCall(e.systemctlCalls(), "try-restart spaces-integration-github.service") {
+	if !slices.Contains(e.systemctlCalls(), "try-restart spaces-integration-github.service") {
 		t.Fatalf("removed verdict must try-restart the affected unit, got %v", e.systemctlCalls())
 	}
 }
@@ -1446,7 +1438,7 @@ func TestGenerationBumpReReconciles(t *testing.T) {
 	if len(after) <= before {
 		t.Fatalf("generation bump must re-reconcile, before=%d after=%v", before, after)
 	}
-	if !hasCall(after, "try-restart spaces-integration-github.service") {
+	if !slices.Contains(after, "try-restart spaces-integration-github.service") {
 		t.Fatalf("generation bump must try-restart the changed unit, got %v", after)
 	}
 }

@@ -83,7 +83,9 @@ function expandSpecifiers(
 // /var/tmp are a per-unit private tmpfs, dying with the unit. landlock-exec
 // applies the policy inside that mount namespace, so the rw grant below
 // attaches to the private tmpfs — never the host /tmp — and tempfile in the
-// server works without widening the real writable surface.
+// server works without widening the real writable surface. Landlock is still
+// deny-by-default inside that namespace: drop this grant and tempfile.mkdtemp
+// dies with "No usable temporary directory".
 const PRIVATE_TMP_DIRS = ["/tmp", "/var/tmp"];
 
 // Compose the static spec + the unit-start-resolved paths into a SandboxPolicy.

@@ -135,8 +135,10 @@ export function buildLandlockPolicy(p: SandboxPolicy): Record<string, unknown> {
   // openrouter key never enters the sandbox) and/or the loopback llama-swap
   // port. Ingress (bind_tcp) is normally none — the runtime never listens — but
   // an integration that must accept a local connection declares bind ports.
-  // Absent connect_tcp handling here means the coarse AF_INET family gate still
-  // governs egress; bind is always handled above, so an unlisted bind is denied.
+  // connect_tcp becomes handled implicitly via any connect rule; only when
+  // connectPorts is empty does egress fall through to the
+  // RestrictAddressFamilies gate. Bind is always handled above, so an
+  // unlisted bind is denied.
   const netPort: { allowedAccess: string[]; port: number[] }[] = [];
   if (p.connectPorts && p.connectPorts.length > 0)
     netPort.push({ allowedAccess: ["connect_tcp"], port: p.connectPorts });

@@ -7,6 +7,7 @@ module imports them, and make sure the package dir is importable.
 """
 
 import os
+import stat
 import subprocess
 import sys
 
@@ -36,3 +37,10 @@ def _ensure_stubs():
 _ensure_stubs()
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+
+
+def _write_exec(path, text):
+    """Shared test helper: write an executable stub script, substituting
+    __PY__ with the current interpreter."""
+    path.write_text(text.replace("__PY__", sys.executable))
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)

@@ -246,8 +246,8 @@ in
           gui)
             mkdir -p -- "$state_dir"
             cd "$state_dir"
-            # Same swtpm hygiene as `run`; the GUI twins keep their own
-            # per-node TPM state next to their own qcow2s.
+            # Same swtpm hygiene as `run`; each GUI twin gets its own
+            # per-node swtpm dir under $sock_dir.
           ${eachSep "\n" (n: "  reap_swtpm \"$sock_dir/gui-${n}-swtpm\"")}
 
           ${each guiLaunchOne}

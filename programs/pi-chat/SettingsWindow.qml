@@ -380,6 +380,13 @@ FloatingWindow {
           // Names of this integration's Nix-managed profiles — the add-account
           // draft refuses to reuse one (the broker rejects it anyway, §10.7).
           readonly property var managedNames: (intRow.modelData.profiles || []).filter(p => p && p.managed === true).map(p => p.name)
+          // This integration's setup pane is the open one — manual
+          // provisioning surfaces hide while it is.
+          readonly property bool setupPaneOpen: root.setupFor === intRow.modelData.name
+          // The typed-in add-account name collides with a managed profile.
+          readonly property bool draftCollides: intRow.managedNames.indexOf(newProfile.text) >= 0
+          // Single-account integrations: the implicit sole profile, if any.
+          readonly property var defaultProfile: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0] : null
           Layout.fillWidth: true
           spacing: Style.marginXS
 
@@ -567,7 +574,7 @@ FloatingWindow {
           // into the store editor mid-flow invites conflicting writes and
           // confuses the two surfaces). They return when the pane closes.
           ColumnLayout {
-            visible: intRow.modelData.multiProfile === true && root.setupFor !== intRow.modelData.name
+            visible: intRow.modelData.multiProfile === true && !intRow.setupPaneOpen
             Layout.fillWidth: true
             spacing: Style.marginS
 
@@ -600,7 +607,7 @@ FloatingWindow {
             // the broker): the draft editor is suppressed while it collides.
             NText {
               objectName: "draftError-" + (intRow.modelData.name || "")
-              visible: newProfile.text.length > 0 && intRow.managedNames.indexOf(newProfile.text) >= 0
+              visible: newProfile.text.length > 0 && intRow.draftCollides
               Layout.fillWidth: true
               text: I18n.tr("settings.integrations-profile-managed-conflict")
               color: Color.mError
@@ -612,7 +619,7 @@ FloatingWindow {
             // set-field). Not instantiated while the name collides with a
             // managed profile, so no stray editable rows leak into the tree.
             Loader {
-              active: newProfile.text.length > 0 && intRow.managedNames.indexOf(newProfile.text) < 0
+              active: newProfile.text.length > 0 && !intRow.draftCollides
               visible: active
               Layout.fillWidth: true
               sourceComponent: ProfileEditor {
@@ -629,18 +636,18 @@ FloatingWindow {
           // Single-account: the implicit "default" profile, no profile chrome.
           ProfileEditor {
             objectName: "profileEditor-" + (intRow.modelData.name || "")
-            visible: intRow.modelData.multiProfile !== true && root.setupFor !== intRow.modelData.name
+            visible: intRow.modelData.multiProfile !== true && !intRow.setupPaneOpen
             Layout.fillWidth: true
             intName: intRow.modelData.name
             profileName: "default"
             configSchema: intRow.modelData.config || []
             secretSchema: intRow.modelData.secrets || []
-            configValues: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0].config : ({})
-            secretStatus: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0].secrets : ({})
+            configValues: intRow.defaultProfile ? intRow.defaultProfile.config : ({})
+            secretStatus: intRow.defaultProfile ? intRow.defaultProfile.secrets : ({})
             removable: false
             showName: false
-            managed: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? (intRow.modelData.profiles[0].managed === true) : false
-            shadowed: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? (intRow.modelData.profiles[0].shadowed === true) : false
+            managed: intRow.defaultProfile ? (intRow.defaultProfile.managed === true) : false
+            shadowed: intRow.defaultProfile ? (intRow.defaultProfile.shadowed === true) : false
           }
         }
       }

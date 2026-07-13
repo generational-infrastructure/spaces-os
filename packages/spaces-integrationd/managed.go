@@ -26,6 +26,11 @@ import (
 // catching a re-stage that happened while no client op fired.
 const managedTickInterval = 30 * time.Second
 
+// sourceNix is the Source value marking an enabled.json entry as owned by a
+// Nix enable verdict (reconcile manages it); empty Source means a user (GUI)
+// enable.
+const sourceNix = "nix"
+
 // ManagedState is the parsed managed.json (§10.4). generation is a monotonic
 // counter the stager bumps on EVERY re-stage; it plus the file mtime drive the
 // broker's change detection.
@@ -59,6 +64,10 @@ func (s *Server) managedFile() string {
 // per call and reloads only when the mtime changed (or the file appeared /
 // disappeared). Caller MUST hold s.mu — the cache fields live under it. An
 // absent file yields the empty state (no Nix opinion anywhere).
+//
+// Snapshot immutability: the returned ManagedState is never mutated after
+// publication (readManaged builds fresh maps on every load), so a caller may
+// copy it under mu and keep reading it after releasing the lock.
 func (s *Server) managedState() ManagedState {
 	path := s.managedFile()
 	fi, err := os.Stat(path)
@@ -82,6 +91,8 @@ func (s *Server) managedState() ManagedState {
 
 // readManaged parses managed.json, returning the empty state on any read/parse
 // error so one malformed stage cannot wedge the broker (mirrors loadDefs).
+// Each call builds fresh maps — the result is treated as immutable once cached
+// by managedState (see its snapshot-immutability note).
 func readManaged(path string) ManagedState {
 	empty := ManagedState{Integrations: map[string]ManagedIntegration{}}
 	data, err := os.ReadFile(path)
@@ -169,7 +180,7 @@ func (s *Server) mergeManagedProfiles(d Definition, user []ProfileInfo, mi Manag
 func foldVerdicts(st *EnabledState, managed ManagedState) bool {
 	changed := false
 	for name, entry := range st.Integrations {
-		if entry.Source != "nix" {
+		if entry.Source != sourceNix {
 			continue
 		}
 		if mi, ok := managed.Integrations[name]; !ok || mi.Enable == nil {
@@ -181,7 +192,7 @@ func foldVerdicts(st *EnabledState, managed ManagedState) bool {
 		if mi.Enable == nil {
 			continue
 		}
-		want := IntegrationState{Enabled: *mi.Enable, Source: "nix"}
+		want := IntegrationState{Enabled: *mi.Enable, Source: sourceNix}
 		if st.Integrations[name] != want {
 			st.Integrations[name] = want
 			changed = true

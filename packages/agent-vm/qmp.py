@@ -155,10 +155,8 @@ def _framebuffer_size() -> tuple[int, int]:
     and read its IHDR. Pixel→abs scaling needs the live mode, which
     niri picks for the virtual display and can change between boots.
 
-    The scratch file lives beside the QMP socket, NOT in /tmp: QEMU may
-    run under a private-tmp sandbox (e.g. launched from a systemd unit
-    with PrivateTmp), so its /tmp differs from ours — but the socket
-    directory is a path both ends already share.
+    The scratch file lives beside the QMP socket so both ends share
+    the dir.
     """
     scratch = pathlib.Path(QMP_PATH).parent / f".fbsize-{os.getpid()}.png"
     try:

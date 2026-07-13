@@ -1,7 +1,6 @@
 import json
 import os
 import socket
-import stat
 import sys
 import threading
 import time
@@ -9,6 +8,7 @@ import time
 import integration_proton
 import pytest
 import tomllib
+from conftest import _write_exec
 
 # The autouse _probe_ok fixture replaces integration_proton.bridge_probe for the
 # server-driven tests; the probe unit tests below exercise the real function
@@ -83,11 +83,6 @@ bridge_password = "bp-personal-123"
 [proton.work]
 bridge_password = "bp-work-456"
 """
-
-
-def _write_exec(path, text):
-    path.write_text(text.replace("__PY__", sys.executable))
-    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
 @pytest.fixture(scope="module")

@@ -45,8 +45,9 @@ SMTP_PORT = 1025
 ENCRYPTION = "start-tls"
 
 # Second console script himalaya + msmtp call to fetch the bridge password from
-# the sealed store. Overridable via env so tests point at a resolvable command
-# without the wheel's entry point being installed.
+# the sealed store. Overridable via the SPACES_PROTON_AUTHCMD env var (consulted
+# in _authcmd()) so tests point at a resolvable command without the wheel's
+# entry point being installed.
 AUTHCMD = "integration-proton-authcmd"
 
 # Store fields every tool needs before himalaya can run. The full field schema

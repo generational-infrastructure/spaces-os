@@ -275,11 +275,11 @@ QtObject {
       // {"value":...}). Returns false when the stream is torn down or the
       // socket is not connected. The stream stays open — teardown is still
       // peer close / error / closeStream().
-      function sendLine(payload) {
+      function sendLine(msg) {
         if (ended || !connected)
           return false;
         try {
-          write(JSON.stringify(payload) + "\n");
+          write(JSON.stringify(msg) + "\n");
           flush();
           return true;
         } catch (_e) {

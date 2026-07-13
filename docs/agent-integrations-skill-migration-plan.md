@@ -2,10 +2,11 @@
 
 **Status:** IMPLEMENTED (2026-07-01). The three secret-bearing skills (`email`,
 `calendar`, `contacts`) now run as sandboxed MCP integrations on the unified,
-host+tpm2-sealed profile store; `skill-config` is relocated behind the wall as
-the store engine (still used unchanged by the agent-facing `signal`
-skills). Built on Option 3 (blob-credential store; TPM-at-rest parity with
-GitHub). Read [agent-integrations-design.md](./agent-integrations-design.md) for
+host+tpm2-sealed profile store; `skill-config` survives only behind the wall
+as the store engine (the `signal` skill has since migrated to an integration,
+so no agent-facing user remains). Built on Option 3 (blob-credential store;
+TPM-at-rest parity with GitHub). Read
+[agent-integrations-design.md](./agent-integrations-design.md) for
 the architecture; this doc records the plan and what shipped.
 
 **Verified:** the `--user --uid=self` host+tpm2 decrypt build-gate (round-trips);
@@ -177,8 +178,10 @@ decrypt-to-edit; confirm it works user-scoped before building on it.
   `skills/{email,calendar,contacts}` markdown, their `builtinSkills` entries,
   and the `skill-config` bash-confirm allowlist entry — so the agent can no
   longer run `skill-config` in its own domain.
-- Deleting the `skill-config` binary itself waits until `signal` also
-  migrates (it still uses the old agent-facing path).
+- Deleting the `skill-config` binary is no longer blocked on `signal`: the
+  `signal` skill has since migrated to an integration (QR linking is the GUI
+  setup flow), so `skill-config` survives only as the behind-the-wall store
+  engine.
 
 ## The steps
 
@@ -283,6 +286,6 @@ on the new tools: `message_send`/`put`/`delete` prompt; reads auto-run.
 ## Deferred (out of this plan)
 - Agent-*proposed* provisioning/enable (req-11, §5.6) — the panel/user drives
   provisioning; the agent may trigger a prompt but never enables.
-- `signal` (QR channel) migration; deleting the
-  `skill-config` binary.
+- `signal` (QR channel) migration — since done as an integration (QR linking
+  is the GUI setup flow); deleting the `skill-config` binary.
 - Per-host network proxy (§3F); custom-port accounts beyond the manifest set.

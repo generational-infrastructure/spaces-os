@@ -54,17 +54,6 @@ test("lowerIntegrationPolicy: a shared exchange dir joins the writable surface",
   ]);
 });
 
-test("lowerIntegrationPolicy: the unit-private tmpfs joins the writable surface", () => {
-  // Every integration unit runs with PrivateTmp=disconnected (lib.nix), so
-  // /tmp and /var/tmp are a private per-unit tmpfs — but Landlock is
-  // deny-by-default and landlock-exec applies the policy INSIDE the mount
-  // namespace, so the private tmpfs still needs an explicit rw grant or
-  // tempfile.mkdtemp in the server dies with "No usable temporary directory".
-  const p = lowerIntegrationPolicy(githubSpec, resolved);
-  expect(p.rwDirs).toContain("/tmp");
-  expect(p.rwDirs).toContain("/var/tmp");
-});
-
 test("resolveFromEnv: colon-lists split, absent vars yield empty", () => {
   expect(resolveFromEnv({ STATE_DIRECTORY: "/a:/b" }).stateDirs).toEqual([
     "/a",

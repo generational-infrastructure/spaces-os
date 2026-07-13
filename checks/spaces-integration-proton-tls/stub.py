@@ -1,6 +1,7 @@
 # Minimal STARTTLS IMAP/SMTP stub that presents a caller-supplied
-# certificate, used to prove the email skill's Proton-Bridge cert
-# handling (see ./default.nix). It is intentionally dumb: it only needs
+# certificate, used to prove that integration-proton's generated transports
+# (himalaya IMAP config, msmtp send detour) trust a Bridge-style
+# certificate (see ./default.nix). It is intentionally dumb: it only needs
 # to get far enough for the client to validate the server certificate.
 #
 #   argv: <IMAP|SMTP> <certfile> <keyfile> <port>

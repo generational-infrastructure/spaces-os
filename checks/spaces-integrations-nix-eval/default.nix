@@ -8,8 +8,8 @@
 #     definition carrying the gateway/panel contract but no command/secret value;
 #   - the lowering: running the real spaces-landlock-policy CLI on sample
 #     resolved paths yields a deny-by-default landlockconfig granting EXACTLY the
-#     StateDirectory (rw), the credentials mount (ro), and the declared egress
-#     port — nothing else.
+#     StateDirectory + private tmpfs (rw), the credentials mount (ro), and the
+#     declared egress/bind ports — nothing else.
 #
 # Eval-discipline: the unit's Exec* lines reference landlock-exec; their shape
 # is asserted at eval (string match never realizes the Rust build), then stripped

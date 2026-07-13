@@ -76,6 +76,17 @@ func NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot string, c
 
 func errAck(msg string) Ack { return Ack{Op: "error", Error: msg} }
 
+// managedProfileErr / managedEnableErr build the stable GUI-contract rejection
+// messages for Nix-managed state; the GUI keys its lock affordances off these
+// exact strings, so their wire form must not change.
+func managedProfileErr(profile string) Ack {
+	return errAck("profile '" + profile + "' is managed by system configuration")
+}
+
+func managedEnableErr(integration string) Ack {
+	return errAck("integration '" + integration + "' enable state is managed by system configuration")
+}
+
 // Unit-name helpers: the systemd unit names and the twin setup socket filename
 // are each derived from the integration name in exactly one place.
 func socketUnit(name string) string       { return fmt.Sprintf("spaces-integration-%s.socket", name) }
@@ -181,6 +192,9 @@ func (s *Server) dispatch(req Request) any {
 const (
 	setupDialAttempts = 100
 	setupDialInterval = 50 * time.Millisecond
+	// setupLineBufSize caps one setup-channel NDJSON line (helper events can
+	// embed data-URI images).
+	setupLineBufSize = 1 << 20
 )
 
 // ReconcileEnabled reconciles run state at startup (and is re-invoked whenever
@@ -227,7 +241,7 @@ func (s *Server) reconcileLocked() {
 		}
 		// A Nix enable=false verdict actively stops the unit (overrides a user
 		// enable); a plain user-disabled entry is left alone.
-		if entry.Source == "nix" {
+		if entry.Source == sourceNix {
 			sock := socketUnit(name)
 			svc := serviceUnit(name)
 			if msg, err := s.runSystemctl("stop", sock, svc); err != nil {
@@ -412,7 +426,7 @@ func (s *Server) relay(client, helper net.Conn, integration string) bool {
 	// Forward panel lines to the helper; a read error means the panel is gone,
 	// so close the helper to unblock the loop below and tear the flow down.
 	go func() {
-		cr := bufio.NewReaderSize(client, 1<<20)
+		cr := bufio.NewReaderSize(client, setupLineBufSize)
 		for {
 			line, err := cr.ReadBytes('\n')
 			if len(line) > 0 {
@@ -427,7 +441,7 @@ func (s *Server) relay(client, helper net.Conn, integration string) bool {
 		helper.Close()
 	}()
 
-	r := bufio.NewReaderSize(helper, 1<<20)
+	r := bufio.NewReaderSize(helper, setupLineBufSize)
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
@@ -533,7 +547,7 @@ func (s *Server) removeProfileDispatch(integration, profile string) Ack {
 	// untouched, but the managed row itself cannot be removed at runtime.
 	if mi, mok := managed.Integrations[integration]; mok {
 		if _, isManaged := mi.Profiles[profile]; isManaged {
-			return errAck("profile '" + profile + "' is managed by system configuration")
+			return managedProfileErr(profile)
 		}
 	}
 	if ok && d.Setup {
@@ -603,7 +617,7 @@ func (s *Server) removeProfileWithHelper(integration, profile string, d Definiti
 // remove (no panel connection): a `done` event is success; an `error` event or
 // EOF before any terminal event is failure.
 func (s *Server) consumeRemoveEvents(helper net.Conn) error {
-	r := bufio.NewReaderSize(helper, 1<<20)
+	r := bufio.NewReaderSize(helper, setupLineBufSize)
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
@@ -771,7 +785,7 @@ func (s *Server) setField(integration, profile, field, value string) Ack {
 	// stable message the GUI keys its lock affordance off.
 	if mi, ok := s.managedState().Integrations[integration]; ok {
 		if _, managed := mi.Profiles[profile]; managed {
-			return errAck("profile '" + profile + "' is managed by system configuration")
+			return managedProfileErr(profile)
 		}
 	}
 	_, isConfig := d.Config[field]
@@ -871,7 +885,7 @@ func (s *Server) enable(integration string) Ack {
 	// A Nix enable verdict owns the run state (§10.5): the user cannot flip it.
 	managed := s.managedState()
 	if mi, ok := managed.Integrations[integration]; ok && mi.Enable != nil {
-		return errAck("integration '" + integration + "' enable state is managed by system configuration")
+		return managedEnableErr(integration)
 	}
 
 	// A field-less definition (config={}, secrets={}) has no per-profile fields
@@ -939,7 +953,7 @@ func (s *Server) disable(integration string) Ack {
 	}
 	// A Nix enable verdict owns the run state (§10.5): the user cannot flip it.
 	if mi, ok := s.managedState().Integrations[integration]; ok && mi.Enable != nil {
-		return errAck("integration '" + integration + "' enable state is managed by system configuration")
+		return managedEnableErr(integration)
 	}
 
 	sock := socketUnit(integration)

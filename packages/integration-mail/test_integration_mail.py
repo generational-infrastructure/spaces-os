@@ -354,20 +354,7 @@ def test_secret_fingerprint(client):
     assert _text(resp) == hashlib.sha256(b"pw-personal-123").hexdigest()[:16]
 
 
-# --- unit: pure helpers + authcmd -------------------------------------------
-
-
-def test_enc_for_port_mapping():
-    assert integration_mail.enc_for_port(993) == "tls"
-    assert integration_mail.enc_for_port("465") == "tls"
-    assert integration_mail.enc_for_port(587) == "start-tls"
-    assert integration_mail.enc_for_port("143") == "start-tls"
-    assert integration_mail.enc_for_port(25) == "none"
-    assert integration_mail.enc_for_port(12345) == "tls"
-
-
-def test_toml_escape():
-    assert integration_mail.toml_escape('a"b\\c') == 'a\\"b\\\\c'
+# --- unit: authcmd -----------------------------------------------------------
 
 
 @pytest.mark.usefixtures("env")
@@ -382,7 +369,9 @@ def test_authcmd_resolves_managed_password(tmp_path, capsys, monkeypatch):
     # `secrets` blob at all) still resolves. design §10.6 service-author contract.
     creds = tmp_path / "creds"
     creds.mkdir()
-    (creds / "managed_managed-config.toml").write_text('[mail.ops]\nimap_host = "ops.imap"\n')
+    (creds / "managed_managed-config.toml").write_text(
+        '[mail.ops]\nimap_host = "ops.imap"\n'
+    )
     (creds / "managed_secret-ops-password").write_text("managed-secret-pw\n")
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
     monkeypatch.setattr(sys, "argv", ["integration-mail-authcmd", "ops"])

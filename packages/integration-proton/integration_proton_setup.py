@@ -51,17 +51,17 @@ from google.protobuf.wrappers_pb2 import StringValue
 # the store reader is used to resolve a profile's email in remove mode.
 from spaces_integration_mcp import _listen, store_profile
 
+# Pinned mail-server ports (STARTTLS both ways) the Bridge must expose and the
+# Bridge state root are single-sourced in the server module, which pins the
+# same values for himalaya/msmtp.
+from integration_proton import IMAP_PORT, SMTP_PORT, _state_root
+
 SERVER_NAME = "integration-proton-setup"
 
 # Resolved via PATH so tests can shadow it with a fake executable.
 BRIDGE_BINARY = "protonmail-bridge"
 
 CLIENT_PLATFORM = "spaces"
-
-# Pinned mail-server ports (STARTTLS both ways) the Bridge must expose; the
-# server module pins the same values for himalaya/msmtp.
-IMAP_PORT = 1143
-SMTP_PORT = 1025
 
 
 def _wire_pw(secret: str) -> bytes:
@@ -75,16 +75,17 @@ def _wire_pw(secret: str) -> bytes:
 # must verify against, even over a unix socket.
 _TLS_NAME = "127.0.0.1"
 
-_STATE_ENV = "SPACES_PROTON_BRIDGE_STATE"
-_DEFAULT_STATE = "~/.local/state/protonmail-bridge"
 
 # The transient Bridge writes grpcServerConfig.json (temp+rename) shortly after
-# start; poll for it. Login blocks on the human, so it gets a generous window.
+# start; poll for it.
 _CONFIG_POLL_DEADLINE = 30.0
-_CONFIG_POLL_INTERVAL = 0.2
+# Shared poll cadence: grpcServerConfig.json readiness and cert.pem export.
+_POLL_INTERVAL = 0.2
 _CHANNEL_READY_TIMEOUT = 15.0
-_LOGIN_TIMEOUT = 300.0
-_SETTINGS_TIMEOUT = 60.0
+# Whole-flow deadline on the RunEventStream RPC: caps the entire link()/remove()
+# event stream, including the time the human spends answering prompts, so it
+# gets a generous window.
+_EVENT_STREAM_DEADLINE = 300.0
 _QUIT_TIMEOUT = 10.0
 # ExportTLSCertificates is a fire-and-forget goroutine server-side (no success
 # event, only error events); poll for cert.pem landing on disk. A local file
@@ -144,10 +145,6 @@ def _set_field(conn, profile, field, value):
 # ── transient Bridge lifecycle ──────────────────────────────────────
 
 
-def _state_root():
-    return os.path.expanduser(os.environ.get(_STATE_ENV) or _DEFAULT_STATE)
-
-
 def _bridge_env():
     """os.environ plus the XDG pins the resurrected daemon and the setup helper
     share (proton-bridge-facts). DBUS unset makes Bridge fall back to the `pass`
@@ -187,7 +184,7 @@ def _poll_config(path):
             pass
         if time.monotonic() >= deadline:
             raise _Fail("Proton Bridge did not become ready (no gRPC config file)")
-        time.sleep(_CONFIG_POLL_INTERVAL)
+        time.sleep(_POLL_INTERVAL)
 
 
 def _make_channel(cfg):
@@ -422,7 +419,7 @@ def _export_cert(stub, md):
     while not (os.path.exists(cert) and os.path.exists(key)):
         if time.monotonic() >= deadline:
             raise _Fail("Proton Bridge did not export its TLS certificate")
-        time.sleep(_CONFIG_POLL_INTERVAL)
+        time.sleep(_POLL_INTERVAL)
 
 
 # ── flows ───────────────────────────────────────────────────────────
@@ -434,7 +431,7 @@ def link(conn, reader, profile):
         events = stub.RunEventStream(
             pb.EventStreamRequest(ClientPlatform=CLIENT_PLATFORM),
             metadata=md,
-            timeout=_LOGIN_TIMEOUT,
+            timeout=_EVENT_STREAM_DEADLINE,
         )
 
         _await_users_loaded(events)
@@ -454,7 +451,7 @@ def link(conn, reader, profile):
             user_id = _drive_login(conn, reader, stub, md, events, email)
 
         user = stub.GetUser(StringValue(value=user_id), metadata=md)
-        bridge_password = bytes(user.password).decode("utf-8")
+        bridge_password = user.password.decode("utf-8")
         email = email or _user_email(user)
 
         stub.SetMailServerSettings(
@@ -483,7 +480,7 @@ def remove(conn, reader, profile):
         events = stub.RunEventStream(
             pb.EventStreamRequest(ClientPlatform=CLIENT_PLATFORM),
             metadata=md,
-            timeout=_LOGIN_TIMEOUT,
+            timeout=_EVENT_STREAM_DEADLINE,
         )
         _await_users_loaded(events)
         users = list(stub.GetUserList(Empty(), metadata=md).users)

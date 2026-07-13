@@ -31,7 +31,7 @@ pkgs.runCommand "spaces-integration-wrapper-shell"
       pkgs.python3
     ];
     STUB = ./stub.py;
-    WRAPPERS = map (p: "${p}/bin/${p.meta.mainProgram}") [
+    WRAPPERS = map pkgs.lib.getExe [
       pkgsSelf.integration-proton
       pkgsSelf.integration-mail
     ];
@@ -48,6 +48,7 @@ pkgs.runCommand "spaces-integration-wrapper-shell"
       [ -s port.txt ] && break
       sleep 0.1
     done
+    [ -s port.txt ] || { echo 'FAIL: stub never bound' >&2; cat stub.log >&2; exit 1; }
     PORT=$(cat port.txt)
     echo "stub on port $PORT"
 

@@ -22,8 +22,10 @@ type Request struct {
 	Op string `json:"op"`
 	// Action selects the setup helper's mode on the setup channel: "" or
 	// "link" (default device-linking) or "remove" (drive the helper's vendor
-	// removal). Only meaningful for op=="setup"; the broker also sets it itself
-	// when it drives the remove dispatch for op=="remove-profile".
+	// removal). Only meaningful for op=="setup". Request.Action stays
+	// client-only: the broker never constructs a Request; for broker-driven
+	// removes (op=="remove-profile") it writes the equivalent setupAction
+	// NDJSON line (writeSetupAction) directly to the helper socket.
 	Action      string `json:"action,omitempty"`
 	Integration string `json:"integration,omitempty"`
 	Profile     string `json:"profile,omitempty"`

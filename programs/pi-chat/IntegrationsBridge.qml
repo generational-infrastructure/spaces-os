@@ -59,7 +59,7 @@ QtObject {
 
   // ── setup flow ────────────────────────────────────────────────────
   // op:"setup" opens a DEDICATED long-lived broker connection that
-  // streams NDJSON events (qr | message | done | error) until the
+  // streams NDJSON events (see the ev* constants below) until the
   // broker closes it. Only one flow runs at a time.
 
   // Setup-stream event names (broker → panel `event` field). text-field and
@@ -93,9 +93,10 @@ QtObject {
   function disable(integration) { _request({ op: root.opDisable, integration: integration }); }
 
   // Open the sandboxed setup channel for `integration`. The broker
-  // validates it is enabled + setup-capable, starts the twin setup
-  // unit, and relays its NDJSON events until done/error. Returns false
-  // when inert, already running, or the socket could not be opened.
+  // validates it is setup-capable (enabled or disabled — setup on a
+  // disabled integration is the provisioning path), starts the twin
+  // setup unit, and relays its NDJSON events until done/error. Returns
+  // false when inert, already running, or the socket could not be opened.
   function startSetup(integration) {
     if (root.sockPath === "") { root.lastError = "no integrations socket"; return false; }
     if (root.setupActive) { root.lastError = "setup already running"; return false; }

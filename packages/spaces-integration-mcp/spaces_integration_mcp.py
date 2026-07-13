@@ -141,8 +141,9 @@ def _managed_profiles(kinds):
 
 
 def store_profile(profile, kinds=("config", "secrets")):
-    """Effective field values for one profile: user credential blobs merged
-    UNDER Nix-managed credentials (design §10.3/§10.6).
+    """Effective field values for one profile: a Nix-managed profile shadows a
+    same-named user profile wholesale (no per-field merge); otherwise the user
+    credential blobs are used (design §10.3/§10.6).
 
     User blobs: $CREDENTIALS_DIRECTORY/config and .../secrets, each skill-config
     TOML ([<skill>.<profile>] tables). Managed sources (staged by the root

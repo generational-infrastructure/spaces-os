@@ -6,14 +6,10 @@ identical across every mailbox backend, so they live here once and each
 integration server injects only what differs.
 
 `integration-mail` builds a generic IMAP/SMTP config and needs no pre-flight
-probe. The future `integration-proton` reuses the SAME tool bodies but pins the
-transport to the local Proton Bridge (host 127.0.0.1, imap 1143 start-tls with
-`backend.encryption.cert` at the Bridge cert path) and routes sending through
-himalaya's `sendmail` backend to msmtp with a `tls_trust_file`, because himalaya
-1.2.0's rustls stack rejects the Bridge's CA:TRUE leaf certificate
-(pimalaya/himalaya#633). The msmtp detour is a workaround: drop it once nixpkgs
-ships himalaya > 1.2.0. Proton also passes a `precheck` that probes the Bridge
-before any himalaya exec.
+probe. `integration-proton` reuses the SAME tool bodies but pins the transport
+to the local Proton Bridge and passes a `precheck` that probes the Bridge
+before any himalaya exec; see integration_proton.py's module docs for the
+Bridge transport and msmtp-workaround details.
 """
 
 import contextlib
