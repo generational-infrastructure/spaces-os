@@ -63,6 +63,11 @@ type Server struct {
 	// acted on, not the state last observed.
 	managedReconciled       ManagedState
 	managedReconciledLoaded bool
+	// In-flight connection handlers (and the relay forwarder goroutines they
+	// spawn). Wait() drains them after the listener closes — a setup flow keeps
+	// doing unit work (try-restart, setup-unit stop, unpark) after the panel
+	// already saw its terminal event.
+	conns sync.WaitGroup
 }
 
 func NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot string, credsEncrypt, credsDecrypt, systemctl, skillConfig []string) *Server {
@@ -101,7 +106,8 @@ func setupSocketUnit(name string) string  { return fmt.Sprintf("spaces-integrati
 func setupServiceUnit(name string) string { return fmt.Sprintf("spaces-integration-%s-setup.service", name) }
 func setupSockPath(name string) string    { return fmt.Sprintf("spaces-integration-%s-setup.sock", name) }
 
-// Serve accepts connections until the listener is closed.
+// Serve accepts connections until the listener is closed. Each connection is
+// handled on its own tracked goroutine; Wait drains them.
 func (s *Server) Serve(l net.Listener) {
 	for {
 		conn, err := l.Accept()
@@ -112,8 +118,20 @@ func (s *Server) Serve(l net.Listener) {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		go s.handleConn(conn)
+		s.conns.Add(1)
+		go func() {
+			defer s.conns.Done()
+			s.handleConn(conn)
+		}()
 	}
+}
+
+// Wait blocks until every in-flight connection handler (including a setup
+// flow's post-stream unit work) has finished. Call after closing the listener
+// for an orderly drain; the tests' env teardown relies on it so straggling
+// systemctl runs cannot race TempDir cleanup.
+func (s *Server) Wait() {
+	s.conns.Wait()
 }
 
 func (s *Server) handleConn(conn net.Conn) {
@@ -442,7 +460,9 @@ func (s *Server) dialSetup(integration string) (net.Conn, error) {
 func (s *Server) relay(client, helper net.Conn, integration string) bool {
 	// Forward panel lines to the helper; a read error means the panel is gone,
 	// so close the helper to unblock the loop below and tear the flow down.
+	s.conns.Add(1)
 	go func() {
+		defer s.conns.Done()
 		cr := bufio.NewReaderSize(client, setupLineBufSize)
 		for {
 			line, err := cr.ReadBytes('\n')

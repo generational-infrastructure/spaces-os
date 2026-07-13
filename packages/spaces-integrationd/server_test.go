@@ -27,6 +27,9 @@ import (
 // plaintext.
 type testEnv struct {
 	t           *testing.T
+	l           net.Listener
+	sysctl      string
+	sysctlExit  int
 	srv         *Server
 	sock        string
 	defsDir     string
@@ -117,11 +120,27 @@ func newTestEnv(t *testing.T, systemctlExit int) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() })
 	srv := NewServer(defsDir, stateDir, managedRoot, runtimeDir, runtimeRoot,
 		[]string{credsEnc}, []string{credsDec}, []string{sysctl}, []string{"skill-config"})
+	t.Cleanup(func() { l.Close(); srv.Wait() })
 	go srv.Serve(l)
-	return &testEnv{t: t, srv: srv, sock: sock, defsDir: defsDir, stateDir: stateDir, managedRoot: managedRoot, sysctlLog: sysctlLog, runtimeRoot: runtimeRoot}
+	return &testEnv{t: t, srv: srv, sock: sock, defsDir: defsDir, stateDir: stateDir, managedRoot: managedRoot, sysctlLog: sysctlLog, runtimeRoot: runtimeRoot, l: l, sysctl: sysctl, sysctlExit: systemctlExit}
+}
+
+// drain closes the broker listener and outwaits every in-flight connection
+// handler — including the post-stream unit work a setup flow performs AFTER
+// the panel already saw its terminal event. Idempotent.
+func (e *testEnv) drain() {
+	e.l.Close()
+	e.srv.Wait()
+}
+
+// slowSystemctl rewrites the systemctl stub to sleep before logging its argv,
+// reproducing the nix sandbox's slow fork/exec: the window in which a setup
+// flow's post-`done` unit work straggles behind the test body.
+func (e *testEnv) slowSystemctl() {
+	writeScript(e.t, e.sysctl,
+		"#!/bin/sh\nsleep 0.1\necho \"$@\" >> "+e.sysctlLog+"\nexit "+itoa(e.sysctlExit)+"\n")
 }
 
 // roundtripRaw sends one raw line and returns the single reply line parsed into
@@ -939,6 +958,36 @@ func TestSetupConcurrentListSucceeds(t *testing.T) {
 	close(release) // let the helper finish so the stream drains cleanly
 	if ev := e.readEvent(r); ev["event"] != "done" {
 		t.Fatalf("want done, got %v", ev)
+	}
+}
+
+// A setup flow keeps doing unit work AFTER the panel saw `done` — the
+// post-stream try-restart and the deferred setup-unit stop. The harness must
+// outwait that work before TempDir cleanup: with a slow systemctl (the nix
+// sandbox's fork/exec latency) a straggling stub otherwise recreates
+// systemctl.log mid-RemoveAll and the TempDir teardown fails ENOTEMPTY.
+func TestSetupTeardownDrainsPostStreamWork(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.slowSystemctl()
+	e.writeDef("signal", signalSetupDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
+	}
+	conn.Close()
+
+	e.drain()
+	calls := e.systemctlCalls()
+	if !hasPrefixIn(calls, "try-restart spaces-integration-signal.service") ||
+		!hasPrefixIn(calls, "stop spaces-integration-signal-setup.service") {
+		t.Fatalf("drain must outwait the post-stream unit work, got %v", calls)
 	}
 }
 
