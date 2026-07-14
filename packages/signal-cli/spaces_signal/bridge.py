@@ -20,12 +20,14 @@ sockets of its own — it is purely daemon → messages.db.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db as dbmod
@@ -124,6 +126,11 @@ def envelope_to_message(envelope: dict, account: dict | None = None) -> dict | N
 class BridgeConfig:
     db_path: Path
     daemon_socket: str
+    # signal-cli's on-disk account store (data/accounts.json). Counted into
+    # the exported accounts-health.json so the MCP tool gate can tell "never
+    # linked" from "linked but the daemon dropped the account at startup".
+    # None/absent/unparseable counts as 0.
+    accounts_store_path: Path | None = None
 
 
 class DaemonClientFactory:
@@ -239,6 +246,42 @@ class Bridge:
         with self._accounts_lock:
             self._accounts = accounts
         log.info("refreshed accounts: %r", accounts)
+        self._write_accounts_health(len(accounts))
+
+    def _store_account_count(self) -> int:
+        """Entries in signal-cli's on-disk data/accounts.json; 0 when the
+        path is unset, the file is absent, or it doesn't parse."""
+        path = self.config.accounts_store_path
+        if path is None:
+            return 0
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return 0
+        accounts = data.get("accounts") if isinstance(data, dict) else None
+        return len(accounts) if isinstance(accounts, list) else 0
+
+    def _write_accounts_health(self, loaded: int) -> None:
+        """Export accounts-health.json next to messages.db after each
+        successful listAccounts poll: `store` (on-disk account count) vs
+        `loaded` (what the daemon actually serves). store > loaded means
+        signal-cli's per-account startup network check silently dropped a
+        linked account — the MCP tool gate reads this to report that
+        honestly instead of the false 'not linked' hint. Atomic
+        (temp+rename) so the gate never sees a torn file; best-effort — a
+        write failure must not disturb the forwarder."""
+        health = {
+            "store": self._store_account_count(),
+            "loaded": loaded,
+            "updated": datetime.now(timezone.utc).isoformat(),
+        }
+        path = self.config.db_path.parent / "accounts-health.json"
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(health))
+            os.replace(tmp, path)
+        except OSError as exc:
+            log.warning("accounts-health write failed: %s", exc)
 
     def _accounts_snapshot(self) -> list[dict]:
         with self._accounts_lock:
@@ -393,10 +436,15 @@ class Bridge:
 # ── entry point ─────────────────────────────────────────────────────
 
 
+def _default_accounts_store_path() -> Path:
+    return Path.home() / ".local/share/signal-cli/data/accounts.json"
+
+
 def build_config_from_env() -> BridgeConfig:
     return BridgeConfig(
         db_path=dbmod.default_db_path(),
         daemon_socket=_default_daemon_socket(),
+        accounts_store_path=_default_accounts_store_path(),
     )
 
 

@@ -784,6 +784,53 @@ func TestSetupHappyPath(t *testing.T) {
 	}
 }
 
+// signalSetupRestartDef additionally pins setupRestart: the post-done
+// try-restart must hit EXACTLY these units instead of the legacy set
+// (own service + all extras). Signal's real manifest uses this to keep
+// spaces-signal-cli.service alive after a link — the daemon already holds the
+// freshly linked account live, and a restart triggers signal-cli's per-account
+// network check which silently drops the account on failure.
+const signalSetupRestartDef = `{
+  "name": "signal",
+  "description": "Signal",
+  "multiProfile": false,
+  "config": {},
+  "secrets": {},
+  "setup": true,
+  "extraServices": ["spaces-signal-cli.service", "spaces-signal-bridge.service"],
+  "setupRestart": ["spaces-integration-signal.service"]
+}`
+
+// With setupRestart present the post-setup try-restart hits ONLY the listed
+// units; extras keep running untouched. Absent setupRestart keeps the legacy
+// behavior (TestSetupHappyPath).
+func TestSetupRestartLimitsPostSetupUnits(t *testing.T) {
+	e := newTestEnv(t, 0)
+	e.writeDef("signal", signalSetupRestartDef)
+	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"signal": {Enabled: true}}})
+
+	ln := e.startSetupHelper("signal", func(conn net.Conn) {
+		defer conn.Close()
+		conn.Write([]byte(`{"event":"done"}` + "\n"))
+	})
+	defer ln.Close()
+
+	conn, r := e.openSetup("signal")
+	defer conn.Close()
+	if ev := e.readEvent(r); ev["event"] != "done" {
+		t.Fatalf("want done, got %v", ev)
+	}
+	want := []string{
+		"start spaces-integration-signal-setup.socket",
+		"try-restart spaces-integration-signal.service",
+		"stop spaces-integration-signal-setup.service spaces-integration-signal-setup.socket",
+	}
+	calls := e.waitSystemctl(func(c []string) bool { return len(c) >= 3 })
+	if !equalStrings(calls, want) {
+		t.Fatalf("want setupRestart-limited units %v, got %v", want, calls)
+	}
+}
+
 // Setup on a DISABLED integration is the provisioning path (proton bootstrap:
 // enable needs a complete profile, but bridge_password only exists after
 // setup — the gate would deadlock). The flow must run; setupPark daemons are

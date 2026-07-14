@@ -173,6 +173,12 @@ in
         "spaces-signal-cli.service"
         "spaces-signal-bridge.service"
       ];
+      # Post-setup restart: the MCP service ONLY — NOT spaces-signal-cli /
+      # spaces-signal-bridge. The daemon already holds the freshly linked
+      # account live; restarting it triggers signal-cli's per-account startup
+      # network check, which silently drops the account on failure (never
+      # retried), killing the link the setup flow just made.
+      setupRestart = lib.mkDefault [ "spaces-integration-signal.service" ];
       # GUI QR device-linking (design §5.5): the setup helper accepts the
       # activated socket, drives the signal-cli daemon's startLink/finishLink
       # JSON-RPC, and streams qr/message/done/error events to the panel.

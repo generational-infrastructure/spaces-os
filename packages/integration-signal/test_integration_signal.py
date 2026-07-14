@@ -15,6 +15,7 @@ import socket
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import integration_signal
@@ -297,6 +298,74 @@ def test_no_linked_account_is_treated_as_unlinked(tmp_path, monkeypatch):
         assert "Settings -> Integrations" in text
     finally:
         h.daemon.close()
+
+
+# ── gate honesty: bridge-exported accounts-health.json ──────────────
+# The bridge writes {"store", "loaded", "updated"} next to messages.db after
+# each listAccounts poll. store > loaded (or store > 0 with the daemon
+# unreachable) means a linked account EXISTS but signal-cli's per-account
+# startup network check silently dropped it (or the daemon is down) — the
+# gate must say so and point at a daemon restart, NOT the QR onboarding hint
+# (re-linking a linked host is the wrong remedy). Absent/stale health keeps
+# the onboarding hint unchanged.
+
+
+def _write_health(tmp_path, *, store, loaded, age_seconds=0.0):
+    updated = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    (tmp_path / "accounts-health.json").write_text(
+        json.dumps({"store": store, "loaded": loaded, "updated": updated.isoformat()})
+    )
+
+
+def test_unreachable_daemon_with_stored_account_reports_daemon_failure(
+    tmp_path, monkeypatch
+):
+    h = _make_harness(tmp_path, monkeypatch, with_socket=False)
+    h.daemon.close()
+    _write_health(tmp_path, store=1, loaded=1)
+    text, is_error = call("threads")
+    assert is_error is True
+    assert "systemctl --user restart spaces-signal-cli" in text
+    assert "journalctl" in text
+    # The false remedy must be gone: no QR onboarding pitch.
+    assert "Settings -> Integrations" not in text
+
+
+def test_daemon_up_but_account_not_loaded_reports_daemon_failure(tmp_path, monkeypatch):
+    # Daemon reachable, listAccounts empty, but the store holds an account:
+    # exactly the post-restart torn state the network check produces.
+    h = _make_harness(tmp_path, monkeypatch, accounts=[])
+    try:
+        _write_health(tmp_path, store=1, loaded=0)
+        text, is_error = call("threads")
+        assert is_error is True
+        assert "systemctl --user restart spaces-signal-cli" in text
+        assert "Settings -> Integrations" not in text
+    finally:
+        h.daemon.close()
+
+
+def test_zero_store_keeps_onboarding_hint(tmp_path, monkeypatch):
+    # Health file present but the store is empty: genuinely never linked.
+    h = _make_harness(tmp_path, monkeypatch, accounts=[])
+    try:
+        _write_health(tmp_path, store=0, loaded=0)
+        text, is_error = call("threads")
+        assert is_error is True
+        assert "Settings -> Integrations" in text
+    finally:
+        h.daemon.close()
+
+
+def test_stale_health_keeps_onboarding_hint(tmp_path, monkeypatch):
+    # A stale snapshot (bridge long dead) must not be trusted over the
+    # onboarding default.
+    h = _make_harness(tmp_path, monkeypatch, with_socket=False)
+    h.daemon.close()
+    _write_health(tmp_path, store=1, loaded=1, age_seconds=3600.0)
+    text, is_error = call("threads")
+    assert is_error is True
+    assert "Settings -> Integrations" in text
 
 
 # ── decision 1/8: read tools over the fixture DB ────────────────────

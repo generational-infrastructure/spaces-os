@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from spaces_integration_mcp import make_server, shared_dir
@@ -58,6 +59,21 @@ _ONBOARDING_HINT = (
 _UNLINKED_MSG = (
     "signal is not reachable (daemon down or no linked account).\n" + _ONBOARDING_HINT
 )
+_ACCOUNT_LOAD_FAILED_MSG = (
+    "a linked signal account EXISTS on this host, but the signal-cli daemon is "
+    "not serving it — the daemon is down, or its per-account startup network "
+    "check failed and silently dropped the account (torn state). do NOT "
+    "re-link; restart the daemon instead:\n"
+    "  systemctl --user restart spaces-signal-cli\n"
+    "if it persists, check `journalctl --user -u spaces-signal-cli`."
+)
+
+# accounts-health.json: the bridge's store-vs-loaded snapshot next to
+# messages.db, rewritten after every listAccounts poll (~5 min). Older than
+# this and the bridge itself is dead — the snapshot can no longer be trusted
+# over the onboarding default.
+_HEALTH_FILE_NAME = "accounts-health.json"
+_HEALTH_MAX_AGE_SECONDS = 900.0
 
 _SHORT_MAXLEN = 4  # names this short use a normalized distance, not lev<=2
 _NEAR_LEV = 2  # max Levenshtein edits a normal-length name may differ and warn
@@ -127,14 +143,49 @@ def _account_id(acct):
 # ── daemon probe / client ───────────────────────────────────────────
 
 
+def _read_accounts_health():
+    """The bridge's accounts-health.json (next to messages.db), or None when
+    absent, unparseable, or stale — in which case the gate falls back to the
+    onboarding hint."""
+    path = dbmod.default_db_path().parent / _HEALTH_FILE_NAME
+    try:
+        health = json.loads(path.read_text())
+        updated = datetime.fromisoformat(health["updated"])
+        age = datetime.now(timezone.utc) - updated
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(health.get("store"), int) or not isinstance(
+        health.get("loaded"), int
+    ):
+        return None
+    if age > timedelta(seconds=_HEALTH_MAX_AGE_SECONDS):
+        return None
+    return health
+
+
+def _gate_error(*, daemon_reachable):
+    """The error for a failed gate (daemon unreachable or zero accounts).
+    Honest triage via the bridge's health snapshot: an account sitting in
+    signal-cli's store that the daemon doesn't serve is a daemon/load failure
+    (remedy: restart), NOT an unlinked host (remedy: QR onboarding). Only a
+    fresh snapshot with store == 0 — or no usable snapshot at all — yields
+    the onboarding hint."""
+    health = _read_accounts_health()
+    if health is not None:
+        store, loaded = health["store"], health["loaded"]
+        if store > loaded or (store > 0 and not daemon_reachable):
+            return SignalError(_ACCOUNT_LOAD_FAILED_MSG)
+    return SignalError(_UNLINKED_MSG)
+
+
 def _connect_daemon():
     path = os.environ.get(DAEMON_SOCKET_ENV)
     if not path:
-        raise SignalError(_UNLINKED_MSG)
+        raise _gate_error(daemon_reachable=False)
     try:
         return JsonRpcClient(path, connect_timeout=_DAEMON_CONNECT_TIMEOUT)
     except OSError as exc:
-        raise SignalError(_UNLINKED_MSG) from exc
+        raise _gate_error(daemon_reachable=False) from exc
 
 
 def _list_accounts(client):
@@ -144,7 +195,7 @@ def _list_accounts(client):
     try:
         result = client.call("listAccounts")
     except (JsonRpcError, OSError, TimeoutError) as exc:
-        raise SignalError(_UNLINKED_MSG) from exc
+        raise _gate_error(daemon_reachable=False) from exc
     accounts = []
     if isinstance(result, list):
         for item in result:
@@ -156,7 +207,7 @@ def _list_accounts(client):
                     }
                 )
     if not accounts:
-        raise SignalError(_UNLINKED_MSG)
+        raise _gate_error(daemon_reachable=True)
     return accounts
 
 

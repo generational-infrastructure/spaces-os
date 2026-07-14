@@ -116,6 +116,14 @@ type Definition struct {
 	// try-restarts after a successful setup so a fresh link/state is picked up.
 	Setup         bool     `json:"setup"`
 	ExtraServices []string `json:"extraServices"`
+	// setupRestart, when present, names EXACTLY the units the broker
+	// try-restarts after a successful setup, overriding the default set (own
+	// service + all extraServices). Signal uses it to keep its daemon alive
+	// post-link: spaces-signal-cli already holds the freshly linked account
+	// live, and a restart triggers signal-cli's per-account startup network
+	// check, which silently drops the account on failure. Absent (nil) keeps
+	// the default.
+	SetupRestart []string `json:"setupRestart"`
 	// setupPark names user units the broker stops for the duration of a setup
 	// flow (link or remove) and starts again on the way out — single-instance
 	// vendor daemons (e.g. Proton Bridge) the sandboxed helper must displace to

@@ -466,6 +466,18 @@ hosts the interactive flow:
   notify), the panel reopens the flow. The agent's only visibility is a
   tool error ("integration not configured"); it may suggest opening
   settings but never participates.
+- **Post-setup pickup.** After a successful setup flow the broker
+  `try-restart`s the integration's own MCP service plus every
+  `extraServices` unit by default, so fresh vendor state is picked up. A
+  manifest may pin the exact set with `setupRestart` — signal restarts
+  ONLY its own MCP service: the signal-cli daemon already holds the
+  freshly linked account live, and restarting it triggers signal-cli's
+  per-account startup network check, which silently drops the account on
+  failure — the restart would kill the link it just made. To keep the
+  failure mode honest, the bridge exports a store-vs-loaded
+  `accounts-health.json` next to messages.db; the tool gate uses it to
+  report "account exists but the daemon failed to load it — restart
+  spaces-signal-cli" instead of a false "not linked" onboarding hint.
 
 Setup is strictly a user ↔ integration interaction mediated by the panel.
 

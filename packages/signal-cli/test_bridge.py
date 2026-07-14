@@ -19,6 +19,7 @@ import threading
 import time
 import unittest
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from spaces_signal import bridge as bridge_mod
@@ -609,6 +610,75 @@ class TestStartupSyncMultiAccount(unittest.TestCase):
         time.sleep(0.1)
         accounts_requested = sorted(p.get("account") for p in daemon.sync_requests)
         self.assertEqual(accounts_requested, ["+1111", "+2222"])
+
+
+class TestAccountsHealthFile(unittest.TestCase):
+    """After each successful listAccounts poll the bridge atomically
+    exports accounts-health.json next to messages.db: `store` (entries in
+    signal-cli's on-disk data/accounts.json; 0 if absent/unparseable) vs
+    `loaded` (the daemon's listAccounts count) plus an iso8601 `updated`
+    stamp. The signal MCP tool gate reads it to tell "never linked" from
+    "linked but the daemon dropped the account at its startup network
+    check" — the false 'not linked' hint this file exists to kill.
+    """
+
+    def _start_bridge(self, daemon_accounts: list[dict], store_content: str | None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        store_path = base / "signal-cli-data" / "accounts.json"
+        if store_content is not None:
+            store_path.parent.mkdir(parents=True)
+            store_path.write_text(store_content)
+
+        daemon = FakeSignalDaemon(str(base / "signal.sock"))
+        daemon.accounts = daemon_accounts
+        self.addCleanup(daemon.stop)
+
+        bridge = bridge_mod.Bridge(
+            bridge_mod.BridgeConfig(
+                db_path=base / "messages.db",
+                daemon_socket=daemon.sock_path,
+                accounts_store_path=store_path,
+            ),
+            accounts_refresh_seconds=60.0,
+        )
+        bridge.start()
+        self.addCleanup(bridge.stop)
+        # Quiesce: wait for the receiver's subscribe so teardown can't race
+        # the daemon's in-flight subscribeReceive response (broken pipe).
+        if not _wait_until(lambda: len(daemon.subscribed_conns) >= 1):
+            self.fail("bridge never subscribed")
+        return base / "accounts-health.json"
+
+    def _read_health(self, path: Path) -> dict:
+        if not _wait_until(path.exists):
+            self.fail("accounts-health.json never written")
+        return json.loads(path.read_text())
+
+    def test_store_vs_loaded_counts(self) -> None:
+        # Two accounts on disk, only one loaded by the daemon — the torn
+        # state the gate must be able to see.
+        store = json.dumps({"accounts": [{"number": "+1111"}, {"number": "+2222"}]})
+        health_path = self._start_bridge([{"uuid": "u1", "number": "+1111"}], store)
+        health = self._read_health(health_path)
+        self.assertEqual(health["store"], 2)
+        self.assertEqual(health["loaded"], 1)
+        # `updated` is a parseable iso8601 stamp.
+        datetime.fromisoformat(health["updated"])
+
+    def test_absent_store_counts_zero(self) -> None:
+        health_path = self._start_bridge([{"uuid": "u1", "number": "+1111"}], None)
+        health = self._read_health(health_path)
+        self.assertEqual(health["store"], 0)
+        self.assertEqual(health["loaded"], 1)
+
+    def test_unparseable_store_counts_zero(self) -> None:
+        health_path = self._start_bridge(
+            [{"uuid": "u1", "number": "+1111"}], "{not json"
+        )
+        health = self._read_health(health_path)
+        self.assertEqual(health["store"], 0)
 
 
 class TestDaemonSocketDefault(unittest.TestCase):

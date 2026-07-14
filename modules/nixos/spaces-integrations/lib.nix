@@ -192,6 +192,12 @@ in
         # vendor daemons for the duration of a setup flow (setupPark).
         extraServices = extraServiceNames;
         inherit (manifest) setupPark;
+        # setupRestart, when set, overrides the broker's post-setup try-restart
+        # set exactly (null -> default: own service + extraServices). Signal
+        # pins it to its own MCP service so the freshly linked signal-cli
+        # daemon is never restarted into its silent account-dropping startup
+        # network check.
+        inherit (manifest) setupRestart;
         # setup: true iff a twin setup unit exists — the panel gates its
         # Link/Setup button on this.
         setup = hasSetup;
@@ -352,9 +358,9 @@ in
             # yields zero credentials and the unit starts, a MISSING dir would
             # hard-fail it (243/CREDENTIALS), which is why the stager always makes
             # the subdir.
-            LoadCredential =
-              lib.optional hasConfig "config:${storeDir}/config.toml"
-              ++ [ "managed:${managedRoot}/%u/${name}" ];
+            LoadCredential = lib.optional hasConfig "config:${storeDir}/config.toml" ++ [
+              "managed:${managedRoot}/%u/${name}"
+            ];
             LoadCredentialEncrypted = lib.optional hasSecrets "secrets:${storeDir}/secrets";
           }
           // hardeningServiceConfig manifest.network;

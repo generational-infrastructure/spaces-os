@@ -319,6 +319,20 @@ let
           parses it. Default [] (signal declares none).
         '';
       };
+      setupRestart = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
+        description = ''
+          Full user unit names the broker try-restarts after a SUCCESSFUL setup
+          flow, overriding the default set (the integration's own MCP service
+          plus every extraServices unit). Lowered verbatim into the definition's
+          `setupRestart` (JSON null when unset -> broker default behavior).
+          Signal pins this to its own MCP service only: the signal-cli daemon
+          already holds the freshly linked account live, and restarting it
+          triggers signal-cli's per-account startup network check, which
+          silently drops the account on failure.
+        '';
+      };
       setup = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -384,7 +398,7 @@ let
   usersCfg = config.spaces.users;
   managed = integLib.mkManaged {
     users = usersCfg;
-    integrations = cfg.integrations;
+    inherit (cfg) integrations;
     # Validate against the SAME set staging filters to (normal users): a
     # declared system user must fail eval, not silently stage nothing.
     knownUsers = builtins.attrNames normalUsers;
@@ -543,7 +557,9 @@ let
         pname: profile:
         map (
           field:
-          "stage ${lib.escapeShellArg profile.secrets.${field}.file} ${intDir}/secret-${pname}-${field} ${own}"
+          "stage ${
+            lib.escapeShellArg profile.secrets.${field}.file
+          } ${intDir}/secret-${pname}-${field} ${own}"
         ) (lib.attrNames profile.secrets)
       ) ientry.profiles
     );
@@ -567,7 +583,9 @@ let
       ++ map (r: "${r.var}=\"$(sha256sum ${lib.escapeShellArg r.path} | cut -d ' ' -f1)\"") srefs
       ++ [
         "mjtmp=\"$(mktemp)\""
-        "jq -n${lib.concatMapStrings (r: " --arg ${r.var} \"\$${r.var}\"") (refs ++ srefs)} ${lib.escapeShellArg "{ \"integrations\": ${integrationsExpr refs srefs mi} }"} > \"$mjtmp\""
+        "jq -n${
+          lib.concatMapStrings (r: " --arg ${r.var} \"\$${r.var}\"") (refs ++ srefs)
+        } ${lib.escapeShellArg "{ \"integrations\": ${integrationsExpr refs srefs mi} }"} > \"$mjtmp\""
         "stage \"$mjtmp\" ${userDir}/managed.json ${own}"
         "rm -f \"$mjtmp\""
       ]
@@ -622,9 +640,13 @@ let
         );
     in
     [ "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}" ]
-    ++ map (iname: "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}/${iname}") allIntegrationNames
+    ++ map (
+      iname: "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}/${iname}"
+    ) allIntegrationNames
     ++ sweepLines "${rootRef}/${uname}" topKeep
-    ++ lib.concatMap (iname: sweepLines "${rootRef}/${uname}/${iname}" (intKeep iname)) allIntegrationNames;
+    ++ lib.concatMap (
+      iname: sweepLines "${rootRef}/${uname}/${iname}" (intKeep iname)
+    ) allIntegrationNames;
 
   # The full stager body. Order: root dir, unknown-user sweep, per-user
   # dir/sweep sync, then content staging (users with Nix opinions get
@@ -685,24 +707,24 @@ in
   config = lib.mkMerge [
     # Validate spaces.users regardless of `enable` so a misconfiguration is
     # caught even on a host that has integrations turned off.
-    { assertions = managed.assertions; }
+    { inherit (managed) assertions; }
     (lib.mkIf cfg.enable {
-    # Each user runs their own per-user broker, which seals that user's secrets
-    # with `systemd-creds --with-key=host+tpm2` (§5.2) and so needs TPM device
-    # access. security.tpm2 provides it — it creates the `tss` group and the
-    # /dev/tpmrm0 udev rule. Access is by group membership (the rule carries no
-    # uaccess tag), and there is no "all users" group, so grant `tss` to every
-    # normal user rather than a single hardcoded account. A VM build of an
-    # integrations host also needs a software TPM: set it too, but guarded to
-    # where the option exists (a vmVariant / nixosTest node) — never on real
-    # hardware, which has a real one.
-    security.tpm2.enable = lib.mkDefault true;
-    virtualisation = lib.optionalAttrs (options.virtualisation ? tpm) {
-      tpm.enable = lib.mkDefault true;
-    };
-    users.groups.tss.members = builtins.attrNames (
-      lib.filterAttrs (_: u: u.isNormalUser) config.users.users
-    );
+      # Each user runs their own per-user broker, which seals that user's secrets
+      # with `systemd-creds --with-key=host+tpm2` (§5.2) and so needs TPM device
+      # access. security.tpm2 provides it — it creates the `tss` group and the
+      # /dev/tpmrm0 udev rule. Access is by group membership (the rule carries no
+      # uaccess tag), and there is no "all users" group, so grant `tss` to every
+      # normal user rather than a single hardcoded account. A VM build of an
+      # integrations host also needs a software TPM: set it too, but guarded to
+      # where the option exists (a vmVariant / nixosTest node) — never on real
+      # hardware, which has a real one.
+      security.tpm2.enable = lib.mkDefault true;
+      virtualisation = lib.optionalAttrs (options.virtualisation ? tpm) {
+        tpm.enable = lib.mkDefault true;
+      };
+      users.groups.tss.members = builtins.attrNames (
+        lib.filterAttrs (_: u: u.isNormalUser) config.users.users
+      );
 
       # Root stager (agent-integrations §10.2), mirroring pi-chat's
       # spaces-secrets-load: a root oneshot that materialises the per-user staged
@@ -726,68 +748,68 @@ in
         script = managedStagerScript;
       };
 
-    # The broker runs whenever integrations are enabled (even with none declared
-    # yet): it owns enable/disable + secret provisioning over
-    # %t/spaces-integrations.sock and starts/stops each integration's socket.
-    systemd.user.services = lib.mkMerge [
-      (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.serviceUnit) built)
-      setupServices
-      extraServicesPartOf
-      extraServiceUnits
-      {
-        spaces-integrationd = {
-          description = "Spaces integrations broker (enable + secret provisioning over %t/spaces-integrations.sock)";
-          wantedBy = [ "default.target" ];
-          # systemd splits an unquoted multi-word `Environment=` value on
-          # whitespace; the encrypt/systemctl commands carry args, so they ride
-          # the `environment` attrset (NixOS quotes it) rather than a raw
-          # serviceConfig.Environment list — otherwise the args are dropped.
-          environment = {
-            SPACES_INTEGRATIOND_SOCKET = "%t/spaces-integrations.sock";
-            SPACES_INTEGRATIOND_DEFS_DIR = "/etc/spaces-integrations";
-            # Secret path: user-scoped + TPM2-enforced (host+tpm2, never the
-            # insecure `auto` fallback, never pure tpm2 which --uid= rejects).
-            SPACES_INTEGRATIOND_CREDS_ENCRYPT = "${pkgs.systemd}/bin/systemd-creds encrypt --user --uid=self --with-key=host+tpm2";
-            # Decrypt mirrors the encrypt scope: the broker unseals its own
-            # secrets blob to a tmpfs working copy to edit one profile row.
-            SPACES_INTEGRATIOND_CREDS_DECRYPT = "${pkgs.systemd}/bin/systemd-creds decrypt --user --uid=self";
-            SPACES_INTEGRATIOND_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl --user";
-            # Store engine (config.toml + secrets.toml blob); shared with the
-            # agent-facing skills so one implementation owns the format.
-            SPACES_INTEGRATIOND_SKILL_CONFIG = "${lib.getExe pkgsSelf.skill-config}";
+      # The broker runs whenever integrations are enabled (even with none declared
+      # yet): it owns enable/disable + secret provisioning over
+      # %t/spaces-integrations.sock and starts/stops each integration's socket.
+      systemd.user.services = lib.mkMerge [
+        (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.serviceUnit) built)
+        setupServices
+        extraServicesPartOf
+        extraServiceUnits
+        {
+          spaces-integrationd = {
+            description = "Spaces integrations broker (enable + secret provisioning over %t/spaces-integrations.sock)";
+            wantedBy = [ "default.target" ];
+            # systemd splits an unquoted multi-word `Environment=` value on
+            # whitespace; the encrypt/systemctl commands carry args, so they ride
+            # the `environment` attrset (NixOS quotes it) rather than a raw
+            # serviceConfig.Environment list — otherwise the args are dropped.
+            environment = {
+              SPACES_INTEGRATIOND_SOCKET = "%t/spaces-integrations.sock";
+              SPACES_INTEGRATIOND_DEFS_DIR = "/etc/spaces-integrations";
+              # Secret path: user-scoped + TPM2-enforced (host+tpm2, never the
+              # insecure `auto` fallback, never pure tpm2 which --uid= rejects).
+              SPACES_INTEGRATIOND_CREDS_ENCRYPT = "${pkgs.systemd}/bin/systemd-creds encrypt --user --uid=self --with-key=host+tpm2";
+              # Decrypt mirrors the encrypt scope: the broker unseals its own
+              # secrets blob to a tmpfs working copy to edit one profile row.
+              SPACES_INTEGRATIOND_CREDS_DECRYPT = "${pkgs.systemd}/bin/systemd-creds decrypt --user --uid=self";
+              SPACES_INTEGRATIOND_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl --user";
+              # Store engine (config.toml + secrets.toml blob); shared with the
+              # agent-facing skills so one implementation owns the format.
+              SPACES_INTEGRATIOND_SKILL_CONFIG = "${lib.getExe pkgsSelf.skill-config}";
+            };
+            serviceConfig = {
+              Type = "exec";
+              ExecStart = lib.getExe pkgsSelf.spaces-integrationd;
+              Restart = "on-failure";
+              RestartSec = 2;
+              StateDirectory = "spaces-integrationd";
+              # Tmpfs scratch for the schema file + transient unsealed secrets.toml
+              # during an edit — never on the persistent StateDirectory.
+              RuntimeDirectory = "spaces-integrationd";
+              # Trusted (it holds the encrypt path + the socket) but still
+              # unprivileged and hardened — it runs as the user, never root.
+              NoNewPrivileges = true;
+              RestrictSUIDSGID = true;
+              LockPersonality = true;
+              ProtectKernelTunables = true;
+              ProtectKernelModules = true;
+              ProtectKernelLogs = true;
+              ProtectClock = true;
+              SystemCallArchitectures = "native";
+            };
           };
-          serviceConfig = {
-            Type = "exec";
-            ExecStart = lib.getExe pkgsSelf.spaces-integrationd;
-            Restart = "on-failure";
-            RestartSec = 2;
-            StateDirectory = "spaces-integrationd";
-            # Tmpfs scratch for the schema file + transient unsealed secrets.toml
-            # during an edit — never on the persistent StateDirectory.
-            RuntimeDirectory = "spaces-integrationd";
-            # Trusted (it holds the encrypt path + the socket) but still
-            # unprivileged and hardened — it runs as the user, never root.
-            NoNewPrivileges = true;
-            RestrictSUIDSGID = true;
-            LockPersonality = true;
-            ProtectKernelTunables = true;
-            ProtectKernelModules = true;
-            ProtectKernelLogs = true;
-            ProtectClock = true;
-            SystemCallArchitectures = "native";
-          };
-        };
-      }
-    ];
+        }
+      ];
 
-    systemd.user.sockets = lib.mkMerge [
-      (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.socketUnit) built)
-      setupSockets
-    ];
+      systemd.user.sockets = lib.mkMerge [
+        (lib.mapAttrs' (_: i: lib.nameValuePair i.unitName i.socketUnit) built)
+        setupSockets
+      ];
 
-    environment.etc = lib.mapAttrs' (
-      name: i: lib.nameValuePair "spaces-integrations/${name}.json" { source = i.definitionFile; }
-    ) built;
+      environment.etc = lib.mapAttrs' (
+        name: i: lib.nameValuePair "spaces-integrations/${name}.json" { source = i.definitionFile; }
+      ) built;
     })
   ];
 }

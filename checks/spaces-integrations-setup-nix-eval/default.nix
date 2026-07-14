@@ -107,15 +107,22 @@ assert !(signal.setupSocketUnit ? wantedBy);
 # ── signal: main socket Wants/After on extraServices ─────────────────────────
 assert signal.socketUnit.wants == extraServices;
 assert signal.socketUnit.after == extraServices;
-# ── signal: definition JSON carries setup + extraServices ────────────────────
+# ── signal: definition JSON carries setup + extraServices + setupRestart ─────
 assert signal.definition.setup == true;
 assert signal.definition.extraServices == extraServices;
+# Post-setup restart is pinned to the MCP service ONLY: the signal-cli daemon
+# already holds the freshly linked account live, and restarting it triggers
+# signal-cli's per-account startup network check, which silently drops the
+# account on failure — the restart would kill the link it just made.
+assert signal.definition.setupRestart == [ "spaces-integration-signal.service" ];
 # ── github: no setup, no extra services, no socket Wants/After ───────────────
 assert !github.hasSetup;
 assert github.setupServiceUnit == null;
 assert github.setupSocketUnit == null;
 assert github.definition.setup == false;
 assert github.definition.extraServices == [ ];
+# No manifest override -> null lowers to JSON null -> broker default behavior.
+assert github.definition.setupRestart == null;
 assert !(github.socketUnit ? wants);
 assert !(github.socketUnit ? after);
 # ── module emits the twin units when enabled ─────────────────────────────────

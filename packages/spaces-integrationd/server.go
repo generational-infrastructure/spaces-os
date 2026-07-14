@@ -367,7 +367,7 @@ func (s *Server) setup(conn net.Conn, integration, action string) {
 	s.writeSetupAction(hc, action, "")
 
 	if s.relay(conn, hc, integration) {
-		s.postSetupRestart(integration, d.ExtraServices)
+		s.postSetupRestart(integration, d)
 	}
 }
 
@@ -514,11 +514,21 @@ func (s *Server) relay(client, helper net.Conn, integration string) bool {
 	}
 }
 
-// postSetupRestart bounces the integration's own service plus every extra
-// service after a successful setup so a freshly-linked account/state is picked
-// up. Best-effort: try-restart no-ops inactive units and a failure is logged.
-func (s *Server) postSetupRestart(integration string, extraServices []string) {
-	units := append([]string{serviceUnit(integration)}, extraServices...)
+// postSetupRestart bounces units after a successful setup so a freshly-linked
+// account/state is picked up. Default: the integration's own service plus every
+// extra service. A definition with setupRestart overrides that set exactly —
+// signal keeps its daemon out of it, since spaces-signal-cli already holds the
+// freshly linked account live and a restart risks dropping it (signal-cli's
+// per-account startup network check silently drops failures). Best-effort:
+// try-restart no-ops inactive units and a failure is logged.
+func (s *Server) postSetupRestart(integration string, d Definition) {
+	units := d.SetupRestart
+	if units == nil {
+		units = append([]string{serviceUnit(integration)}, d.ExtraServices...)
+	}
+	if len(units) == 0 {
+		return
+	}
 	if msg, err := s.runSystemctl("try-restart", units...); err != nil {
 		log.Printf("systemctl try-restart %v: %s", units, msg)
 	}
