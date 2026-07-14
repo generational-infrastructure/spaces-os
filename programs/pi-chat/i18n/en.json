@@ -46,15 +46,7 @@
     "prompt-cancel": "Cancel",
     "prompt-submitted": "✓ submitted",
     "prompt-cancelled": "✗ cancelled",
-    "prompt-retracted": "⚠ retracted",
-    "approval-title": "Allow integration tool call?",
-    "approval-context": "Preview:",
-    "approval-deny": "Deny",
-    "approval-once": "Allow once",
-    "approval-session": "Allow for session",
-    "approval-allowed-once": "✓ allowed once",
-    "approval-allowed-session": "✓ allowed (session)",
-    "approval-denied": "✗ denied"
+    "prompt-retracted": "⚠ retracted"
   },
   "settings": {
     "nixos-hint": "Peer configuration (pubkey, relays, display name) is managed by the NixOS module — see services.pi-chat in your config.",

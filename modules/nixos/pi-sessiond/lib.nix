@@ -43,9 +43,10 @@ let
 
   llamaSwapDiscover = extensionsPkg.extensions."llama-swap-discover";
   openrouterProxyExt = extensionsPkg.extensions."openrouter-proxy";
-  # The agent-facing half of the integrations gateway (design §9): registers a
-  # forwarding tool per discovered integration tool from the per-session spec
-  # the supervisor stages. Always loaded; inert when no spec / no integrations.
+  # The agent-facing half of the integrations system (generic-mcp design §4): a
+  # generic MCP client that connects to the standalone gateway over
+  # SPACES_INTEGRATION_GATEWAY_SOCKET and registers its aggregated tools. Always
+  # loaded; inert when the gateway socket is unset/unreachable (no tools).
   spacesIntegrationsExt = extensionsPkg.extensions."spaces-integrations";
 in
 {

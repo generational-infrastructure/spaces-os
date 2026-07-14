@@ -23,7 +23,6 @@
 //   assistantStartedAt        wall-clock stamp of the first text_start,
 //   assistantLastTextBubbleId   for the tokens/second patch on message_end
 //   pendingExtensionUI        unanswered extension_ui_request ids
-//   pendingApprovals          unanswered approval_request ids
 //
 // apply() never mutates its input: untouched fields keep their identity
 // so the adapter (PiSession) can assign back only what changed and QML
@@ -51,7 +50,6 @@ function initial() {
     assistantStartedAt: 0,
     assistantLastTextBubbleId: "",
     pendingExtensionUI: {},
-    pendingApprovals: {},
   };
 }
 
@@ -123,10 +121,6 @@ function apply(state, ev, now) {
 
   case "extension_ui_request":
     _extensionRequest(s, ev, now, effects);
-    break;
-
-  case "approval_request":
-    _approvalRequest(s, ev, now, effects);
     break;
 
   case "extension_error":
@@ -253,21 +247,6 @@ function _extensionRequest(s, ev, now, effects) {
   }
   // setStatus / setWidget / setTitle / set_editor_text are
   // fire-and-forget; ignore them.
-}
-
-// Gateway → panel: a non-allowlisted integration tool wants to run.
-// Render an approval bubble — the args are the security-relevant payload
-// the user is consenting to; {once, session, deny} reply over the ws.
-function _approvalRequest(s, ev, now, effects) {
-  s.pendingApprovals = Object.assign({}, s.pendingApprovals);
-  s.pendingApprovals[ev.id] = true;
-  _append(s, Msg.approval(ev.id, now, {
-    integration: ev.integration,
-    tool: ev.toolName || ((ev.integration || "") + "_" + (ev.tool || "")),
-    args: JSON.stringify(ev.args || {}, null, 2),
-    context: typeof ev.context === "string" ? ev.context : "",
-  }));
-  effects.push({ kind: "notify", text: ev.toolName || "approval" });
 }
 
 // Fold a get_messages history payload (pi AgentMessages) into panel

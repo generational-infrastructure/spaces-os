@@ -46,15 +46,7 @@
     "prompt-cancel": "Annuler",
     "prompt-submitted": "✓ envoyé",
     "prompt-cancelled": "✗ annulé",
-    "prompt-retracted": "⚠ rétracté",
-    "approval-title": "Autoriser l'appel d'outil d'intégration ?",
-    "approval-context": "Aperçu :",
-    "approval-deny": "Refuser",
-    "approval-once": "Autoriser une fois",
-    "approval-session": "Autoriser pour la session",
-    "approval-allowed-once": "✓ autorisé une fois",
-    "approval-allowed-session": "✓ autorisé (session)",
-    "approval-denied": "✗ refusé"
+    "prompt-retracted": "⚠ rétracté"
   },
   "settings": {
     "nixos-hint": "La configuration du pair (pubkey, relais, nom d'affichage) est gérée par le module NixOS — voir services.pi-chat dans votre configuration.",

@@ -1,42 +1,32 @@
-// Unit test for spaces-integrations.ts pi extension.
+// Unit test for spaces-integrations.ts — the generic MCP-client pi extension
+// (docs/agent-integrations-generic-mcp-design.md §4). It connects to the
+// standalone gateway over SPACES_INTEGRATION_GATEWAY_SOCKET, runs
+// initialize + tools/list, and registers one forwarding tool per aggregated
+// tool; execute() forwards a tools/call over the same connection.
 //
-// Builds a fake ExtensionAPI that captures the tools the extension registers
-// from the per-session spec, then drives each tool's execute() through the
-// gateway round-trip it performs over ctx.ui.input:
-//   - no spec file        → no tools registered
-//   - spec present        → one forwarding tool per entry, schema preserved
-//   - execute (success)    → forwards { integration, tool, args }, returns text
-//   - execute (no UI)      → fails closed, never forwards
-//   - execute (cancelled)  → tool error
-//   - execute (bad reply)  → tool error
+//   - no socket env       → no tools registered (never blocks pi startup)
+//   - gateway unreachable  → no tools registered
+//   - tools/list           → one forwarding tool per entry, schema preserved
+//   - execute (success)    → forwards tools/call, returns the text
+//   - execute (isError)    → tool error surfaced
+//   - two calls            → forwarded over one persistent connection
 //
 // Run with: node --test spaces-integrations.test.mjs
 // (Node 22+ strips types from the imported .ts file on the fly.)
 
-import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import test from "node:test";
 import factory from "./spaces-integrations.ts";
 
-// The wire contract, single-sourced from packages/pi-sessiond
-// (integration-wire.json, copied next to this test by the package build) —
-// the same JSON the extension build substitutes its sentinels from.
-const WIRE = JSON.parse(
-  readFileSync(new URL("./integration-wire.json", import.meta.url), "utf8"),
-);
-const TITLE = WIRE.callTitle;
-
-const SPEC = [
+const TOOLS = [
   {
     name: "github_get_repo",
-    integration: "github",
-    tool: "get_repo",
-    label: "github_get_repo",
     description: "Fetch repository metadata",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: { repo: { type: "string" } },
       required: ["repo"],
@@ -44,117 +34,107 @@ const SPEC = [
   },
 ];
 
-// Set PI_CODING_AGENT_DIR to a temp dir holding the given spec (or none), call
-// the factory, and return the tools it registered keyed by name.
-function install(t, spec) {
-  const dir = mkdtempSync(join(tmpdir(), "spaces-integrations-"));
-  if (spec !== undefined) {
-    writeFileSync(join(dir, WIRE.toolSpecFile), JSON.stringify(spec));
+// A stub gateway MCP server: initialize → {}, tools/list → TOOLS (or given),
+// tools/call → onCall(name, args). Records each call.
+function stubGateway(sock, { tools = TOOLS, onCall } = {}) {
+  const calls = [];
+  const server = createServer((conn) => {
+    conn.unref(); // don't let a stub connection keep node --test alive
+    let buf = "";
+    conn.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        if (msg.method === "initialize") {
+          conn.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { capabilities: { tools: {} } } })}\n`,
+          );
+        } else if (msg.method === "tools/list") {
+          conn.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools } })}\n`,
+          );
+        } else if (msg.method === "tools/call") {
+          calls.push({ name: msg.params.name, args: msg.params.arguments ?? {} });
+          const r = onCall
+            ? onCall(msg.params.name, msg.params.arguments ?? {})
+            : { content: [{ type: "text", text: `${msg.params.name}-ok` }], isError: false };
+          conn.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: r })}\n`,
+          );
+        }
+        // notifications/initialized: no id, no reply.
+      }
+    });
+  });
+  server.calls = calls;
+  return server;
+}
+
+async function install(t, opts = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "gw-"));
+  const sock = join(dir, "gw.sock");
+  let server = null;
+  if (!opts.noGateway) {
+    server = stubGateway(sock, opts);
+    const listening = Promise.withResolvers();
+    server.listen(sock, () => listening.resolve());
+    await listening.promise;
   }
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = dir;
-  t.after(() => {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const prev = process.env.SPACES_INTEGRATION_GATEWAY_SOCKET;
+  if (opts.noEnv) delete process.env.SPACES_INTEGRATION_GATEWAY_SOCKET;
+  else process.env.SPACES_INTEGRATION_GATEWAY_SOCKET = sock;
+
   const tools = new Map();
-  factory({
-    registerTool(def) {
-      tools.set(def.name, def);
-    },
+  await factory({ registerTool: (d) => tools.set(d.name, d) });
+
+  t.after(() => {
+    if (server) server.close();
+    if (prev === undefined) delete process.env.SPACES_INTEGRATION_GATEWAY_SOCKET;
+    else process.env.SPACES_INTEGRATION_GATEWAY_SOCKET = prev;
   });
-  return tools;
+  return { tools, server };
 }
 
-// A ctx whose ui.input records the round-trip and returns a canned value.
-function mkCtx({ hasUI = true, value } = {}) {
-  const inputs = [];
-  return {
-    inputs,
-    ctx: {
-      hasUI,
-      ui: {
-        input(title, placeholder) {
-          inputs.push({ title, placeholder });
-          return Promise.resolve(value);
-        },
-      },
-    },
-  };
-}
-
-test("no spec file registers no tools", (t) => {
-  assert.equal(install(t, undefined).size, 0);
+test("no gateway socket env registers no tools", async (t) => {
+  const { tools } = await install(t, { noEnv: true });
+  assert.equal(tools.size, 0);
 });
 
-test("each spec entry becomes a forwarding tool with its schema", (t) => {
-  const tools = install(t, SPEC);
+test("an unreachable gateway registers no tools (never blocks startup)", async (t) => {
+  const { tools } = await install(t, { noGateway: true });
+  assert.equal(tools.size, 0);
+});
+
+test("each advertised tool becomes a forwarding tool with its schema", async (t) => {
+  const { tools } = await install(t);
   assert.deepEqual([...tools.keys()], ["github_get_repo"]);
-  const tool = tools.get("github_get_repo");
-  assert.equal(tool.label, "github_get_repo");
-  assert.equal(tool.description, "Fetch repository metadata");
-  assert.deepEqual(tool.parameters, SPEC[0].parameters);
+  assert.deepEqual(tools.get("github_get_repo").parameters, TOOLS[0].inputSchema);
 });
 
-test("execute forwards the call and returns the gateway's text", async (t) => {
-  const tools = install(t, SPEC);
-  const { inputs, ctx } = mkCtx({
-    value: JSON.stringify({ text: "stars: 42", isError: false }),
-  });
-  const res = await tools
-    .get("github_get_repo")
-    .execute("id", { repo: "o/r" }, undefined, undefined, ctx);
-  assert.equal(inputs.length, 1);
-  assert.equal(inputs[0].title, TITLE);
-  assert.deepEqual(JSON.parse(inputs[0].placeholder), {
-    integration: "github",
-    tool: "get_repo",
-    args: { repo: "o/r" },
-  });
-  assert.deepEqual(res, {
-    content: [{ type: "text", text: "stars: 42" }],
-    details: {},
-    isError: false,
-  });
+test("execute forwards the tools/call and returns the gateway text", async (t) => {
+  const { tools, server } = await install(t);
+  const res = await tools.get("github_get_repo").execute("id", { repo: "o/r" });
+  assert.deepEqual(server.calls, [{ name: "github_get_repo", args: { repo: "o/r" } }]);
+  assert.equal(res.content[0].text, "github_get_repo-ok");
+  assert.equal(res.isError, false);
 });
 
-test("a tool error from the gateway surfaces as isError", async (t) => {
-  const tools = install(t, SPEC);
-  const { ctx } = mkCtx({
-    value: JSON.stringify({ text: "Denied by user.", isError: true }),
+test("a gateway tool error surfaces as isError", async (t) => {
+  const { tools } = await install(t, {
+    onCall: () => ({ content: [{ type: "text", text: "Denied by user." }], isError: true }),
   });
-  const res = await tools
-    .get("github_get_repo")
-    .execute("id", { repo: "o/r" }, undefined, undefined, ctx);
+  const res = await tools.get("github_get_repo").execute("id", {});
   assert.equal(res.isError, true);
   assert.equal(res.content[0].text, "Denied by user.");
 });
 
-test("no UI fails closed without forwarding", async (t) => {
-  const tools = install(t, SPEC);
-  const { inputs, ctx } = mkCtx({ hasUI: false });
-  const res = await tools
-    .get("github_get_repo")
-    .execute("id", { repo: "o/r" }, undefined, undefined, ctx);
-  assert.equal(inputs.length, 0, "must not forward without a UI");
-  assert.equal(res.isError, true);
-});
-
-test("a cancelled prompt is a tool error", async (t) => {
-  const tools = install(t, SPEC);
-  const { ctx } = mkCtx({ value: undefined });
-  const res = await tools
-    .get("github_get_repo")
-    .execute("id", {}, undefined, undefined, ctx);
-  assert.equal(res.isError, true);
-});
-
-test("a non-JSON gateway reply is a tool error", async (t) => {
-  const tools = install(t, SPEC);
-  const { ctx } = mkCtx({ value: "not json" });
-  const res = await tools
-    .get("github_get_repo")
-    .execute("id", {}, undefined, undefined, ctx);
-  assert.equal(res.isError, true);
+test("multiple calls are forwarded over one persistent connection", async (t) => {
+  const { tools, server } = await install(t);
+  await tools.get("github_get_repo").execute("id", { repo: "a" });
+  await tools.get("github_get_repo").execute("id", { repo: "b" });
+  assert.equal(server.calls.length, 2);
 });

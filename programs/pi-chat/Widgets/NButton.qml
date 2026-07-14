@@ -1,5 +1,5 @@
-// Labeled push button. Used twice in the panel — once for the
-// "Allow"/"Deny" confirmation pair, once for signal approval.
+// Labeled push button. Used in the integration settings window for
+// primary actions (setup, enable/disable, save secret, remove).
 //
 // Mirrors noctalia's NButton API for the props the plugin sets:
 // `text`, `icon` (optional leading icon name), `onClicked`,

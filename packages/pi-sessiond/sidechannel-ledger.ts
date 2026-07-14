@@ -1,6 +1,5 @@
-// The per-session book of open human-in-the-loop requests (design §6/§9):
-// extension_ui side channels awaiting a client's answer, and integration
-// approval prompts awaiting a verdict. Split out of main.ts so the parked
+// The per-session book of open extension_ui side channels (design §6):
+// requests awaiting a client's answer. Split out of main.ts so the parked
 // invariant is structural — parked ⟺ at least one entry is pending — instead
 // of a boolean re-derived (and once mis-derived) at every call site.
 //
@@ -17,16 +16,15 @@ interface PendingSidechannel {
 
 export class SidechannelLedger {
   private readonly sidechannels = new Map<string, PendingSidechannel>();
-  private readonly approvals = new Map<string, (decision: string) => void>();
 
   // Blocked on a human: a session is parked exactly while anything is open.
   // Drives never-GC-a-parked-session and the "parked" list state.
   get parked(): boolean {
-    return this.sidechannels.size > 0 || this.approvals.size > 0;
+    return this.sidechannels.size > 0;
   }
 
   get pendingCount(): number {
-    return this.sidechannels.size + this.approvals.size;
+    return this.sidechannels.size;
   }
 
   // An extension_ui request went out to the panel; `relay` forwards the
@@ -45,27 +43,9 @@ export class SidechannelLedger {
     return pending.relay;
   }
 
-  // An integration-call approval prompt went out; resolves with the panel's
-  // verdict ("once" | "session" | "deny") via settleApproval.
-  raiseApproval(id: string): Promise<string> {
-    const { promise, resolve } = Promise.withResolvers<string>();
-    this.approvals.set(id, resolve);
-    return promise;
-  }
-
-  settleApproval(id: string, decision: string): boolean {
-    const resolve = this.approvals.get(id);
-    if (!resolve) return false;
-    this.approvals.delete(id);
-    resolve(decision);
-    return true;
-  }
-
   // The child exited: every open request is moot. Entries are dropped, never
-  // relayed — there is no child left to answer to. (Approval promises stay
-  // forever pending, matching the pre-ledger behavior on child exit.)
+  // relayed — there is no child left to answer to.
   clear(): void {
     this.sidechannels.clear();
-    this.approvals.clear();
   }
 }

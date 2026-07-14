@@ -10,9 +10,9 @@
 //   from  ∈ "me" | "peer"
 //   state ∈ "sent" | "streaming"
 //   type  ∈ "" (plain chat text) | "notification" | "confirm"
-//         | "prompt" | "thinking" | "approval"
+//         | "prompt" | "thinking"
 //
-// plus per-kind extras (confirmTitle/confirmState, approval*,
+// plus per-kind extras (confirmTitle/confirmState,
 // prompt*) carried only by the matching type. Records are panel-local
 // view state — never persisted or sent on the wire — and the shape is
 // frozen by checks/pi-chat-msg-schema. Production code builds records
@@ -94,23 +94,6 @@ function confirm(id, text, ts, title) {
   return m;
 }
 
-// Integration tool-call approval card (gateway approval_request).
-// meta: { integration, tool, args, context } — args already JSON-pretty-
-// printed by the caller (it owns the event shape); context is optional
-// untrusted preview text (a confirmPreview tool's output), rendered as
-// plain quoted text. approvalState ∈ pending | once | session | deny.
-function approval(id, ts, meta) {
-  meta = meta || {};
-  const m = _base(id, "peer", ts);
-  m.type = "approval";
-  m.approvalIntegration = meta.integration || "";
-  m.approvalTool = meta.tool || "";
-  m.approvalArgs = meta.args || "";
-  m.approvalContext = meta.context || "";
-  m.approvalState = "pending";
-  return m;
-}
-
 // Skill-config credential request card (skill-config daemon).
 // meta: { instance, skill, profile, field, secret }. promptState ∈
 // pending | submitted | cancelled | retracted.
@@ -139,7 +122,6 @@ function isNotification(m) { return _type(m) === "notification"; }
 function isConfirm(m)      { return _type(m) === "confirm"; }
 function isPrompt(m)       { return _type(m) === "prompt"; }
 function isThinking(m)     { return _type(m) === "thinking"; }
-function isApproval(m)     { return _type(m) === "approval"; }
 
 // Plain chat text — the empty-type case every ad-hoc `(m.type||"")===""`
 // check used to spell out.

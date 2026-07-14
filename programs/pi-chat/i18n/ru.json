@@ -46,15 +46,7 @@
     "prompt-cancel": "Отмена",
     "prompt-submitted": "✓ отправлено",
     "prompt-cancelled": "✗ отменено",
-    "prompt-retracted": "⚠ отозвано",
-    "approval-title": "Разрешить вызов инструмента интеграции?",
-    "approval-context": "Предпросмотр:",
-    "approval-deny": "Отклонить",
-    "approval-once": "Разрешить один раз",
-    "approval-session": "Разрешить на сессию",
-    "approval-allowed-once": "✓ разрешено один раз",
-    "approval-allowed-session": "✓ разрешено (сессия)",
-    "approval-denied": "✗ отклонено"
+    "prompt-retracted": "⚠ отозвано"
   },
   "settings": {
     "nixos-hint": "Конфигурация собеседника (pubkey, релеи, отображаемое имя) управляется модулем NixOS — см. services.pi-chat в вашей конфигурации.",

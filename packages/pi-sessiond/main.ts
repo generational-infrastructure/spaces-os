@@ -57,15 +57,7 @@ import {
   SessionSupervisor,
 } from "./session-supervisor";
 import { fetchModels } from "./provider";
-import {
-  callIntegrationTool,
-  INTEGRATION_CALL_TITLE,
-  type Registry,
-  type RegistryEntry,
-  refreshRegistry,
-  sessionSharedDirs,
-  writeSessionToolSpec,
-} from "./integrations";
+import { sessionSharedDirs } from "./integrations";
 
 // ---- configuration (NixOS module → systemd env) --------------------------
 
@@ -102,16 +94,12 @@ if (!LANDLOCK_EXEC) {
 // pi binary spawned per session in rpc-mode (or a stub, in tests).
 const PI_BIN = process.env.SPACES_SESSIOND_PI_BIN ?? "pi";
 const MEMORY_HIGH = process.env.SPACES_SESSIOND_MEMORY_HIGH ?? "4G";
-// Agent integrations (docs/agent-integrations-design.md §9). The gateway reads
-// the broker's enabled.json + the world-readable definitions and dials each
-// enabled integration's per-user MCP socket. All three empty ⇒ the gateway is
-// off and no integration tools are exposed.
+// Agent integrations: the supervisor no longer runs the gateway — that moved to
+// packages/spaces-integration-gateway (a standalone aggregating MCP server). The
+// supervisor only still needs the enabled set to grant each enabled
+// integration's file-exchange shared dir into the session Landlock policy.
 const INTEGRATIONS_ENABLED_PATH =
   process.env.SPACES_SESSIOND_INTEGRATIONS_ENABLED ?? "";
-const INTEGRATIONS_DEFS_DIR =
-  process.env.SPACES_SESSIOND_INTEGRATIONS_DEFS ?? "";
-const INTEGRATIONS_SOCKET_DIR =
-  process.env.SPACES_SESSIOND_INTEGRATIONS_SOCKETS ?? "";
 // The per-integration file-exchange base dir (design §9.4 step 6): for each
 // enabled integration the supervisor grants <base>/<name> rw in the session's
 // Landlock policy (and creates it), so the agent reads/edits — with its native
@@ -120,6 +108,12 @@ const INTEGRATIONS_SOCKET_DIR =
 // systemd before the daemon sees it, like the paths above.
 const INTEGRATIONS_SHARED_DIR =
   process.env.SPACES_SESSIOND_INTEGRATIONS_SHARED ?? "";
+
+// The standalone gateway's MCP socket, passed into the sandboxed child so the
+// generic spaces-integrations extension (pi's MCP client) can reach it. Empty ⇒
+// the extension registers no integration tools.
+const INTEGRATION_GATEWAY_SOCKET =
+  process.env.SPACES_SESSIOND_INTEGRATION_GATEWAY_SOCKET ?? "";
 // Skill plumbing for the per-session pi runtime (NixOS module → JSON env).
 // SPACES_SESSIOND_SESSION_ENV: { VAR: value } --setenv'd into the session unit
 // (SKILL_CONFIG_SOCKET, SPACES_NOTIFICATIONS_FILE, …). SPACES_SESSIOND_ALLOWED_PATHS:
@@ -531,7 +525,7 @@ function writeLandlockPolicy(id: string): string {
   // agent edits a cloned-in tree with its native file tools. Created here so the
   // grant is live before landlock-exec applies (it skips a missing path).
   for (const dir of sessionSharedDirs(
-    integrationRegistry,
+    INTEGRATIONS_ENABLED_PATH,
     INTEGRATIONS_SHARED_DIR,
   )) {
     mkdirSync(dir, { recursive: true });
@@ -590,12 +584,6 @@ function surfaceSideChannel(session: Session, frame: RpcFrame): void {
   const id = asString(frame.id);
   const method = asString(frame.method);
   if (!id || !method) return;
-  // An integration tool call forwarded by the spaces-integrations extension
-  // (gateway, design §9): not a UI dialog — consume it here, never broadcast.
-  if (method === "input" && asString(frame.title) === INTEGRATION_CALL_TITLE) {
-    void handleIntegrationCall(session, frame);
-    return;
-  }
   if (method === "notify") {
     if (session.subscribers.size === 0)
       fireNotifier(session, "notify", asString(frame.message) ?? "");
@@ -643,157 +631,6 @@ function resolveSidechannel(
   relay(response);
 }
 
-// ---- integrations gateway (design §9) --------------------------------------
-
-// The enabled integrations' discovered tools. Rebuilt lazily whenever the
-// broker's enabled.json changes (its mtime moves on every runtime
-// enable/disable), so a freshly enabled integration surfaces on the next new
-// chat instead of only after a daemon restart. Empty ⇒ off.
-let integrationRegistry: Registry = new Map();
-let integrationsMtimeMs = -1;
-
-async function refreshIntegrations(): Promise<void> {
-  if (
-    !INTEGRATIONS_ENABLED_PATH ||
-    !INTEGRATIONS_DEFS_DIR ||
-    !INTEGRATIONS_SOCKET_DIR
-  )
-    return;
-  const res = await refreshRegistry(
-    {
-      defsDir: INTEGRATIONS_DEFS_DIR,
-      enabledPath: INTEGRATIONS_ENABLED_PATH,
-      socketDir: INTEGRATIONS_SOCKET_DIR,
-    },
-    { mtimeMs: integrationsMtimeMs, registry: integrationRegistry },
-  );
-  integrationsMtimeMs = res.mtimeMs;
-  integrationRegistry = res.registry;
-  if (res.rebuilt) {
-    console.error(
-      `pi-sessiond: ${integrationRegistry.size} integration tool(s) registered`,
-    );
-  }
-}
-
-// Raise the per-call approval prompt to the panel and await the verdict
-// ("once" | "session" | "deny"). Buffered like a side-channel so a reconnecting
-// client replays it; parks via the ledger and notifies when unattended.
-function raiseApproval(
-  session: Session,
-  entry: RegistryEntry,
-  args: Record<string, unknown>,
-  context?: string,
-): Promise<string> {
-  const id = randomUUID();
-  const promise = session.ledger.raiseApproval(id);
-  // A side-channel event payload (like extension_ui_request) routed by `type`;
-  // the panel renders {once, session, deny} and replies approval_response.
-  // `context` (a confirmPreview tool's output) is untrusted preview text the
-  // panel renders as plain quoted text; omitted when the tool has no preview.
-  const payload = {
-    type: "approval_request",
-    id,
-    integration: entry.integration,
-    tool: entry.tool,
-    toolName: entry.piName,
-    args,
-    context, // undefined ⇒ JSON.stringify omits the key
-  };
-  broadcast(session, payload);
-  if (session.subscribers.size === 0) {
-    fireNotifier(session, "approval", entry.piName);
-  }
-  return promise;
-}
-
-// The panel's verdict for a parked approval; unpark when the last one clears.
-function resolveApproval(
-  session: Session,
-  id: string | undefined,
-  decision: string | undefined,
-): void {
-  if (id === undefined) return;
-  session.ledger.settleApproval(id, decision ?? "deny");
-}
-
-// A hung preview must not stall the approval gate: cap it well under the 60s
-// default so a stuck preview fails closed quickly.
-const PREVIEW_TIMEOUT_MS = 10000;
-
-// Resolve the untrusted approval context for an entry by calling its
-// confirmPreview tool (same socket, same args). Fails CLOSED: a preview
-// error/timeout returns {ok:false} carrying the tool error text so the caller
-// replies it and raises NO approval (design decision 5). No preview ⇒ {ok:true}
-// with an undefined context.
-async function approvalContext(
-  entry: RegistryEntry,
-  args: Record<string, unknown>,
-): Promise<{ ok: true; context?: string } | { ok: false; text: string }> {
-  if (!entry.confirmPreview) return { ok: true };
-  const preview = await callIntegrationTool(
-    entry.socketPath,
-    entry.confirmPreview,
-    args,
-    undefined,
-    PREVIEW_TIMEOUT_MS,
-  );
-  if (preview.isError) return { ok: false, text: preview.text };
-  return { ok: true, context: preview.text };
-}
-
-// A forwarded integration tool call (from the spaces-integrations extension):
-// enforce the autoRun allowlist / session grant / per-call approval, then make
-// the MCP call over the integration's socket and reply to the child's awaiting
-// ctx.ui.input with JSON { text, isError }. A Deny never reaches the server.
-async function handleIntegrationCall(
-  session: Session,
-  frame: RpcFrame,
-): Promise<void> {
-  const id = asString(frame.id);
-  if (!id) return;
-  const reply = (text: string, isError: boolean) =>
-    session.driver.send({
-      type: "extension_ui_response",
-      id,
-      value: JSON.stringify({ text, isError }),
-    });
-
-  let call: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(asString(frame.placeholder) ?? "{}");
-    if (!isRecord(parsed)) throw new Error("not an object");
-    call = parsed;
-  } catch {
-    reply("integration unavailable: bad call payload", true);
-    return;
-  }
-  const piName = `${asString(call.integration) ?? ""}_${asString(call.tool) ?? ""}`;
-  const entry = integrationRegistry.get(piName);
-  if (!entry) {
-    reply(`integration unavailable: unknown tool ${piName}`, true);
-    return;
-  }
-  const args = isRecord(call.args) ? call.args : {};
-
-  if (!entry.autoRun && !session.toolGrants.has(piName)) {
-    const ctx = await approvalContext(entry, args);
-    if (!ctx.ok) {
-      reply(ctx.text, true);
-      return;
-    }
-    const decision = await raiseApproval(session, entry, args, ctx.context);
-    if (decision === "deny") {
-      reply("Denied by user.", true); // the server is never called
-      return;
-    }
-    if (decision === "session") session.toolGrants.add(piName);
-  }
-
-  const res = await callIntegrationTool(entry.socketPath, entry.tool, args);
-  reply(res.text, res.isError);
-}
-
 // ---- session lifecycle -----------------------------------------------------
 
 // Spawn plumbing for one pi rpc-mode child, injected into the supervisor as
@@ -824,9 +661,6 @@ function spawnSessionDriver(
   // Each session gets its own writable agent dir (HOME / PI_CODING_AGENT_DIR);
   // concurrent instances share no writable dir except the long-term memory store.
   const agentDir = seedAgentDir(id);
-  // Stage the enabled integrations' tools for the bundled spaces-integrations
-  // extension to register (gateway, design §9). Absent/empty ⇒ no tools.
-  writeSessionToolSpec(integrationRegistry, agentDir);
   // Private per-session scratch dir, created up front so it exists under the
   // session-dir grant (and gets chowned with the tree in system scope).
   const tmpDir = store.tmpDirOf(id);
@@ -843,6 +677,10 @@ function spawnSessionDriver(
     // The child reaches OpenRouter only through the supervisor's injecting
     // proxy; it never sees the real key (openrouter-proxy extension reads this).
     ...(OPENROUTER_PROXY_URL ? { OPENROUTER_PROXY_URL } : {}),
+    // The standalone gateway socket for pi's generic MCP-client extension.
+    ...(INTEGRATION_GATEWAY_SOCKET
+      ? { SPACES_INTEGRATION_GATEWAY_SOCKET: INTEGRATION_GATEWAY_SOCKET }
+      : {}),
     ...childPassthroughEnv(),
     ...SESSION_ENV,
   };
@@ -1152,9 +990,6 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
       const provider = resolved.provider;
       const model = resolved.model;
       const name = env.name ?? "";
-      // Pick up a runtime enable/disable so a freshly enabled integration's
-      // tools are staged for this new session (design §9).
-      await refreshIntegrations();
       let session: Session;
       try {
         session = supervisor.create(provider, model, name);
@@ -1210,9 +1045,6 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         return;
       }
       const live = supervisor.get(env.sessionId);
-      // A cold restore stages the tool spec afresh; reflect the current
-      // enabled set before it does.
-      if (!live) await refreshIntegrations();
       const session = live ?? supervisor.resume(env.sessionId);
       if (!session) {
         sendNoSuchSession(ws, env.sessionId);
@@ -1250,16 +1082,6 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
         resolveSidechannel(session, ws, asString(payload.id), payload);
         return;
       }
-      // Approval verdict for an integration tool call (gateway, design §9):
-      // resolve the parked gateway call with the user's decision.
-      if (asString(payload.type) === "approval_response") {
-        resolveApproval(
-          session,
-          asString(payload.id),
-          asString(payload.decision),
-        );
-        return;
-      }
       await dispatchCommand(session, ws, payload);
       return;
     }
@@ -1286,7 +1108,6 @@ function serveStatic(req: Request): Response {
 // ---- WebSocket server ------------------------------------------------------
 
 await setupProvider();
-await refreshIntegrations();
 
 Bun.serve<ConnData>({
   hostname: HOST,

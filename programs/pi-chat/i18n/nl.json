@@ -46,15 +46,7 @@
     "prompt-cancel": "Annuleren",
     "prompt-submitted": "✓ verzonden",
     "prompt-cancelled": "✗ geannuleerd",
-    "prompt-retracted": "⚠ ingetrokken",
-    "approval-title": "Aanroep van integratietool toestaan?",
-    "approval-context": "Voorbeeld:",
-    "approval-deny": "Weigeren",
-    "approval-once": "Eén keer toestaan",
-    "approval-session": "Toestaan voor sessie",
-    "approval-allowed-once": "✓ één keer toegestaan",
-    "approval-allowed-session": "✓ toegestaan (sessie)",
-    "approval-denied": "✗ geweigerd"
+    "prompt-retracted": "⚠ ingetrokken"
   },
   "settings": {
     "nixos-hint": "Peer-configuratie (pubkey, relays, weergavenaam) wordt beheerd door de NixOS-module — zie services.pi-chat in je configuratie.",

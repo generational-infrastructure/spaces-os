@@ -16,8 +16,6 @@
   ...
 }:
 let
-  inherit (pkgs) lib;
-
   # Copy each extension to its OWN tracked store path. A bare `toString` of a
   # flake-relative path embeds the whole-flake `…-source` path, which nix's
   # reference scanner does NOT capture as a runtime dependency of a
@@ -32,28 +30,15 @@ let
       name = baseNameOf (toString f);
     };
 
-  # The gateway↔extension sentinel contract, single-sourced from
-  # packages/pi-sessiond/integration-wire.json. The supervisor gateway
-  # (integrations.ts) reads that JSON at runtime; the bundled extension is a
-  # lone store file that cannot import the gateway module, so its build
-  # substitutes the same values into the extension source here.
-  piSessiond = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond;
-  wire = builtins.fromJSON (builtins.readFile piSessiond.integrationWire);
-
-  # The agent-facing half of the integrations gateway (design §9): registers a
-  # forwarding tool per discovered integration tool from the per-session spec
-  # the supervisor stages. Inert when no spec / no integrations.
-  spacesIntegrations = pkgs.runCommand "spaces-integrations.ts" { } ''
-    substitute ${./spaces-integrations.ts} "$out" \
-      --replace-fail '@@INTEGRATION_CALL_TITLE@@' ${lib.escapeShellArg wire.callTitle} \
-      --replace-fail '@@INTEGRATION_TOOL_SPEC_FILE@@' ${lib.escapeShellArg wire.toolSpecFile}
-  '';
-
   extensions = {
     "bash-confirm" = materialize ./bash-confirm.ts;
     "llama-swap-discover" = materialize ./llama-swap-discover.ts;
     "openrouter-proxy" = materialize ./openrouter-proxy.ts;
-    "spaces-integrations" = spacesIntegrations;
+    # The generic MCP-client extension (docs/agent-integrations-generic-mcp-design.md
+    # §4): a self-contained file that reads SPACES_INTEGRATION_GATEWAY_SOCKET at
+    # runtime and speaks MCP to the standalone gateway. No build-time
+    # substitution — nothing harness-specific is baked in.
+    "spaces-integrations" = materialize ./spaces-integrations.ts;
   };
 in
 pkgs.runCommand "pi-chat-extensions"
@@ -73,7 +58,6 @@ pkgs.runCommand "pi-chat-extensions"
     cp ${extensions."llama-swap-discover"} "$out/llama-swap-discover.ts"
     cp ${extensions."openrouter-proxy"} "$out/openrouter-proxy.ts"
     cp ${extensions."spaces-integrations"} "$out/spaces-integrations.ts"
-    cp ${piSessiond.integrationWire} "$out/integration-wire.json"
     cp ${./bash-confirm.test.mjs} "$out/bash-confirm.test.mjs"
     cp ${./spaces-integrations.test.mjs} "$out/spaces-integrations.test.mjs"
     # The RAW memory extension source (with its @@SEDIMENT_BIN@@ sentinel):

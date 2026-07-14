@@ -28,7 +28,6 @@
 // the index. Conversation history lives daemon-side in session.jsonl,
 // replayed via get_messages on every (re)attach.
 import QtQuick
-import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "Msg.js" as Msg
@@ -123,11 +122,6 @@ QtObject {
   // on shutdown. Confirm bubbles are stored in `messages` for the UI.
   property var _pendingExtensionUI: ({})
 
-  // Pending integration tool approvals (gateway → panel, keyed by id).
-  // The bubble in `messages` carries the UI; this mirrors
-  // _pendingExtensionUI so a collapse/cleanup can find still-open ones.
-  property var _pendingApprovals: ({})
-
   function _now() { return Date.now(); }
 
   function _localId() {
@@ -188,14 +182,6 @@ QtObject {
     _send({ type: "extension_ui_response", id: id, confirmed: !!confirmed });
     patch(id, { confirmState: confirmed ? "allowed" : "denied" });
     delete _pendingExtensionUI[id];
-  }
-
-  // Gateway → panel: the user picked once | session | deny for an
-  // integration tool call. Mirror the verdict into the bubble and reply.
-  function approvalRespond(id, decision) {
-    _send({ type: "approval_response", id: id, decision: decision });
-    patch(id, { approvalState: decision });
-    delete _pendingApprovals[id];
   }
 
   // WS mode: another mirrored client answered this side channel first. Collapse
@@ -541,7 +527,6 @@ QtObject {
       assistantStartedAt: _assistantStartedAt,
       assistantLastTextBubbleId: _assistantLastTextBubbleId,
       pendingExtensionUI: _pendingExtensionUI,
-      pendingApprovals: _pendingApprovals,
     };
   }
 
@@ -559,7 +544,6 @@ QtObject {
     if (s.assistantStartedAt !== _assistantStartedAt) _assistantStartedAt = s.assistantStartedAt;
     if (s.assistantLastTextBubbleId !== _assistantLastTextBubbleId) _assistantLastTextBubbleId = s.assistantLastTextBubbleId;
     if (s.pendingExtensionUI !== _pendingExtensionUI) _pendingExtensionUI = s.pendingExtensionUI;
-    if (s.pendingApprovals !== _pendingApprovals) _pendingApprovals = s.pendingApprovals;
   }
 
   function _runEffect(fx) {

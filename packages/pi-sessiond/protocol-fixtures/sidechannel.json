@@ -1,5 +1,5 @@
 {
-  "description": "Side channel round-trip (design §6): the child's extension_ui_request surfaces as a buffered event; a client answers via command{extension_ui_response}; every OTHER attached client gets sidechannel_resolved naming the winner, and a lost-race answer gets by:\"\" back. Integration approvals ride the same rails with approval_response.",
+  "description": "Side channel round-trip (design §6): the child's extension_ui_request surfaces as a buffered event; a client answers via command{extension_ui_response}; every OTHER attached client gets sidechannel_resolved naming the winner, and a lost-race answer gets by:\"\" back.",
   "v": 1,
   "frames": [
     {
@@ -28,15 +28,6 @@
     {
       "dir": "server",
       "envelope": { "v": 1, "kind": "sidechannel_resolved", "sessionId": "s1", "id": "sc-1", "by": "" }
-    },
-    {
-      "dir": "client",
-      "envelope": {
-        "v": 1,
-        "kind": "command",
-        "sessionId": "s1",
-        "payload": { "type": "approval_response", "id": "appr-1", "decision": "once" }
-      }
     }
   ]
 }

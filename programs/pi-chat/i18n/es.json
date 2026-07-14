@@ -46,15 +46,7 @@
     "prompt-cancel": "Cancelar",
     "prompt-submitted": "✓ enviado",
     "prompt-cancelled": "✗ cancelado",
-    "prompt-retracted": "⚠ retirado",
-    "approval-title": "¿Permitir llamada a herramienta de integración?",
-    "approval-context": "Vista previa:",
-    "approval-deny": "Denegar",
-    "approval-once": "Permitir una vez",
-    "approval-session": "Permitir en la sesión",
-    "approval-allowed-once": "✓ permitido una vez",
-    "approval-allowed-session": "✓ permitido (sesión)",
-    "approval-denied": "✗ denegado"
+    "prompt-retracted": "⚠ retirado"
   },
   "settings": {
     "nixos-hint": "La configuración del par (pubkey, relays, nombre visible) la gestiona el módulo de NixOS — consulta services.pi-chat en tu configuración.",

@@ -35,12 +35,9 @@ export interface Session<C> {
   buffer: BufferedEvent[];
   busy: boolean; // mid-turn (agent_start..agent_end); never GC a busy session
   lastActivity: number; // epoch ms of last event/command; drives idle-GC + LRU
-  // Open human-in-the-loop requests (side channels + integration approvals,
-  // design §6/§9). Derives `parked` — blocked on a human; never GC'd.
+  // Open human-in-the-loop requests (extension_ui side channels, design §6).
+  // Derives `parked` — blocked on a human; never GC'd.
   ledger: SidechannelLedger;
-  // Integration tools the user granted "for this session" via the approval
-  // prompt (gateway, design §9); keyed by the LLM-facing tool name.
-  toolGrants: Set<string>;
 }
 
 // The list-row shape (`kind: "sessions"`) and its state enum are wire shapes:
@@ -214,7 +211,6 @@ export class SessionSupervisor<C> {
       busy: false,
       lastActivity: Date.now(),
       ledger: new SidechannelLedger(),
-      toolGrants: new Set(),
     };
     session.driver = this.opts.createDriver(spec, {
       onEvent: (frame) => {

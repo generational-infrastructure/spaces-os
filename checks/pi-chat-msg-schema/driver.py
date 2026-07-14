@@ -186,33 +186,6 @@ def main() -> None:
             },
         )
 
-        appr = call(
-            "approval",
-            "ap1",
-            130,
-            {
-                "integration": "github",
-                "tool": "github_create_issue",
-                "args": '{\n  "repo": "octo/repo"\n}',
-            },
-        )
-        check_record(
-            "approval",
-            appr,
-            {
-                "id": "ap1",
-                "from": "peer",
-                "text": "",
-                "ts": 130,
-                "state": "sent",
-                "type": "approval",
-                "approvalIntegration": "github",
-                "approvalTool": "github_create_issue",
-                "approvalState": "pending",
-            },
-        )
-        check("approval.args", "octo/repo" in appr.get("approvalArgs", ""), True)
-
         prompt = call(
             "prompt",
             "p1",
@@ -274,7 +247,6 @@ def main() -> None:
             "thinking": think,
             "notification": notif,
             "confirm": conf,
-            "approval": appr,
             "prompt": prompt,
         }
         table = {
@@ -282,7 +254,6 @@ def main() -> None:
             "isConfirm": {"confirm"},
             "isPrompt": {"prompt"},
             "isThinking": {"thinking"},
-            "isApproval": {"approval"},
             "isPlain": {"plain user", "plain assistant", "stream"},
         }
         for pred, truthy in table.items():
@@ -295,7 +266,7 @@ def main() -> None:
         check("isPlainAssistant(assistant)", call("isPlainAssistant", asst), True)
         check("isPlainAssistant(stream)", call("isPlainAssistant", stream), True)
         check("isPlainAssistant(user)", call("isPlainAssistant", user), False)
-        for label in ("thinking", "notification", "confirm", "approval", "prompt"):
+        for label in ("thinking", "notification", "confirm", "prompt"):
             check(
                 f"isPlainAssistant({label})",
                 call("isPlainAssistant", kinds[label]),

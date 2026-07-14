@@ -286,6 +286,10 @@ in
     # Agent integrations: broker + Landlock-confined MCP units. Imported here so
     # every pi-chat consumer gets the feature; enabled by default below.
     inputs.self.nixosModules.spaces-integrations
+    # The standalone aggregating MCP gateway that bundles those integrations for
+    # any harness (pi via a generic MCP-client extension, others via MCP). Gated
+    # on services.spaces-integrations.enable — enabled together, below.
+    inputs.self.nixosModules.spaces-integration-gateway
   ];
 
   options.services.pi-chat = {

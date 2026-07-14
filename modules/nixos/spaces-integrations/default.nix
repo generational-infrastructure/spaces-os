@@ -7,7 +7,7 @@
 #     Landlock-confined MCP server (ExecStartPre lowers the per-user policy;
 #     ExecStart execs the server through landlock-exec);
 #   - systemd.user.sockets."spaces-integration-<name>" — its unix socket at
-#     %t/spaces-integration-<name>.sock that the supervisor gateway connects to;
+#     %t/spaces-integration-<name>.sock that the aggregating gateway connects to;
 #   - /etc/spaces-integrations/<name>.json — the world-readable definition the
 #     gateway / broker / panel read (posture + secret prompts + autoRun).
 #
@@ -689,7 +689,7 @@ in
   ];
 
   options.services.spaces-integrations = {
-    enable = lib.mkEnableOption "agent integrations: per-user, Landlock-confined MCP servers behind the supervisor gateway";
+    enable = lib.mkEnableOption "agent integrations: per-user, Landlock-confined MCP servers behind the aggregating gateway";
 
     memoryHigh = lib.mkOption {
       type = lib.types.str;

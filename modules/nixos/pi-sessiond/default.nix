@@ -460,21 +460,21 @@ in
         SPACES_SESSIOND_TOKEN = cfg.token;
       }
       // lib.optionalAttrs integrationsEnabled {
-        # Integrations gateway (design §9): with the spaces-integrations module
-        # enabled, the supervisor discovers the user's enabled integrations and
-        # forwards their MCP tools. All four paths resolve in the one user
-        # manager the daemon and the integration units share:
-        #   ENABLED — the broker's per-user state (which integrations are on);
-        #   DEFS    — the world-readable definition dir (the autoRun allowlist);
-        #   SOCKETS — %t, where each integration's socket-activated
-        #             spaces-integration-<name>.sock lives;
-        #   SHARED  — the file-exchange base; <SHARED>/<name> is granted rw in
-        #             the session policy (step 6), the same dir the integration
-        #             unit grants itself.
+        # Agent integrations: the gateway moved OUT of the supervisor into its own
+        # --user service (spaces-integration-gateway). The supervisor keeps only
+        # what its OWN sandbox needs:
+        #   ENABLED — the broker's per-user state (which integrations are on),
+        #             read to grant each enabled integration's shared dir into the
+        #             session Landlock policy;
+        #   SHARED  — the file-exchange base; <SHARED>/<name> is granted rw in the
+        #             session policy (step 6), the same dir the integration unit
+        #             grants itself;
+        #   GATEWAY_SOCKET — the aggregating gateway's MCP socket, forwarded into
+        #             the sandboxed child (SPACES_INTEGRATION_GATEWAY_SOCKET) so
+        #             pi's generic MCP-client extension reaches it.
         SPACES_SESSIOND_INTEGRATIONS_ENABLED = "%S/spaces-integrationd/enabled.json";
-        SPACES_SESSIOND_INTEGRATIONS_DEFS = "/etc/spaces-integrations";
-        SPACES_SESSIOND_INTEGRATIONS_SOCKETS = "%t";
         SPACES_SESSIOND_INTEGRATIONS_SHARED = "%t/spaces-integration-share";
+        SPACES_SESSIOND_INTEGRATION_GATEWAY_SOCKET = "%t/spaces-integration-gateway.sock";
       };
       serviceConfig = {
         ExecStart = lib.getExe' cfg.package "pi-sessiond";
@@ -520,11 +520,11 @@ in
         # connect to user scope bus"). Everything else under /run/user (skill
         # sockets, other daemons) stays hidden from the daemon; each per-session
         # pi child gets its own Landlock domain, independent of the daemon's view.
-        # With integrations enabled the gateway must read the broker's
-        # enabled.json (under /home) and reach each integration's socket +
-        # shared dir (under /run/user), so it drops to read-only there: the
-        # supervisor still cannot write the user's files, and each per-session
-        # pi child keeps its own Landlock domain regardless of the daemon's view.
+        # With integrations enabled the supervisor still reads the broker's
+        # enabled.json (under /home) to grant each enabled integration's
+        # file-exchange shared dir into the session policy, so it drops to
+        # read-only there. It no longer runs the gateway or connects to the
+        # integration sockets — that is the standalone spaces-integration-gateway.
         ProtectHome = if integrationsEnabled then "read-only" else "tmpfs";
         BindPaths = [
           "%S/pi-sessiond"

@@ -30,46 +30,13 @@ test("claim is first-answer-wins: unknown ids and lost races return nothing", ()
   expect(ledger.claim("ui-1")).toBeUndefined(); // second answer lost the race
 });
 
-test("an approval parks until its verdict settles the promise", async () => {
-  const ledger = new SidechannelLedger();
-  const verdict = ledger.raiseApproval("appr-1");
-  expect(ledger.parked).toBe(true);
-  expect(ledger.settleApproval("appr-1", "session")).toBe(true);
-  expect(ledger.parked).toBe(false);
-  expect(await verdict).toBe("session");
-});
-
-test("settling an unknown approval is a no-op", () => {
+test("the session stays parked until every open sidechannel is claimed", () => {
   const ledger = new SidechannelLedger();
   ledger.raise("ui-1", "confirm", () => {});
-  expect(ledger.settleApproval("ghost", "deny")).toBe(false);
-  expect(ledger.parked).toBe(true); // untouched
-});
-
-// The spurious-unpark case: answering the last sidechannel while an approval
-// is still open must NOT unpark (main.ts used to re-derive parked from the
-// sidechannel map alone here).
-test("resolving the last sidechannel keeps the session parked on an open approval", () => {
-  const ledger = new SidechannelLedger();
-  ledger.raise("ui-1", "confirm", () => {});
-  void ledger.raiseApproval("appr-1");
-
+  ledger.raise("ui-2", "input", () => {});
   ledger.claim("ui-1");
-  expect(ledger.parked).toBe(true); // approval still open
-
-  ledger.settleApproval("appr-1", "once");
-  expect(ledger.parked).toBe(false);
-});
-
-test("settling the last approval keeps the session parked on an open sidechannel", () => {
-  const ledger = new SidechannelLedger();
-  void ledger.raiseApproval("appr-1");
-  ledger.raise("ui-1", "confirm", () => {});
-
-  ledger.settleApproval("appr-1", "deny");
-  expect(ledger.parked).toBe(true); // sidechannel still open
-
-  ledger.claim("ui-1");
+  expect(ledger.parked).toBe(true); // ui-2 still open
+  ledger.claim("ui-2");
   expect(ledger.parked).toBe(false);
 });
 
@@ -81,11 +48,9 @@ test("clear drops every pending entry and unparks", () => {
   ledger.raise("ui-1", "confirm", () => {
     throw new Error("relay to a dead child must never fire");
   });
-  void ledger.raiseApproval("appr-1");
 
   ledger.clear();
   expect(ledger.parked).toBe(false);
   expect(ledger.pendingCount).toBe(0);
   expect(ledger.claim("ui-1")).toBeUndefined();
-  expect(ledger.settleApproval("appr-1", "once")).toBe(false);
 });

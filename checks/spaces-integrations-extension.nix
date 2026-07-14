@@ -2,13 +2,11 @@
 # (packages/pi-chat-extensions/spaces-integrations.ts).
 #
 # Builds a minimal Nix derivation that runs Node's built-in test runner against
-# the extension's pure logic — no pi, no daemon, no VM. Catches regressions in
-# how it reads the per-session spec, registers a forwarding tool per entry, and
-# performs the ctx.ui.input gateway round-trip (success, no-UI, cancelled, bad
-# reply). Runs against the BUILT package output, so the wire sentinels are the
-# substituted values from packages/pi-sessiond/integration-wire.json — the same
-# single source the supervisor gateway reads. The supervisor's half is
-# checks/pi-sessiond-integration-gateway.
+# the extension's pure logic — no pi, no gateway, no VM. Catches regressions in
+# how it connects to the standalone gateway over SPACES_INTEGRATION_GATEWAY_SOCKET,
+# registers a forwarding tool per aggregated tool from tools/list, and forwards
+# each call as a tools/call over that connection. Runs against the BUILT package
+# output. The gateway's own half is checks/spaces-integration-gateway-{unit,e2e}.
 { pkgs, inputs, ... }:
 pkgs.runCommand "spaces-integrations-extension-test"
   {

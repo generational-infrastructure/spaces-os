@@ -46,15 +46,7 @@
     "prompt-cancel": "取消",
     "prompt-submitted": "✓ 已提交",
     "prompt-cancelled": "✗ 已取消",
-    "prompt-retracted": "⚠ 已撤回",
-    "approval-title": "允许集成工具调用?",
-    "approval-context": "预览:",
-    "approval-deny": "拒绝",
-    "approval-once": "允许一次",
-    "approval-session": "本会话内允许",
-    "approval-allowed-once": "✓ 已允许一次",
-    "approval-allowed-session": "✓ 已允许（会话）",
-    "approval-denied": "✗ 已拒绝"
+    "prompt-retracted": "⚠ 已撤回"
   },
   "settings": {
     "nixos-hint": "对端配置（公钥、中继、显示名称）由 NixOS 模块管理 — 请参阅配置中的 services.pi-chat。",
