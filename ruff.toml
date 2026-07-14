@@ -112,7 +112,10 @@ ignore = [
 # blobs, and declarative tool records cross process boundaries as untyped dicts.
 # The tests pin the wire contract; forcing full annotations here mostly
 # restates that dynamic shape without making the runtime safer.
-"packages/{integration-signal,spaces-integration-mcp}/**.py" = [
+# (integration-proton and spaces-himalaya-core are the same glue class:
+# proton is integration-signal's sibling MCP server + gRPC setup helper,
+# himalaya-core the config/exec layer shared by the mail and proton servers.)
+"packages/{integration-signal,spaces-integration-mcp,integration-proton,spaces-himalaya-core}/**.py" = [
   "ANN",
   "ARG001",
   "ARG005",

@@ -158,7 +158,8 @@ def _build_config(profile, vals):
     registered in the caller-supplied scratch dict so the impl wrapper can
     remove it once himalaya (and any msmtp it spawns) has finished. When called
     without a scratch (direct unit test) the caller owns cleanup of the dir the
-    returned cmd points at."""
+    returned cmd points at.
+    """
     email = vals["email"]
     cert = _cert_path()
 
@@ -179,7 +180,8 @@ def bridge_probe(profile, vals):
     """Pre-flight Bridge health: return None to proceed, else the onboarding
     hint. Bridge is usable only when its serving cert exists (onboarded) AND its
     IMAP port answers (daemon up). Overridable in tests by monkeypatching this
-    name (the precheck resolves it dynamically)."""
+    name (the precheck resolves it dynamically).
+    """
     if not os.path.exists(_cert_path()):
         return _ONBOARDING_HINT
     try:
@@ -197,7 +199,8 @@ def _precheck(profile, vals):
 def _wrap(base):
     """Give a shared tool impl a per-call msmtprc scratch dir and guarantee its
     removal, whatever the impl returns or raises (the himalaya exec, and any
-    msmtp it spawns, complete synchronously inside the base impl)."""
+    msmtp it spawns, complete synchronously inside the base impl).
+    """
 
     def impl(args, profile, vals):
         scratch = {}
@@ -215,7 +218,8 @@ def authcmd():
     """Second console script (integration-proton-authcmd): the credential
     fetcher himalaya's backend.auth.cmd and msmtp's passwordeval both call.
     Prints the sealed-store bridge_password for argv[1] so the secret is never
-    written to any config file."""
+    written to any config file.
+    """
     print(store_profile(sys.argv[1])["bridge_password"])
 
 
@@ -269,7 +273,7 @@ TOOLS, call_tool, main = make_server(
             "impl": _impls["message_send"],
         },
     ],
-    secret_field="bridge_password",
+    secret_field="bridge_password",  # noqa: S106 (names the store field, not a credential)
     error_label="proton mail operation",
 )
 

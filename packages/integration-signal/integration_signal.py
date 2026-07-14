@@ -31,7 +31,7 @@ import json
 import os
 import sys
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from spaces_integration_mcp import make_server, shared_dir
@@ -146,12 +146,13 @@ def _account_id(acct):
 def _read_accounts_health():
     """The bridge's accounts-health.json (next to messages.db), or None when
     absent, unparseable, or stale — in which case the gate falls back to the
-    onboarding hint."""
+    onboarding hint.
+    """
     path = dbmod.default_db_path().parent / _HEALTH_FILE_NAME
     try:
         health = json.loads(path.read_text())
         updated = datetime.fromisoformat(health["updated"])
-        age = datetime.now(timezone.utc) - updated
+        age = datetime.now(UTC) - updated
     except (OSError, ValueError, KeyError, TypeError):
         return None
     if not isinstance(health.get("store"), int) or not isinstance(
@@ -169,7 +170,8 @@ def _gate_error(*, daemon_reachable):
     signal-cli's store that the daemon doesn't serve is a daemon/load failure
     (remedy: restart), NOT an unlinked host (remedy: QR onboarding). Only a
     fresh snapshot with store == 0 — or no usable snapshot at all — yields
-    the onboarding hint."""
+    the onboarding hint.
+    """
     health = _read_accounts_health()
     if health is not None:
         store, loaded = health["store"], health["loaded"]

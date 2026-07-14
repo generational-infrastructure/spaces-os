@@ -45,7 +45,8 @@ def wait_until(predicate, *, timeout_s: float, interval_s: float = 0.1) -> bool:
 
 def probe(sock_path: str, req: dict) -> dict:
     """Send one request to the fake broker on a fresh connection (the broker's
-    one-request-per-connection convention); return the parsed reply, {} on EOF."""
+    one-request-per-connection convention); return the parsed reply, {} on EOF.
+    """
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(sock_path)
     try:

@@ -41,6 +41,7 @@ if _HERE not in sys.path:
 
 def _write_exec(path, text):
     """Shared test helper: write an executable stub script, substituting
-    __PY__ with the current interpreter."""
+    __PY__ with the current interpreter.
+    """
     path.write_text(text.replace("__PY__", sys.executable))
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)

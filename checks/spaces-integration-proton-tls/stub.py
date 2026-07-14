@@ -51,7 +51,7 @@ def serve_imap(conn):
                 return
             print("IMAP_TLS_OK", flush=True)
             return
-        elif b"CAPABILITY" in up:
+        if b"CAPABILITY" in up:
             conn.sendall(b"* CAPABILITY IMAP4rev1 STARTTLS\r\n")
             conn.sendall(f"{tag} OK\r\n".encode())
         elif b"LOGOUT" in up:
@@ -69,7 +69,7 @@ def serve_smtp(conn):
         if line is None:
             return
         up = line.upper()
-        if up.startswith(b"EHLO") or up.startswith(b"HELO"):
+        if up.startswith((b"EHLO", b"HELO")):
             conn.sendall(b"250-stub\r\n250 STARTTLS\r\n")
         elif up.startswith(b"STARTTLS"):
             conn.sendall(b"220 ready\r\n")
@@ -106,7 +106,7 @@ srv.settimeout(20)
 print(f"{kind}_LISTEN {port}", flush=True)
 try:
     conn, _ = srv.accept()
-except socket.timeout:
+except TimeoutError:
     print(f"{kind}_TIMEOUT", flush=True)
     sys.exit(2)
 conn.settimeout(20)

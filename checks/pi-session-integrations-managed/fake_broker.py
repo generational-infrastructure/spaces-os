@@ -188,7 +188,7 @@ def serve(conn: socket.socket) -> None:
         with LOCK:
             reply = handle(req)
         send_line(conn, reply)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         try:
             send_line(conn, {"op": "error", "error": str(e)})
         except OSError:

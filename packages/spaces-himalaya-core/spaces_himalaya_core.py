@@ -24,9 +24,10 @@ HIMALAYA = "himalaya"
 
 
 def enc_for_port(port):
-    """himalaya encryption type inferred from a port when none is pinned:
+    """Himalaya encryption type inferred from a port when none is pinned:
     993/465 are implicit TLS, 587/143 negotiate STARTTLS, 25 is plaintext,
-    anything else defaults to TLS (mirrors mail.sh's enc_for_port)."""
+    anything else defaults to TLS (mirrors mail.sh's enc_for_port).
+    """
     return {
         "993": "tls",
         "465": "tls",
@@ -44,7 +45,8 @@ def toml_escape(s):
 @contextlib.contextmanager
 def config_file(text, prefix="himalaya-"):
     """Write the himalaya config to a 0600 file inside a private tempdir, yield
-    its path, and remove the tempdir on exit."""
+    its path, and remove the tempdir on exit.
+    """
     d = tempfile.mkdtemp(prefix=prefix)
     try:
         path = os.path.join(d, "himalaya.toml")
@@ -59,11 +61,12 @@ def config_file(text, prefix="himalaya-"):
 def run_himalaya(cfg, sub_args, stdin=None):
     """Exec himalaya against the generated config; return (stdout, False) or,
     on a non-zero exit / spawn failure, (stderr-or-stdout, True). stdin is sent
-    verbatim as bytes so a raw RFC822 message keeps its CRLF line endings."""
-    argv = [HIMALAYA, "-c", cfg] + sub_args
+    verbatim as bytes so a raw RFC822 message keeps its CRLF line endings.
+    """
+    argv = [HIMALAYA, "-c", cfg, *sub_args]
     data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
     try:
-        proc = subprocess.run(argv, input=data, capture_output=True)
+        proc = subprocess.run(argv, input=data, capture_output=True, check=False)
     except OSError as e:
         return f"failed to run {HIMALAYA}: {e.__class__.__name__}: {e}", True
     out = proc.stdout.decode("utf-8", "replace")
@@ -92,7 +95,8 @@ def make_tool_impls(build_config, precheck=None):
       passes a Bridge probe here.
 
     The tool bodies (arg validation messages, himalaya subcommands, JSON output
-    flag, stdin handling) are shared verbatim across backends."""
+    flag, stdin handling) are shared verbatim across backends.
+    """
 
     def _probe(profile, vals):
         # None => proceed; (err, True) => caller returns it and skips himalaya.

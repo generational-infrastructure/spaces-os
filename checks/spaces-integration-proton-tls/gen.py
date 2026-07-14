@@ -17,7 +17,8 @@ import integration_proton as ip
 scratch = {}
 cfg, err = ip._build_config("test", {"email": "u@localhost", ip._SCRATCH: scratch})
 if err is not None:
-    raise SystemExit(f"unexpected _build_config error: {err}")
+    msg = f"unexpected _build_config error: {err}"
+    raise SystemExit(msg)
 
 with open("himalaya.toml", "w", encoding="utf-8") as f:
     f.write(cfg)

@@ -49,12 +49,13 @@ def shared_dir():
 # managed_managed-config.toml and each secret is a managed_secret-<profile>-<field>
 # file holding one raw value.
 _MANAGED_CONFIG_CRED = "managed_managed-config.toml"
-_MANAGED_SECRET_PREFIX = "managed_secret-"
+_MANAGED_SECRET_PREFIX = "managed_secret-"  # noqa: S105 (credential FILENAME prefix, not a secret value)
 
 
 def _merge_profile_tables(text, out):
     """Fold a skill-config TOML blob's [<skill>.<profile>] tables into out
-    ({profile: {field: value}}); unparseable text is ignored."""
+    ({profile: {field: value}}); unparseable text is ignored.
+    """
     try:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
@@ -68,7 +69,8 @@ def _merge_profile_tables(text, out):
 
 def _user_profiles(kinds):
     """Parse the user config/secrets blobs → {profile: {field: value}}, merged
-    across the requested kinds."""
+    across the requested kinds.
+    """
     out = {}
     for kind in kinds:
         text = read_credential(kind)
@@ -79,7 +81,8 @@ def _user_profiles(kinds):
 
 def _managed_config():
     """Parse managed_managed-config.toml → {profile: {field: value}} (same
-    skill-config TOML layout as the user config blob); {} when absent."""
+    skill-config TOML layout as the user config blob); {} when absent.
+    """
     out = {}
     text = read_credential(_MANAGED_CONFIG_CRED)
     if text:
@@ -92,7 +95,8 @@ def _split_managed_secret(rest, known):
     (profile, field). For each config-known profile (longest first), a "<p>-…"
     remainder binds field to the rest; when no known profile is a prefix, fall
     back to splitting on the first '-'. Returns (profile, None) when the
-    fallback finds no '-' at all."""
+    fallback finds no '-' at all.
+    """
     for p in known:
         if rest.startswith(p + "-"):
             return p, rest[len(p) + 1 :]
@@ -102,7 +106,8 @@ def _split_managed_secret(rest, known):
 
 def _managed_secrets(known_profiles):
     """Read managed_secret-<profile>-<field> credential files →
-    {profile: {field: value}}. Values are read raw (stripped)."""
+    {profile: {field: value}}. Values are read raw (stripped).
+    """
     creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
     if not creds_dir:
         return {}
@@ -128,7 +133,8 @@ def _managed_profiles(kinds):
     """Managed profiles → {profile: {field: value}} for the requested kinds:
     config values when "config" is requested, secret values when "secrets" is.
     The config tables always supply the profile names that resolve secret
-    filenames, so they are parsed regardless of kinds."""
+    filenames, so they are parsed regardless of kinds.
+    """
     config = _managed_config()
     out = {}
     if "config" in kinds:

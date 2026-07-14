@@ -15,7 +15,7 @@ import socket
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import integration_signal
@@ -311,7 +311,7 @@ def test_no_linked_account_is_treated_as_unlinked(tmp_path, monkeypatch):
 
 
 def _write_health(tmp_path, *, store, loaded, age_seconds=0.0):
-    updated = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    updated = datetime.now(UTC) - timedelta(seconds=age_seconds)
     (tmp_path / "accounts-health.json").write_text(
         json.dumps({"store": store, "loaded": loaded, "updated": updated.isoformat()})
     )

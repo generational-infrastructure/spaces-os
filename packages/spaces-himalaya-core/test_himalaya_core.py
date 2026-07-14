@@ -65,7 +65,8 @@ def test_config_file_is_0600_and_cleaned_up():
     with core.config_file("hello = 1\n") as path:
         assert os.path.isfile(path)
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
-        assert open(path, encoding="utf-8").read() == "hello = 1\n"
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "hello = 1\n"
         tmpdir = os.path.dirname(path)
         assert os.path.basename(tmpdir).startswith("himalaya-")
     assert not os.path.exists(tmpdir)
@@ -131,7 +132,7 @@ def test_make_tool_impls_precheck_pass_runs_himalaya(himalaya_stub):
 
 def test_make_tool_impls_default_precheck_is_no_probe(himalaya_stub):
     impls = core.make_tool_impls(_ok_config)
-    text, is_error = impls["message_read"]({"id": "5"}, "personal", {})
+    _text, is_error = impls["message_read"]({"id": "5"}, "personal", {})
     assert is_error is False
     assert _spawned(himalaya_stub)
     assert "5" in (himalaya_stub / "spawned").read_text()

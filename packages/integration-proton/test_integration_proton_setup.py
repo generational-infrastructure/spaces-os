@@ -21,6 +21,7 @@ import grpc
 import integration_proton_setup as setup
 import pytest
 from conftest import _write_exec
+from google.protobuf.empty_pb2 import Empty
 
 # Throwaway self-signed localhost cert (CN + SAN = 127.0.0.1, matching Bridge's
 # internal/certs/tls.go). Private key is a test artifact, never a real secret.
@@ -429,7 +430,8 @@ def test_happy_path_2fa_links_and_sets_fields(bench, tmp_path):
     events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     kinds = [e.get("event") for e in events]
-    assert "text-field" in kinds and "secret-field" in kinds
+    assert "text-field" in kinds
+    assert "secret-field" in kinds
     # two secret prompts: password + totp
     assert kinds.count("secret-field") == 2
     assert rec["login_calls"] == ["Login", "Login2FA"]
@@ -445,7 +447,8 @@ def test_happy_path_2fa_links_and_sets_fields(bench, tmp_path):
     assert sf == {"email": "me@proton.me", "bridge_password": "BRIDGE-PW-1"}
 
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
     assert "Quit" in rec["calls"]
 
 
@@ -472,7 +475,8 @@ def test_link_exports_bridge_tls_cert(bench, tmp_path):
     vault.enc); the server module's bridge_probe requires it on disk. The
     helper must call ExportTLSCertificates into the bridge-v3 config dir and
     wait for cert.pem (the export is a fire-and-forget goroutine server-side)
-    before declaring done."""
+    before declaring done.
+    """
     scenario = {
         "connected_users": [],
         "login_steps": [{"emit": [{"type": "finished", "userID": "u1"}]}],
@@ -485,13 +489,15 @@ def test_link_exports_bridge_tls_cert(bench, tmp_path):
     # done implies the helper waited out the fake's delayed write
     assert (certdir / "cert.pem").read_text() == CERT_PEM
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
     assert rec["calls"].index("ExportTLSCertificates") < rec["calls"].index("Quit")
 
 
 def test_already_logged_in_refresh_exports_cert(bench, tmp_path):
     """The refresh path must export too: it is the recovery route for a state
-    dir onboarded before the export existed (vault present, cert.pem absent)."""
+    dir onboarded before the export existed (vault present, cert.pem absent).
+    """
     scenario = {
         "connected_users": [_USER],
         "login_steps": [],
@@ -536,7 +542,8 @@ def test_free_user_gives_paid_plan_hint_and_no_set_field(bench, tmp_path):
     }
     events, _rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "error"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "error"
     assert "paid Proton plan" in terms[0]["error"]
     assert _set_fields(events) == []
 
@@ -551,14 +558,16 @@ def test_fido_only_account_is_use_totp_error(bench, tmp_path):
     }
     events, _rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "error"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "error"
     assert "TOTP" in terms[0]["error"]
     assert _set_fields(events) == []
 
 
 def test_missing_bridge_binary_is_error_event(bench, tmp_path, monkeypatch):
     """With no protonmail-bridge on PATH the helper must still emit exactly one
-    terminal error event naming the binary — never exit silently with none."""
+    terminal error event naming the binary — never exit silently with none.
+    """
     path = os.pathsep.join(
         p for p in os.environ["PATH"].split(os.pathsep) if p != bench["bin"]
     )
@@ -566,7 +575,8 @@ def test_missing_bridge_binary_is_error_event(bench, tmp_path, monkeypatch):
     assert shutil.which("protonmail-bridge") is None
     events, _rec = _run_helper(tmp_path, {}, {"action": "link"}, _REPLIES)
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "error"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "error"
     assert "protonmail-bridge" in terms[0]["error"]
     assert _set_fields(events) == []
 
@@ -583,13 +593,15 @@ def test_already_logged_in_refresh_skips_login(bench, tmp_path):
     events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
 
     kinds = [e.get("event") for e in events]
-    assert "text-field" not in kinds and "secret-field" not in kinds
+    assert "text-field" not in kinds
+    assert "secret-field" not in kinds
     assert rec["login_calls"] == []  # Login never called
 
     sf = {e["field"]: e["value"] for e in _set_fields(events)}
     assert sf == {"email": "me@proton.me", "bridge_password": "BRIDGE-PW-1"}
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
 
 
 def test_refresh_awaits_users_loaded(bench, tmp_path):
@@ -597,7 +609,8 @@ def test_refresh_awaits_users_loaded(bench, tmp_path):
     publishes allUsersLoaded when done; the event is queued server-side until
     the first RunEventStream subscriber). A GetUserList racing the load sees
     [] and would re-prompt full credentials on an already-linked vault. The
-    helper must await allUsersLoaded before listing users."""
+    helper must await allUsersLoaded before listing users.
+    """
     scenario = {
         "connected_users": [_USER],
         "login_steps": [],
@@ -606,10 +619,12 @@ def test_refresh_awaits_users_loaded(bench, tmp_path):
     }
     events, rec = _run_helper(tmp_path, scenario, {"action": "link"}, _REPLIES)
     kinds = [e.get("event") for e in events]
-    assert "text-field" not in kinds and "secret-field" not in kinds
+    assert "text-field" not in kinds
+    assert "secret-field" not in kinds
     assert rec["login_calls"] == []
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
 
 
 # ── remove verb ─────────────────────────────────────────────────────
@@ -625,9 +640,11 @@ def test_remove_calls_remove_user_then_done(bench, tmp_path):
         tmp_path, scenario, {"action": "remove", "profile": "default"}, _REPLIES
     )
     assert rec["removed"] == ["u1"]
-    assert "RemoveUser" in rec["calls"] and "Quit" in rec["calls"]
+    assert "RemoveUser" in rec["calls"]
+    assert "Quit" in rec["calls"]
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
     assert _set_fields(events) == []
 
 
@@ -639,12 +656,14 @@ def test_remove_no_users_is_idempotent_done(bench, tmp_path):
     assert rec["removed"] == []
     assert "RemoveUser" not in rec["calls"]
     terms = _terminals(events)
-    assert len(terms) == 1 and terms[0]["event"] == "done"
+    assert len(terms) == 1
+    assert terms[0]["event"] == "done"
 
 
 def test_remove_awaits_users_loaded(bench, tmp_path):
     """Same async-load race as the refresh: a remove racing the user load
-    sees [] and would return the idempotent done WITHOUT removing anyone."""
+    sees [] and would return the idempotent done WITHOUT removing anyone.
+    """
     scenario = {
         "connected_users": [_USER],
         "login_steps": [],
@@ -662,7 +681,8 @@ def test_remove_awaits_users_loaded(bench, tmp_path):
 
 def test_fake_bridge_rejects_bad_token(bench, tmp_path):
     """Prove the fake enforces the server-token (so the happy path's success
-    means the helper really sent the right token over the TLS channel)."""
+    means the helper really sent the right token over the TLS channel).
+    """
     run = tmp_path
     state = run / "state"
     (state / "config").mkdir(parents=True)
@@ -686,7 +706,6 @@ def test_fake_bridge_rejects_bad_token(bench, tmp_path):
             options=[("grpc.ssl_target_name_override", "127.0.0.1")],
         )
         stub = setup.pb_grpc.BridgeStub(channel)
-        from google.protobuf.empty_pb2 import Empty
 
         # Right token: accepted.
         stub.GetUserList(Empty(), metadata=(("server-token", TOKEN),))

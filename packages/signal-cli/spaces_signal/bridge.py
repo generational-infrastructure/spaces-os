@@ -27,7 +27,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import db as dbmod
@@ -250,7 +250,8 @@ class Bridge:
 
     def _store_account_count(self) -> int:
         """Entries in signal-cli's on-disk data/accounts.json; 0 when the
-        path is unset, the file is absent, or it doesn't parse."""
+        path is unset, the file is absent, or it doesn't parse.
+        """
         path = self.config.accounts_store_path
         if path is None:
             return 0
@@ -269,11 +270,12 @@ class Bridge:
         linked account — the MCP tool gate reads this to report that
         honestly instead of the false 'not linked' hint. Atomic
         (temp+rename) so the gate never sees a torn file; best-effort — a
-        write failure must not disturb the forwarder."""
+        write failure must not disturb the forwarder.
+        """
         health = {
             "store": self._store_account_count(),
             "loaded": loaded,
-            "updated": datetime.now(timezone.utc).isoformat(),
+            "updated": datetime.now(UTC).isoformat(),
         }
         path = self.config.db_path.parent / "accounts-health.json"
         tmp = path.with_name(path.name + ".tmp")

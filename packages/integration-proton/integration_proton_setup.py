@@ -67,7 +67,8 @@ CLIENT_PLATFORM = "spaces"
 def _wire_pw(secret: str) -> bytes:
     """LoginRequest.password on the wire: Bridge base64Decode()s every
     Login/Login2FA/Login2Passwords password (grpc/service_methods.go) and
-    fails login on raw bytes ("Cannot decode password")."""
+    fails login on raw bytes ("Cannot decode password").
+    """
     return base64.b64encode(secret.encode("utf-8"))
 
 
@@ -99,7 +100,7 @@ _FIDO_ONLY_MSG = (
 )
 
 
-class _Fail(Exception):
+class _SetupError(Exception):
     """A terminal, human-facing setup failure (mapped to one `error` event)."""
 
 
@@ -118,7 +119,7 @@ def _safe_emit(conn, event):
 def _read_line(reader):
     line = reader.readline()
     if not line:
-        raise _Fail("the setup connection closed before a reply arrived")
+        raise _SetupError("the setup connection closed before a reply arrived")
     return line
 
 
@@ -128,10 +129,12 @@ def _prompt(conn, reader, event, field, label):
     try:
         reply = json.loads(_read_line(reader))
     except ValueError as exc:
-        raise _Fail(f"malformed reply for {field}: {exc}")
+        msg = f"malformed reply for {field}: {exc}"
+        raise _SetupError(msg) from exc
     value = reply.get("value")
     if not value:
-        raise _Fail(f"no value provided for {field}")
+        msg = f"no value provided for {field}"
+        raise _SetupError(msg)
     return value
 
 
@@ -148,7 +151,8 @@ def _set_field(conn, profile, field, value):
 def _bridge_env():
     """os.environ plus the XDG pins the resurrected daemon and the setup helper
     share (proton-bridge-facts). DBUS unset makes Bridge fall back to the `pass`
-    keychain deterministically."""
+    keychain deterministically.
+    """
     state = _state_root()
     env = os.environ.copy()
     env["XDG_CONFIG_HOME"] = os.path.join(state, "config")
@@ -168,7 +172,8 @@ def _config_path(env):
 
 def _poll_config(path):
     """Poll for a fully-written grpcServerConfig.json. temp+rename means a
-    partial read/parse just means "not ready yet" -> retry."""
+    partial read/parse just means "not ready yet" -> retry.
+    """
     deadline = time.monotonic() + _CONFIG_POLL_DEADLINE
     while True:
         try:
@@ -183,7 +188,9 @@ def _poll_config(path):
         except (OSError, ValueError):
             pass
         if time.monotonic() >= deadline:
-            raise _Fail("Proton Bridge did not become ready (no gRPC config file)")
+            raise _SetupError(
+                "Proton Bridge did not become ready (no gRPC config file)"
+            )
         time.sleep(_POLL_INTERVAL)
 
 
@@ -198,9 +205,9 @@ def _make_channel(cfg):
     )
     try:
         grpc.channel_ready_future(channel).result(timeout=_CHANNEL_READY_TIMEOUT)
-    except grpc.FutureTimeoutError:
+    except grpc.FutureTimeoutError as exc:
         channel.close()
-        raise _Fail("could not open a gRPC channel to Proton Bridge")
+        raise _SetupError("could not open a gRPC channel to Proton Bridge") from exc
     return channel
 
 
@@ -219,7 +226,8 @@ def _terminate(proc):
 @contextlib.contextmanager
 def _bridge():
     """Spawn a transient `protonmail-bridge --grpc`, yield (stub, metadata), and
-    guarantee the instance and channel are torn down on exit."""
+    guarantee the instance and channel are torn down on exit.
+    """
     env = _bridge_env()
     cfg_path = _config_path(env)
     os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
@@ -231,7 +239,8 @@ def _bridge():
     try:
         proc = subprocess.Popen([binary, "--grpc"], env=env)
     except OSError as exc:
-        raise _Fail(f"{BRIDGE_BINARY} is not installed or not on PATH") from exc
+        msg = f"{BRIDGE_BINARY} is not installed or not on PATH"
+        raise _SetupError(msg) from exc
     channel = None
     try:
         cfg = _poll_config(cfg_path)
@@ -271,7 +280,8 @@ def _login_error_text(err):
 
 def _drive_login(conn, reader, stub, md, events, email):
     """Consume login events until finished/alreadyLoggedIn (returns the userID),
-    answering 2FA / mailbox-password prompts and mapping typed errors."""
+    answering 2FA / mailbox-password prompts and mapping typed errors.
+    """
     try:
         for ev in events:
             if ev.WhichOneof("event") != "login":
@@ -283,7 +293,7 @@ def _drive_login(conn, reader, stub, md, events, email):
             if kind == "alreadyLoggedIn":
                 return le.alreadyLoggedIn.userID
             if kind == "error":
-                raise _Fail(_login_error_text(le.error))
+                raise _SetupError(_login_error_text(le.error))
             if kind in ("tfaRequested", "tfaOrFidoRequested"):
                 code = _prompt(
                     conn,
@@ -316,17 +326,18 @@ def _drive_login(conn, reader, stub, md, events, email):
                 "loginFidoTouchCompleted",
                 "loginFidoPinRequired",
             ):
-                raise _Fail(_FIDO_ONLY_MSG)
+                raise _SetupError(_FIDO_ONLY_MSG)
             if kind == "hvRequested":
-                raise _Fail(
+                raise _SetupError(
                     "Proton requested human verification (CAPTCHA), which this "
                     "setup can't complete; sign in once via the Proton Bridge app, "
                     "then retry"
                 )
             # Any other login event: ignore and keep waiting.
     except grpc.RpcError as exc:
-        raise _Fail(f"lost contact with Proton Bridge during login: {_rpc_text(exc)}")
-    raise _Fail("Proton Bridge closed the login stream before finishing")
+        msg = f"lost contact with Proton Bridge during login: {_rpc_text(exc)}"
+        raise _SetupError(msg) from exc
+    raise _SetupError("Proton Bridge closed the login stream before finishing")
 
 
 def _await_settings(events):
@@ -338,14 +349,15 @@ def _await_settings(events):
             if kind == "changeMailServerSettingsFinished":
                 return
             if kind == "error":
-                raise _Fail(
+                raise _SetupError(
                     "Proton Bridge could not apply the pinned mail-server ports"
                 )
     except grpc.RpcError as exc:
-        raise _Fail(
-            f"lost contact with Proton Bridge applying settings: {_rpc_text(exc)}"
-        )
-    raise _Fail("Proton Bridge closed the stream before confirming the port settings")
+        msg = f"lost contact with Proton Bridge applying settings: {_rpc_text(exc)}"
+        raise _SetupError(msg) from exc
+    raise _SetupError(
+        "Proton Bridge closed the stream before confirming the port settings"
+    )
 
 
 # ── users ───────────────────────────────────────────────────────────
@@ -357,7 +369,8 @@ def _await_users_loaded(events):
     event is queued server-side until the first RunEventStream subscriber —
     so a subscriber can never miss it. A GetUserList racing the load sees an
     empty list: link() would re-prompt full credentials on an already-linked
-    vault, remove() would silently no-op."""
+    vault, remove() would silently no-op.
+    """
     try:
         for ev in events:
             if (
@@ -366,8 +379,9 @@ def _await_users_loaded(events):
             ):
                 return
     except grpc.RpcError as exc:
-        raise _Fail(f"lost contact with Proton Bridge loading users: {_rpc_text(exc)}")
-    raise _Fail("Proton Bridge closed the stream before loading users")
+        msg = f"lost contact with Proton Bridge loading users: {_rpc_text(exc)}"
+        raise _SetupError(msg) from exc
+    raise _SetupError("Proton Bridge closed the stream before loading users")
 
 
 def _user_email(user):
@@ -407,7 +421,8 @@ def _export_cert(stub, md):
     bridge_probe and the generated himalaya/msmtp configs expect it
     (<state>/config/protonmail/bridge-v3/cert.pem). Bridge v3 keeps the cert
     in its vault and never writes cert.pem on its own; without this export
-    every mail tool fails the precheck forever."""
+    every mail tool fails the precheck forever.
+    """
     folder = os.path.join(_bridge_env()["XDG_CONFIG_HOME"], "protonmail", "bridge-v3")
     stub.ExportTLSCertificates(StringValue(value=folder), metadata=md)
     cert = os.path.join(folder, "cert.pem")
@@ -417,7 +432,7 @@ def _export_cert(stub, md):
     key = os.path.join(folder, "key.pem")
     while not (os.path.exists(cert) and os.path.exists(key)):
         if time.monotonic() >= deadline:
-            raise _Fail("Proton Bridge did not export its TLS certificate")
+            raise _SetupError("Proton Bridge did not export its TLS certificate")
         time.sleep(_POLL_INTERVAL)
 
 
@@ -488,7 +503,7 @@ def remove(conn, reader, profile):
             return
         target = _match_user(users, profile)
         if target is None:
-            raise _Fail("could not identify which Proton account to remove")
+            raise _SetupError("could not identify which Proton account to remove")
         stub.RemoveUser(StringValue(value=target.id), metadata=md)
         with contextlib.suppress(grpc.RpcError):
             stub.Quit(Empty(), metadata=md)
@@ -523,7 +538,7 @@ def main():
                 remove(conn, reader, profile)
             else:
                 link(conn, reader, profile)
-        except _Fail as exc:
+        except _SetupError as exc:
             _safe_emit(conn, {"event": "error", "error": str(exc)})
         except OSError:
             pass  # broker hung up mid-stream

@@ -1,13 +1,14 @@
+import hashlib
 import json
 import os
 import socket
 import sys
 import threading
 import time
+import tomllib
 
 import integration_proton
 import pytest
-import tomllib
 from conftest import _write_exec
 
 # The autouse _probe_ok fixture replaces integration_proton.bridge_probe for the
@@ -124,7 +125,7 @@ def env(tmp_path_factory):
         assert time.monotonic() < deadline, "server socket never appeared"
         time.sleep(0.01)
 
-    yield {
+    return {
         "sock": sock_path,
         "creds": str(creds),
         "stub": str(stub_dir),
@@ -155,8 +156,8 @@ class Client:
         assert line, "connection closed unexpectedly"
         return json.loads(line)
 
-    def rpc(self, method, params=None, id=1):
-        msg = {"jsonrpc": "2.0", "id": id, "method": method}
+    def rpc(self, method, params=None, req_id=1):
+        msg = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             msg["params"] = params
         self.send(msg)
@@ -175,7 +176,7 @@ def client(env):
 
 
 def call_tool(client, name, arguments):
-    return client.rpc("tools/call", {"name": name, "arguments": arguments}, id=2)
+    return client.rpc("tools/call", {"name": name, "arguments": arguments}, req_id=2)
 
 
 def _text(resp):
@@ -208,7 +209,7 @@ def test_transport_constants_pinned():
 
 def test_initialize_handshake(client):
     resp = client.rpc(
-        "initialize", {"protocolVersion": "2025-03-26", "capabilities": {}}, id=1
+        "initialize", {"protocolVersion": "2025-03-26", "capabilities": {}}, req_id=1
     )
     assert resp["result"]["serverInfo"]["name"] == "integration-proton"
 
@@ -246,7 +247,8 @@ def test_config_send_backend_is_msmtp_sendmail(client, env):
 
 def test_msmtprc_pins_and_trust_file(client, env):
     call_tool(client, "envelope_list", {"profile": "personal"})
-    rc = open(os.path.join(env["stub"], "last_msmtprc")).read().splitlines()
+    with open(os.path.join(env["stub"], "last_msmtprc")) as f:
+        rc = f.read().splitlines()
     assert "account personal" in rc
     assert "host 127.0.0.1" in rc
     assert "port 1025" in rc
@@ -260,13 +262,15 @@ def test_msmtprc_pins_and_trust_file(client, env):
 
 def test_msmtprc_is_0600(client, env):
     call_tool(client, "envelope_list", {"profile": "personal"})
-    mode = open(os.path.join(env["stub"], "last_msmtprc_mode")).read().strip()
+    with open(os.path.join(env["stub"], "last_msmtprc_mode")) as f:
+        mode = f.read().strip()
     assert mode == "0o600"
 
 
 def test_msmtprc_dir_cleaned_up_after_call(client, env):
     call_tool(client, "envelope_list", {"profile": "personal"})
-    path = open(os.path.join(env["stub"], "last_msmtprc_path")).read().strip()
+    with open(os.path.join(env["stub"], "last_msmtprc_path")) as f:
+        path = f.read().strip()
     assert path
     assert not os.path.exists(path), "per-call msmtprc tempdir must be removed"
     assert not os.path.exists(os.path.dirname(path))
@@ -325,7 +329,8 @@ def test_message_send_passes_body_on_stdin(client, env):
     raw = "From: me@personal.test\r\nTo: you@x.test\r\nSubject: Hi\r\n\r\nBody"
     resp = call_tool(client, "message_send", {"profile": "personal", "message": raw})
     assert resp["result"]["isError"] is False
-    assert open(os.path.join(env["stub"], "last_stdin"), "rb").read() == raw.encode()
+    with open(os.path.join(env["stub"], "last_stdin"), "rb") as f:
+        assert f.read() == raw.encode()
 
 
 def test_message_send_missing_message_is_error(client):
@@ -348,8 +353,6 @@ def test_unknown_tool_is_error(client):
 
 
 def test_secret_fingerprint_hidden_but_callable(client):
-    import hashlib
-
     resp = call_tool(client, "secret_fingerprint", {"profile": "personal"})
     assert resp["result"]["isError"] is False
     assert _text(resp) == hashlib.sha256(b"bp-personal-123").hexdigest()[:16]
