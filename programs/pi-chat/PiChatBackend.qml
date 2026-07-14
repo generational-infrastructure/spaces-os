@@ -677,6 +677,23 @@ Item {
     _persist();
   }
 
+  // A session's model pick (PiSession.setModel / setModelAndWait sets
+  // modelPref) writes through to the durable ENTRY. The reconciler
+  // re-asserts obj.modelPref from entry.model on every sessionsList
+  // reassignment and sessions.json persists only the entry — a pick
+  // living solely on the live object would be clobbered by the next
+  // list reassignment (new chat, unread bump, rename) and lost on
+  // restart. No-op when the entry already matches, so the reconciler's
+  // own entry→object assignment can't ping-pong.
+  function _onSessionModelPrefChanged(id, pref) {
+    const entry = sessionsList.find(s => s.id === id);
+    if (!entry || (entry.model || "") === (pref || "")) return;
+    sessionsList = sessionsList.map(s => s.id === id
+      ? Object.assign({}, s, { model: pref })
+      : s);
+    _persist();
+  }
+
   // Wipe every stored memory item from the shared sediment DB.
   // Destructive and global: affects every chat session on this user.
   // The Panel guards with a confirmation dialog; this just runs the
@@ -928,6 +945,9 @@ Item {
       // A live session enumerates the authoritative list (e.g. OpenRouter
       // models /v1/models won't surface); fold it into the bar's cache.
       onModelsChanged: backend._mergeModels(models)
+      // A model pick (setModel/setModelAndWait) writes through to the
+      // durable entry; see _onSessionModelPrefChanged.
+      onModelPrefChanged: backend._onSessionModelPrefChanged(sessionId, modelPref)
     }
   }
 

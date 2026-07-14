@@ -324,6 +324,36 @@ const modelRegistry = ModelRegistry.create(
   `${AGENT_DIR}/models.json`,
 );
 
+// Resolve a create_session's provider/model pair. The panel sends the
+// combined modelPref as model="provider/id" with NO provider field; an
+// explicit provider (PWA, tests) passes through untouched. The split is
+// registry-validated — "openrouter/foo/bar" only splits on the first
+// slash when "openrouter" + "foo/bar" names a registered model, so local
+// ids that happen to contain slashes stay intact. Unresolvable input
+// falls back to the deployment default, matching the previous behavior
+// for absent fields.
+function resolveSessionModel(
+  provider: string | undefined,
+  model: string | undefined,
+): { provider: string; model: string } {
+  if (provider !== undefined)
+    return { provider, model: model ?? DEFAULT_MODEL };
+  if (model === undefined || model.length === 0)
+    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+  if (modelRegistry.find(DEFAULT_PROVIDER, model))
+    return { provider: DEFAULT_PROVIDER, model };
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const p = model.slice(0, slash);
+    const id = model.slice(slash + 1);
+    if (modelRegistry.find(p, id)) return { provider: p, model: id };
+  }
+  // Unknown either way: keep the legacy shape (default provider, raw id)
+  // so a model registered later — llama-swap discovery races boot — still
+  // resolves when the child spawns.
+  return { provider: DEFAULT_PROVIDER, model };
+}
+
 interface ProviderModel {
   id: string;
   name: string;
@@ -981,6 +1011,15 @@ async function dispatchCommand(
         );
         return;
       }
+      // Persist the pick to the meta sidecar: a cold resume passes it as
+      // --provider/--model, and pi's CLI --model OVERRIDES the
+      // session.jsonl restore — a stale sidecar silently reverts the
+      // session to its create-time model after idle GC / a daemon restart.
+      store.writeMeta(session.id, {
+        provider: model.provider,
+        model: model.id,
+        name: session.name,
+      });
       broadcast(
         session,
         responsePayload(
@@ -1104,8 +1143,14 @@ async function handleMessage(ws: Conn, text: string): Promise<void> {
     case "hello":
       return; // handled above (pre-auth); unreachable here
     case "create_session": {
-      const provider = env.provider ?? DEFAULT_PROVIDER;
-      const model = env.model ?? DEFAULT_MODEL;
+      // The panel's PiSession sends the combined modelPref as
+      // model="provider/id" with no separate provider field; split it via
+      // the registry instead of treating the whole string as an id under
+      // DEFAULT_PROVIDER — pi would otherwise mint a bogus fallback model
+      // and the session would silently run on the wrong one.
+      const resolved = resolveSessionModel(env.provider, env.model);
+      const provider = resolved.provider;
+      const model = resolved.model;
       const name = env.name ?? "";
       // Pick up a runtime enable/disable so a freshly enabled integration's
       // tools are staged for this new session (design §9).
