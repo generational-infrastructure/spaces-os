@@ -23,8 +23,9 @@ import (
 )
 
 // managedTickInterval is the coarse timer cadence: the broker re-stats
-// managed.json this often and reconciles when its mtime/generation changed,
-// catching a re-stage that happened while no client op fired.
+// managed.json this often and reconciles when its content changed (the stager
+// is content-aware — a noop re-stage leaves the file byte-identical), catching
+// a re-stage that happened while no client op fired.
 const managedTickInterval = 30 * time.Second
 
 // sourceNix is the Source value marking an enabled.json entry as owned by a
@@ -32,11 +33,11 @@ const managedTickInterval = 30 * time.Second
 // enable.
 const sourceNix = "nix"
 
-// ManagedState is the parsed managed.json (§10.4). generation is a monotonic
-// counter the stager bumps on EVERY re-stage; it plus the file mtime drive the
-// broker's change detection.
+// ManagedState is the parsed managed.json (§10.4). There is no generation
+// counter: the stager only rewrites the file when its content actually
+// changed, so the broker's change detection is the section diff itself
+// (changedIntegrations over the last-reconciled snapshot).
 type ManagedState struct {
-	Generation   int64                         `json:"generation"`
 	Integrations map[string]ManagedIntegration `json:"integrations"`
 }
 
@@ -50,10 +51,15 @@ type ManagedIntegration struct {
 
 // ManagedProfile carries a managed profile's resolved config values and the
 // declared secret FIELD names (values never appear — set-status is a stat of
-// the staged secret-<profile>-<field> file).
+// the staged secret-<profile>-<field> file). SecretHashes maps each secret
+// field to the sha256 (hex) of its staged content, computed by the stager: a
+// rotation changes the hash, which changes this integration's managed.json
+// section, which is what drives the targeted try-restart. Broker-internal
+// restart signal only — never surfaced in `list` replies.
 type ManagedProfile struct {
-	Config  map[string]string `json:"config,omitempty"`
-	Secrets []string          `json:"secrets,omitempty"`
+	Config       map[string]string `json:"config,omitempty"`
+	Secrets      []string          `json:"secrets,omitempty"`
+	SecretHashes map[string]string `json:"secretHashes,omitempty"`
 }
 
 // managedFile is <managedRoot>/managed.json, the broker's single read.
@@ -239,8 +245,9 @@ func changedIntegrations(prev, cur ManagedState) []string {
 }
 
 // watchManaged is the coarse timer: on each tick it reconciles when managed.json
-// changed since the last observation (mtime/generation), then try-restarts every
-// integration whose managed section changed. Runs for the life of the broker.
+// changed since the last observation (mtime, then section diff), then
+// try-restarts every integration whose managed section changed. Runs for the
+// life of the broker.
 func (s *Server) watchManaged(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

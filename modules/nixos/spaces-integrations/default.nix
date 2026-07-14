@@ -432,6 +432,30 @@ let
     refs: iname: pname: field:
     (lib.findFirst (r: r.iname == iname && r.pname == pname && r.field == field) null refs).var;
 
+  # Secret refs for a user → one shell var each holding the secret's sha256
+  # (hex), computed at stage time. The hash lands in managed.json as the
+  # profile's `secretHashes.<field>` (§10.4): a rotation changes the hash,
+  # changes that integration's managed.json section, and the broker's section
+  # diff try-restarts exactly the affected integration.
+  secretRefsOf =
+    mi:
+    lib.imap0 (i: r: r // { var = "s${toString i}"; }) (
+      lib.concatLists (
+        lib.mapAttrsToList (
+          iname: ientry:
+          lib.concatLists (
+            lib.mapAttrsToList (
+              pname: profile:
+              map (field: {
+                inherit iname pname field;
+                path = profile.secrets.${field}.file;
+              }) (lib.attrNames profile.secrets)
+            ) ientry.profiles
+          )
+        ) mi
+      )
+    );
+
   # jq object expression for managed.json's `integrations` map: literals inlined
   # as JSON, `file =` config values referenced as $fN (resolved at stage time),
   # `secrets` reduced to the declared field-name list (values never appear).
@@ -439,30 +463,40 @@ let
     refs: iname: pname: field: v:
     if builtins.isString v then builtins.toJSON v else "$" + varOf refs iname pname field;
   profileExpr =
-    refs: iname: pname: profile:
+    refs: srefs: iname: pname: profile:
     let
       cfgEntries = map (
         field: "${builtins.toJSON field}: ${cfgValueExpr refs iname pname field profile.config.${field}}"
       ) (lib.attrNames profile.config);
+      secretFields = lib.attrNames profile.secrets;
+      hashesPart = lib.optionalString (secretFields != [ ]) (
+        ", \"secretHashes\": { "
+        + lib.concatStringsSep ", " (
+          map (field: "${builtins.toJSON field}: " + "$" + varOf srefs iname pname field) secretFields
+        )
+        + " }"
+      );
     in
-    "{ \"config\": { ${lib.concatStringsSep ", " cfgEntries} }, \"secrets\": ${builtins.toJSON (lib.attrNames profile.secrets)} }";
+    "{ \"config\": { ${lib.concatStringsSep ", " cfgEntries} }, \"secrets\": ${builtins.toJSON secretFields}${hashesPart} }";
   integExpr =
-    refs: iname: ientry:
+    refs: srefs: iname: ientry:
     let
       profilesPart = lib.optionalString (ientry.profiles != { }) (
         ", \"profiles\": { "
         + lib.concatStringsSep ", " (
-          lib.mapAttrsToList (pname: p: "${builtins.toJSON pname}: ${profileExpr refs iname pname p}") ientry.profiles
+          lib.mapAttrsToList (
+            pname: p: "${builtins.toJSON pname}: ${profileExpr refs srefs iname pname p}"
+          ) ientry.profiles
         )
         + " }"
       );
     in
     "{ \"enable\": ${lib.boolToString ientry.enable}${profilesPart} }";
   integrationsExpr =
-    refs: mi:
+    refs: srefs: mi:
     "{ "
     + lib.concatStringsSep ", " (
-      lib.mapAttrsToList (iname: i: "${builtins.toJSON iname}: ${integExpr refs iname i}") mi
+      lib.mapAttrsToList (iname: i: "${builtins.toJSON iname}: ${integExpr refs srefs iname i}") mi
     )
     + " }";
 
@@ -497,17 +531,19 @@ let
       [ "cttmp=\"$(mktemp)\"" ]
       ++ map (l: "${l} >> \"$cttmp\"") (tomlLines refs iname ientry)
       ++ [
-        "install -m 0400 ${own} \"$cttmp\" ${intDir}/managed-config.toml"
+        "stage \"$cttmp\" ${intDir}/managed-config.toml ${own}"
         "rm -f \"$cttmp\""
       ]
     )
-    # secrets are COPIED (never symlinked) so the unit's credential snapshot is stable.
+    # secrets are COPIED (never symlinked) so the unit's credential snapshot is
+    # stable; `stage` re-copies only when the source content actually differs
+    # from the staged copy (rotation), leaving a noop re-stage untouched.
     ++ lib.concatLists (
       lib.mapAttrsToList (
         pname: profile:
         map (
           field:
-          "install -m 0400 ${own} ${lib.escapeShellArg profile.secrets.${field}.file} ${intDir}/secret-${pname}-${field}"
+          "stage ${lib.escapeShellArg profile.secrets.${field}.file} ${intDir}/secret-${pname}-${field} ${own}"
         ) (lib.attrNames profile.secrets)
       ) ientry.profiles
     );
@@ -519,18 +555,20 @@ let
       userDir = "${rootRef}/${uname}";
       mi = managedIntegrationsOf uconf;
       refs = fileRefsOf mi;
+      srefs = secretRefsOf mi;
     in
     lib.optionals (mi != { }) (
       map (r: "${r.var}=\"$(cat ${lib.escapeShellArg r.path})\"") refs
+      # Per-secret sha256 vars: managed.json embeds each secret's content hash
+      # (§10.4), so a rotation — and ONLY a real content change — rewrites
+      # managed.json and fires the broker's targeted per-integration restart.
+      # A noop re-stage reproduces the file byte-identically and `stage` skips
+      # the install: the broker never wakes.
+      ++ map (r: "${r.var}=\"$(sha256sum ${lib.escapeShellArg r.path} | cut -d ' ' -f1)\"") srefs
       ++ [
-        # `generation` is bumped on EVERY re-stage via `date +%s`: the stager is
-        # a runtime script, so wall-clock is a monotonic-enough source, and a
-        # secret-only rotation still rewrites managed.json — firing the broker's
-        # mtime/generation watch.
-        "gen=\"$(date +%s)\""
         "mjtmp=\"$(mktemp)\""
-        "jq -n --argjson generation \"$gen\"${lib.concatMapStrings (r: " --arg ${r.var} \"\$${r.var}\"") refs} ${lib.escapeShellArg "{ \"generation\": $generation, \"integrations\": ${integrationsExpr refs mi} }"} > \"$mjtmp\""
-        "install -m 0400 ${own} \"$mjtmp\" ${userDir}/managed.json"
+        "jq -n${lib.concatMapStrings (r: " --arg ${r.var} \"\$${r.var}\"") (refs ++ srefs)} ${lib.escapeShellArg "{ \"integrations\": ${integrationsExpr refs srefs mi} }"} > \"$mjtmp\""
+        "stage \"$mjtmp\" ${userDir}/managed.json ${own}"
         "rm -f \"$mjtmp\""
       ]
       ++ lib.concatLists (lib.mapAttrsToList (perIntegrationScript uname refs) mi)
@@ -543,43 +581,75 @@ let
   rootVar = "managed_root=\"\${SPACES_MANAGED_ROOT:-${managedRoot}}\"";
   rootRef = "\"$managed_root\"";
 
-  # The full stager body. The stager OWNS the whole tree: stale state from a
-  # previous generation is removed first — per-user dirs of users no longer
-  # normal/declared are deleted, and every current user's subtree is cleared
-  # before restaging (so a dropped profile/integration leaves no orphan
-  # secret-* or managed.json behind). Then every normal user gets a per-user
-  # root (0500, user-owned) plus a subdir for EVERY declared integration
-  # (Phase 0.3: a MISSING credential dir hard-fails the unit, so it must exist
-  # unconditionally; an empty one is fine). Users with Nix opinions then get
-  # managed.json + the per-integration managed-config.toml/secret files.
+  # One shell-lines helper: sweep every direntry of `dir` whose basename is
+  # not in `keep` (build-time list). Deletion is scoped strictly under the
+  # expanded glob — never above `dir`; the leading "" case pattern keeps the
+  # statement valid when `keep` is empty.
+  sweepLines = dir: keep: [
+    "for e in ${dir}/*; do"
+    "  [ -e \"$e\" ] || continue"
+    "  case \"$(basename \"$e\")\" in"
+    "    \"\"${lib.concatMapStrings (k: "|${k}") keep}) ;;"
+    "    *) rm -rf \"$e\" ;;"
+    "  esac"
+    "done"
+  ];
+
+  # Per-user sync skeleton: dirs + declared-set sweeps (content staging follows
+  # in mkUserManagedScript). The stager OWNS the whole tree but is a
+  # CONTENT-AWARE sync, not a wipe-and-rebuild: every normal user gets a
+  # per-user root (0500, user-owned) plus a subdir for EVERY declared
+  # integration (Phase 0.3: a MISSING credential dir hard-fails the unit, so it
+  # must exist unconditionally; an empty one is fine); then anything NOT in the
+  # user's declared set — a dropped profile's secret-*, a stale managed.json of
+  # a user whose Nix opinions disappeared, an undeclared integration's files —
+  # is removed, while declared files are left for `stage` to compare in place
+  # (so a noop re-stage rewrites nothing and file mtimes/inodes survive).
+  mkUserSyncScript =
+    uname: _:
+    let
+      mi = if stagedUsers ? ${uname} then managedIntegrationsOf stagedUsers.${uname} else { };
+      topKeep = allIntegrationNames ++ lib.optional (mi != { }) "managed.json";
+      intKeep =
+        iname:
+        lib.optionals (mi ? ${iname}) (
+          lib.optional (mi.${iname}.profiles != { }) "managed-config.toml"
+          ++ lib.concatLists (
+            lib.mapAttrsToList (
+              pname: p: map (field: "secret-${pname}-${field}") (lib.attrNames p.secrets)
+            ) mi.${iname}.profiles
+          )
+        );
+    in
+    [ "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}" ]
+    ++ map (iname: "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}/${iname}") allIntegrationNames
+    ++ sweepLines "${rootRef}/${uname}" topKeep
+    ++ lib.concatMap (iname: sweepLines "${rootRef}/${uname}/${iname}" (intKeep iname)) allIntegrationNames;
+
+  # The full stager body. Order: root dir, unknown-user sweep, per-user
+  # dir/sweep sync, then content staging (users with Nix opinions get
+  # managed.json + the per-integration managed-config.toml/secret files, each
+  # installed only when its content differs from the staged copy).
   managedStagerScript = lib.concatStringsSep "\n" (
     [
       "set -eu"
+      # stage <src> <dst> <install-owner-flags...>: install src over dst only
+      # when the content differs (or dst is absent). The content-awareness is
+      # what makes a noop re-stage a true no-op — managed.json keeps its bytes
+      # AND its mtime, so the broker never wakes — and what turns a secret
+      # rotation into a rewrite of exactly the affected files.
+      "stage() {"
+      "  src=\"$1\"; dst=\"$2\"; shift 2"
+      "  cmp -s \"$src\" \"$dst\" || install -m 0400 \"$@\" \"$src\" \"$dst\""
+      "}"
       rootVar
       "install -d -m 0755 -o root -g root ${rootRef}"
       # Sweep per-user dirs that no current normal user owns. Deletion is
       # scoped strictly under $managed_root; the leading "" case pattern keeps
       # the statement valid when there are no normal users at all.
-      "for d in ${rootRef}/*; do"
-      "  [ -e \"$d\" ] || continue"
-      "  case \"$(basename \"$d\")\" in"
-      "    \"\"${lib.concatMapStrings (u: "|${u}") (lib.attrNames normalUsers)}) ;;"
-      "    *) rm -rf \"$d\" ;;"
-      "  esac"
-      "done"
     ]
-    ++ lib.concatLists (
-      lib.mapAttrsToList (
-        uname: _:
-        [
-          # Clear the user's staged subtree before restaging: the fresh
-          # install below rebuilds it, so anything not re-declared is gone.
-          "rm -rf ${rootRef}/${uname}"
-          "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}"
-        ]
-        ++ map (iname: "install -d -m 0500 ${userOwn uname} ${rootRef}/${uname}/${iname}") allIntegrationNames
-      ) normalUsers
-    )
+    ++ sweepLines rootRef (lib.attrNames normalUsers)
+    ++ lib.concatLists (lib.mapAttrsToList mkUserSyncScript normalUsers)
     ++ lib.concatLists (lib.mapAttrsToList mkUserManagedScript stagedUsers)
   );
 in
@@ -636,14 +706,16 @@ in
 
       # Root stager (agent-integrations §10.2), mirroring pi-chat's
       # spaces-secrets-load: a root oneshot that materialises the per-user staged
-      # credential tree at boot/switch. Fully generated above; only `generation`
-      # and any `file =` values are resolved at runtime.
+      # credential tree at boot/switch. Fully generated above; only the secret
+      # hashes and any `file =` values are resolved at runtime.
       systemd.services.spaces-integrations-managed-load = {
         description = "Stage Nix-managed integration profiles into per-user credential trees";
         wantedBy = [ "multi-user.target" ];
         after = [ "local-fs.target" ];
         path = [
           pkgs.coreutils
+          # `cmp` for the content-aware stage() helper
+          pkgs.diffutils
           pkgs.jq
         ];
         serviceConfig = {

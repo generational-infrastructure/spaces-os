@@ -888,6 +888,13 @@ in `users.users` with a normal account (empty tree when unmanaged):
   segment boundary that matches a declared profile name wins; managed.json
   carries the authoritative (profile, field) list, consumers never parse
   the filename.
+- The stager is a **content-aware sync**, not a wipe-and-rebuild: every
+  staged file (managed.json, managed-config.toml, each secret copy) is
+  built as a candidate and installed only when its content differs from
+  the existing staged copy; staged files/dirs no longer in the declared
+  set are then removed (deletion strictly scoped under the managed
+  root). A noop re-stage therefore rewrites nothing — managed.json
+  keeps its bytes AND mtime, so the broker never wakes.
 - The stager ALWAYS creates `/run/spaces-integrations-managed/<user>/`
   and the per-integration subdirectory for every integration that has
   ANY Nix opinion for that user — and bare `<user>/` for all other
@@ -928,14 +935,14 @@ Single writer: the stager (at boot/switch). Single reader: the broker.
 
 ```json
 {
-  "generation": 4,
   "integrations": {
     "mail": {
       "enable": true,
       "profiles": {
         "work": {
           "config":  { "address": "bob@corp.example", "imap_host": "imap.corp.example" },
-          "secrets": [ "password" ]
+          "secrets": [ "password" ],
+          "secretHashes": { "password": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }
         }
       }
     },
@@ -944,15 +951,24 @@ Single writer: the stager (at boot/switch). Single reader: the broker.
 }
 ```
 
-- `generation`: monotonically increasing counter the stager bumps on
-  EVERY re-stage (a secret-file-only rotation still changes the file,
-  so the broker's mtime/generation watch fires).
+- There is **no generation counter**: the stager only rewrites
+  managed.json when its content actually changed, so a content change
+  IS the broker's signal. A secret-file-only rotation still changes the
+  file, because each profile carries the sha256 of every secret (see
+  `secretHashes` below).
 - `integrations.<name>.enable`: `true` | `false` | key absent = no Nix
   opinion (user autonomy).
 - `profiles.<profile>.config`: resolved config values (post `file =`
   resolution) — these are what `list` renders.
 - `profiles.<profile>.secrets`: the declared secret FIELD names (values
   never appear here; set-status = stat of the staged file).
+- `profiles.<profile>.secretHashes`: `{ field: sha256-hex }` of each
+  staged secret's content, computed by the stager. Rationale: a rotated
+  secret changes its hash, which changes exactly that integration's
+  managed.json section, so reconcile try-restarts exactly the affected
+  integration — while a noop deploy reproduces managed.json
+  byte-identically and triggers nothing. Broker-internal restart
+  signal only; never surfaced in `list` replies.
 
 ### 10.5 Broker protocol extension (packages/spaces-integrationd)
 
@@ -981,9 +997,9 @@ Single writer: the stager (at boot/switch). Single reader: the broker.
   entry has `source:"nix"` but managed.json no longer carries a
   verdict) drops the entry, restoring user autonomy. The pi-sessiond
   gateway stays UNTOUCHED — enabled.json remains its single input.
-- On managed.json change (mtime/generation): re-reconcile + tryRestart
-  affected integration units (same ownership pattern as after GUI
-  writes).
+- On managed.json change (mtime, then per-integration section diff):
+  re-reconcile + tryRestart affected integration units (same ownership
+  pattern as after GUI writes).
 
 ### 10.6 Scaffold merge (packages/spaces-integration-mcp)
 

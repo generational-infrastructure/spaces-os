@@ -13,8 +13,8 @@
 #     managed-config.toml tables, and the copied secret files.
 #
 # Eval-discipline: no VM, no realized server closure — the stager SCRIPT is
-# generated at build time (only `generation` and `file =` values resolve at
-# runtime), so the check greps that script text and inspects the rendered
+# generated at build time (only the per-secret sha256 hashes and `file =`
+# values resolve at runtime), so the check greps that script text and inspects the rendered
 # serviceConfig, never running the stager (it needs root + real users). Grep
 # fragments are Nix-computed env vars so their exact bytes are never mangled by
 # the build shell.
@@ -133,9 +133,7 @@ let
     }
   ];
 
-  failedMessages = map (a: a.message) (
-    lib.filter (a: !a.assertion) badSystem.config.assertions
-  );
+  failedMessages = map (a: a.message) (lib.filter (a: !a.assertion) badSystem.config.assertions);
   hasMessage = m: lib.elem m failedMessages;
 
   # ── A literal secret must be a hard type error (secrets are file-only) ───────
@@ -158,9 +156,7 @@ let
   ];
   literalSecretEvaluates =
     (builtins.tryEval (
-      builtins.deepSeq
-        literalSecretSystem.config.spaces.users.alice.integrations.demomail.profiles.work.secrets
-        null
+      builtins.deepSeq literalSecretSystem.config.spaces.users.alice.integrations.demomail.profiles.work.secrets null
     )).success;
 
   # Exact byte fragments the stager script MUST contain, computed in Nix so the
@@ -176,9 +172,15 @@ let
     # even a user with no Nix opinion (bob) and an integration alice never configured.
     "\"$managed_root\"/alice/demosignal"
     "install -d -m 0500 -o bob -g users \"$managed_root\"/bob/demomail"
-    # managed.json (§10.4): generation bumped at runtime, resolved config
-    "gen=\"$(date +%s)\""
-    "\"generation\": $generation"
+    # managed.json (§10.4): content-aware staging — a per-secret sha256 var
+    # (computed at stage time) lands in the profile's secretHashes, and the
+    # stage() helper installs a file only when its content differs (a noop
+    # re-stage leaves managed.json byte-identical; no generation counter).
+    "cmp -s \"$src\" \"$dst\" || install -m 0400 \"$@\" \"$src\" \"$dst\""
+    "s0=\"$(sha256sum /run/secrets/mail-work-password | cut -d ' ' -f1)\""
+    "--arg s0 \"$s0\""
+    "\"secretHashes\": { \"password\": $s0 }"
+    "stage \"$mjtmp\" \"$managed_root\"/alice/managed.json -o alice -g users"
     "\"$managed_root\"/alice/managed.json"
     "\"demomail\": { \"enable\": true, \"profiles\""
     "\"address\": \"bob@corp.example\""
@@ -201,27 +203,42 @@ let
     "\"$managed_root\"/alice/demomail/secret-work-password"
     "/run/secrets/mail-work-password"
   ];
-  # …and one it must NOT: an unmanaged user gets no managed.json.
-  wantNone = [ "\"$managed_root\"/bob/managed.json" ];
+  # …and some it must NOT: an unmanaged user gets no managed.json; the
+  # generation counter is gone (content changes are the broker's signal now);
+  # the old wipe-and-rebuild per-user `rm -rf` would defeat idempotence.
+  wantNone = [
+    "\"$managed_root\"/bob/managed.json"
+    "generation"
+    "date +%s"
+    "rm -rf \"$managed_root\"/alice"
+  ];
 in
 # ── 1. rendered MCP unit: the managed directory credential (§10.3) ───────────
 # field-bearing integration → config credential THEN the managed dir, in order.
-assert demomailSvc.serviceConfig.LoadCredential == [
-  "config:%S/spaces-integrationd/demomail/config.toml"
-  "managed:/run/spaces-integrations-managed/%u/demomail"
-];
+assert
+  demomailSvc.serviceConfig.LoadCredential == [
+    "config:%S/spaces-integrationd/demomail/config.toml"
+    "managed:/run/spaces-integrations-managed/%u/demomail"
+  ];
 # field-less integration → only the managed dir (no config credential).
-assert demosignalSvc.serviceConfig.LoadCredential == [
-  "managed:/run/spaces-integrations-managed/%u/demosignal"
-];
+assert
+  demosignalSvc.serviceConfig.LoadCredential == [
+    "managed:/run/spaces-integrations-managed/%u/demosignal"
+  ];
 
 # ── 2. each §10.1 assertion fires with its exact message ─────────────────────
-assert hasMessage "spaces.users.alice.integrations.nope: unknown integration 'nope' (not in services.spaces-integrations.integrations)";
-assert hasMessage "spaces.users.alice.integrations.demomail.profiles.no-imap: missing required config field 'imap_host'";
-assert hasMessage "spaces.users.alice.integrations.demomail.profiles.no-pass: missing required secret 'password'";
-assert hasMessage "spaces.users.alice.integrations.demosignal: integration 'demosignal' declares no config or secret fields; only 'enable' is allowed, not profiles";
-assert hasMessage "spaces.users.ghost: user 'ghost' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
-assert hasMessage "spaces.users.root: user 'root' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
+assert hasMessage
+  "spaces.users.alice.integrations.nope: unknown integration 'nope' (not in services.spaces-integrations.integrations)";
+assert hasMessage
+  "spaces.users.alice.integrations.demomail.profiles.no-imap: missing required config field 'imap_host'";
+assert hasMessage
+  "spaces.users.alice.integrations.demomail.profiles.no-pass: missing required secret 'password'";
+assert hasMessage
+  "spaces.users.alice.integrations.demosignal: integration 'demosignal' declares no config or secret fields; only 'enable' is allowed, not profiles";
+assert hasMessage
+  "spaces.users.ghost: user 'ghost' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
+assert hasMessage
+  "spaces.users.root: user 'root' is not a normal user (spaces.users requires an existing users.users entry with isNormalUser)";
 
 # ── 3. a literal secret is a type error (never an accepted store value) ───────
 assert !literalSecretEvaluates;

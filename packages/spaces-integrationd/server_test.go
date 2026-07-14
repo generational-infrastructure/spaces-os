@@ -1299,7 +1299,6 @@ func TestListOverlaysManagedProfile(t *testing.T) {
 	e.setField("github", "personal", "token", "p")
 
 	e.writeManaged(`{
-	  "generation": 1,
 	  "integrations": {
 	    "github": {
 	      "enable": true,
@@ -1343,7 +1342,7 @@ func TestListOverlaysManagedProfile(t *testing.T) {
 // and an integration with no enable key reports no enabledByNix verdict.
 func TestListManagedOnlyProfileNotShadowed(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"solo":{"config":{"owner":"x"},"secrets":["token"]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"profiles":{"solo":{"config":{"owner":"x"},"secrets":["token"]}}}}}`)
 	e.writeManagedSecret("github", "solo", "token", "s")
 	gh := e.githubInfo()
 	if gh["enabledByNix"] != nil {
@@ -1362,7 +1361,7 @@ func TestListManagedOnlyProfileNotShadowed(t *testing.T) {
 // unset and (for a required secret) leaves the profile incomplete.
 func TestListManagedSecretSetStatus(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
 	corp := profileByName(e.githubInfo(), "corp")
 	if corp["secrets"].(map[string]any)["token"] != false {
 		t.Fatalf("unstaged managed secret must read unset, got %v", corp["secrets"])
@@ -1376,7 +1375,7 @@ func TestListManagedSecretSetStatus(t *testing.T) {
 // non-managed profile name is still writable.
 func TestSetFieldRejectedOnManagedProfile(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
 	e.wantError(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: "corp", Field: "owner", Value: "x"}),
 		"profile 'corp' is managed by system configuration")
 	e.wantOK(e.roundtrip(Request{Op: "set-field", Integration: "github", Profile: "work", Field: "token", Value: "x"}))
@@ -1386,7 +1385,7 @@ func TestSetFieldRejectedOnManagedProfile(t *testing.T) {
 // untouched; the managed row cannot be removed at runtime).
 func TestRemoveProfileRejectedOnManagedProfile(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"profiles":{"corp":{"config":{},"secrets":[]}}}}}`)
 	e.wantError(e.roundtrip(Request{Op: "remove-profile", Integration: "github", Profile: "corp"}),
 		"profile 'corp' is managed by system configuration")
 }
@@ -1395,7 +1394,7 @@ func TestRemoveProfileRejectedOnManagedProfile(t *testing.T) {
 // a rejected enable never touches systemctl.
 func TestEnableRejectedByVerdict(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}),
 		"integration 'github' enable state is managed by system configuration")
 	if calls := e.systemctlCalls(); calls != nil {
@@ -1405,7 +1404,7 @@ func TestEnableRejectedByVerdict(t *testing.T) {
 
 func TestDisableRejectedByVerdict(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":false}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":false}}}`)
 	e.wantError(e.roundtrip(Request{Op: "disable", Integration: "github"}),
 		"integration 'github' enable state is managed by system configuration")
 }
@@ -1415,7 +1414,7 @@ func TestDisableRejectedByVerdict(t *testing.T) {
 // secret is staged, then succeeds off the managed profile alone.
 func TestEnableGatedByManagedCompleteProfile(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
 	e.wantError(e.roundtrip(Request{Op: "enable", Integration: "github"}), "no complete profile")
 	e.writeManagedSecret("github", "corp", "token", "s")
 	e.wantOK(e.roundtrip(Request{Op: "enable", Integration: "github"}))
@@ -1428,7 +1427,7 @@ func TestEnableGatedByManagedCompleteProfile(t *testing.T) {
 // the socket.
 func TestReconcileFoldsVerdictTrue(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
 	if !slices.Contains(e.systemctlCalls(), "start spaces-integration-github.socket") {
 		t.Fatalf("verdict true must start the socket, got %v", e.systemctlCalls())
@@ -1444,7 +1443,7 @@ func TestReconcileFoldsVerdictTrue(t *testing.T) {
 func TestReconcileNixFalseOverridesUserEnable(t *testing.T) {
 	e := newTestEnv(t, 0)
 	e.writeEnabled(EnabledState{Integrations: map[string]IntegrationState{"github": {Enabled: true}}})
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":false}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":false}}}`)
 	e.srv.ReconcileEnabled()
 	if !slices.Contains(e.systemctlCalls(), "stop spaces-integration-github.socket spaces-integration-github.service") {
 		t.Fatalf("nix false must stop the unit, got %v", e.systemctlCalls())
@@ -1459,12 +1458,12 @@ func TestReconcileNixFalseOverridesUserEnable(t *testing.T) {
 // user autonomy) and try-restarts the affected unit.
 func TestReconcileDropsRemovedVerdict(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
 	if st := e.enabledState().Integrations["github"]; st.Source != sourceNix {
 		t.Fatalf("setup: want source nix, got %+v", st)
 	}
-	e.writeManaged(`{"generation":2,"integrations":{}}`)
+	e.writeManaged(`{"integrations":{}}`)
 	e.srv.reconcileManaged()
 	if _, ok := e.enabledState().Integrations["github"]; ok {
 		t.Fatalf("source-nix entry must be dropped when the verdict disappears")
@@ -1474,30 +1473,59 @@ func TestReconcileDropsRemovedVerdict(t *testing.T) {
 	}
 }
 
-// A generation bump (with a changed managed section) triggers re-reconcile and
-// a try-restart of the changed unit.
-func TestGenerationBumpReReconciles(t *testing.T) {
+// A managed section content change (here a config value) triggers re-reconcile
+// and a try-restart of the changed unit.
+func TestManagedContentChangeReReconciles(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"]}}}}}`)
 	e.srv.ReconcileEnabled()
 	before := len(e.systemctlCalls())
-	e.writeManaged(`{"generation":2,"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"b"},"secrets":["token"]}}}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"b"},"secrets":["token"]}}}}}`)
 	e.srv.reconcileManaged()
 	after := e.systemctlCalls()
 	if len(after) <= before {
-		t.Fatalf("generation bump must re-reconcile, before=%d after=%v", before, after)
+		t.Fatalf("content change must re-reconcile, before=%d after=%v", before, after)
 	}
 	if !slices.Contains(after, "try-restart spaces-integration-github.service") {
-		t.Fatalf("generation bump must try-restart the changed unit, got %v", after)
+		t.Fatalf("content change must try-restart the changed unit, got %v", after)
 	}
 }
 
-// An unchanged managed.json triggers nothing on the coarse timer path.
-func TestReconcileManagedNoopWhenUnchanged(t *testing.T) {
+// Rotating one managed secret changes only its hash inside managed.json (the
+// sections are otherwise identical). Reconcile must try-restart exactly the
+// affected integration's unit — no other integration is touched.
+func TestSecretRotationRestartsOnlyAffectedIntegration(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{
+	  "github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"],"secretHashes":{"token":"hash-one"}}}},
+	  "signal":{"profiles":{"main":{"config":{},"secrets":["key"],"secretHashes":{"key":"sig-hash"}}}}}}`)
+	e.srv.ReconcileEnabled()
+	before := len(e.systemctlCalls())
+	e.writeManaged(`{"integrations":{
+	  "github":{"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"],"secretHashes":{"token":"hash-two"}}}},
+	  "signal":{"profiles":{"main":{"config":{},"secrets":["key"],"secretHashes":{"key":"sig-hash"}}}}}}`)
+	e.srv.reconcileManaged()
+	after := e.systemctlCalls()[before:]
+	if !slices.Contains(after, "try-restart spaces-integration-github.service") {
+		t.Fatalf("rotated secret hash must try-restart its integration, got %v", after)
+	}
+	for _, c := range after {
+		if c != "try-restart spaces-integration-github.service" {
+			t.Fatalf("rotation must touch ONLY the affected integration, got %v", after)
+		}
+	}
+}
+
+// A byte-identical managed.json rewrite (fresh mtime — e.g. a deploy that
+// changed nothing but still ran the stager pre-content-awareness, or a manual
+// touch) triggers nothing: no restarts without a real section change.
+func TestReconcileManagedNoopOnByteIdenticalRewrite(t *testing.T) {
+	e := newTestEnv(t, 0)
+	body := `{"integrations":{"github":{"enable":true,"profiles":{"corp":{"config":{"owner":"a"},"secrets":["token"],"secretHashes":{"token":"h1"}}}}}}`
+	e.writeManaged(body)
 	e.srv.ReconcileEnabled()
 	n := len(e.systemctlCalls())
+	e.writeManaged(body)
 	e.srv.reconcileManaged()
 	if got := len(e.systemctlCalls()); got != n {
 		t.Fatalf("unchanged managed.json must not trigger systemctl, before=%d after=%d", n, got)
@@ -1511,9 +1539,9 @@ func TestReconcileManagedNoopWhenUnchanged(t *testing.T) {
 // try-restarts.
 func TestReconcileManagedNotSwallowedByRPCCacheRefresh(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
-	e.writeManaged(`{"generation":2,"integrations":{}}`)
+	e.writeManaged(`{"integrations":{}}`)
 	e.wantOK(e.roundtrip(Request{Op: "list"})) // refreshes the cache before the tick
 	e.srv.reconcileManaged()
 	if _, ok := e.enabledState().Integrations["github"]; ok {
@@ -1558,10 +1586,10 @@ func TestSetupRejectsNonLinkAction(t *testing.T) {
 // file (or ENOENT) shows up.
 func TestCorruptManagedKeepsLastGoodState(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
 	n := len(e.systemctlCalls())
-	e.writeManaged(`{"generation": 2, THIS IS NOT JSON`)
+	e.writeManaged(`{"integrations": THIS IS NOT JSON`)
 	e.srv.reconcileManaged()
 	st := e.enabledState().Integrations["github"]
 	if !st.Enabled || st.Source != sourceNix {
@@ -1579,7 +1607,7 @@ func TestCorruptManagedKeepsLastGoodState(t *testing.T) {
 // state.
 func TestManagedFileDeletedRevertsNixEntries(t *testing.T) {
 	e := newTestEnv(t, 0)
-	e.writeManaged(`{"generation":1,"integrations":{"github":{"enable":true}}}`)
+	e.writeManaged(`{"integrations":{"github":{"enable":true}}}`)
 	e.srv.ReconcileEnabled()
 	if err := os.Remove(filepath.Join(e.managedRoot, "managed.json")); err != nil {
 		t.Fatal(err)
