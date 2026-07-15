@@ -713,5 +713,143 @@ class TestDaemonSocketDefault(unittest.TestCase):
         self.assertEqual(bridge_mod._default_daemon_socket(), "/custom/daemon.sock")
 
 
+# ── watchdog: torn-state self-heal ──────────────────────────────────
+# signal-cli's per-account startup network check silently drops linked
+# accounts (never retried). The bridge already computes store-vs-loaded;
+# these tests pin the new reaction: probe network, respect an on-disk
+# restart cooldown, restart the daemon. Probe + restart are injected —
+# no real network, no real systemctl.
+
+
+class WatchdogTest(unittest.TestCase):
+    def _make_bridge(
+        self,
+        *,
+        store_accounts: int,
+        daemon_accounts: list[dict],
+        probe_ok: bool,
+        marker_age_seconds: float | None = None,
+    ) -> tuple[bridge_mod.Bridge, list[str]]:
+        base = Path(tempfile.mkdtemp(prefix="watchdog-test-"))
+        daemon = FakeSignalDaemon(str(base / "signal.sock"))
+        daemon.accounts = daemon_accounts
+        self.addCleanup(daemon.stop)
+
+        store_path = base / "data" / "accounts.json"
+        store_path.parent.mkdir(parents=True)
+        store_path.write_text(
+            json.dumps(
+                {
+                    "accounts": [
+                        {"number": f"+49{i:010d}", "uuid": f"uuid-{i}"}
+                        for i in range(store_accounts)
+                    ]
+                }
+            )
+        )
+
+        db_path = base / "messages.db"
+        if marker_age_seconds is not None:
+            marker = db_path.parent / "daemon-restart-marker"
+            marker.touch()
+            past = time.time() - marker_age_seconds
+            os.utime(marker, (past, past))
+
+        events: list[str] = []
+        bridge = bridge_mod.Bridge(
+            bridge_mod.BridgeConfig(
+                db_path=db_path,
+                daemon_socket=daemon.sock_path,
+                accounts_store_path=store_path,
+            ),
+            accounts_refresh_seconds=300.0,
+            torn_refresh_seconds=60.0,
+            network_probe=lambda: events.append("probe") or probe_ok,
+            restart_daemon=lambda: events.append("restart"),
+        )
+        bridge.start()
+        self.addCleanup(bridge.stop)
+        return bridge, events
+
+    def test_torn_state_with_network_restarts_daemon(self):
+        # store=1, loaded=0: exactly the deploy-race torn state. Network
+        # probe passes -> the bridge must fire the daemon restart.
+        bridge, events = self._make_bridge(
+            store_accounts=1, daemon_accounts=[], probe_ok=True
+        )
+        self.assertIn("restart", events)
+        # Marker file written so the cooldown survives the bridge's own
+        # death in the restart cascade.
+        marker = bridge.config.db_path.parent / "daemon-restart-marker"
+        self.assertTrue(marker.exists())
+
+    def test_healthy_state_never_probes_or_restarts(self):
+        _bridge, events = self._make_bridge(
+            store_accounts=1,
+            daemon_accounts=[{"number": "+490000000000", "uuid": "uuid-0"}],
+            probe_ok=True,
+        )
+        self.assertEqual(events, [])
+
+    def test_never_linked_never_probes_or_restarts(self):
+        # store=0, loaded=0: pre-onboarding. Watchdog must stay silent.
+        _bridge, events = self._make_bridge(
+            store_accounts=0, daemon_accounts=[], probe_ok=True
+        )
+        self.assertEqual(events, [])
+
+    def test_probe_failure_blocks_restart(self):
+        # Network down: restarting would just re-run the failing account
+        # check. Probe must fire, restart must not.
+        bridge, events = self._make_bridge(
+            store_accounts=1, daemon_accounts=[], probe_ok=False
+        )
+        self.assertIn("probe", events)
+        self.assertNotIn("restart", events)
+        # No marker: a blocked attempt must not consume the cooldown.
+        marker = bridge.config.db_path.parent / "daemon-restart-marker"
+        self.assertFalse(marker.exists())
+
+    def test_fresh_marker_blocks_restart(self):
+        # A restart fired <cooldown ago (marker mtime young): skip, even
+        # with the network up — bounds the deregistered-account worst case
+        # to one restart per cooldown.
+        _bridge, events = self._make_bridge(
+            store_accounts=1,
+            daemon_accounts=[],
+            probe_ok=True,
+            marker_age_seconds=10.0,
+        )
+        self.assertNotIn("restart", events)
+
+    def test_stale_marker_allows_restart(self):
+        _bridge, events = self._make_bridge(
+            store_accounts=1,
+            daemon_accounts=[],
+            probe_ok=True,
+            marker_age_seconds=601.0,
+        )
+        self.assertIn("restart", events)
+
+    def test_refresh_interval_drops_while_torn(self):
+        # Heal latency must be bounded by the torn interval (60s), not the
+        # normal poll (300s): once the network returns, the next poll's
+        # probe passes and the restart fires within ~1 min.
+        bridge, _ = self._make_bridge(
+            store_accounts=1, daemon_accounts=[], probe_ok=False
+        )
+        self.assertTrue(bridge._torn)
+        self.assertEqual(bridge._refresh_interval(), 60.0)
+
+    def test_refresh_interval_normal_when_healthy(self):
+        bridge, _ = self._make_bridge(
+            store_accounts=1,
+            daemon_accounts=[{"number": "+490000000000", "uuid": "uuid-0"}],
+            probe_ok=True,
+        )
+        self.assertFalse(bridge._torn)
+        self.assertEqual(bridge._refresh_interval(), 300.0)
+
+
 if __name__ == "__main__":
     unittest.main()

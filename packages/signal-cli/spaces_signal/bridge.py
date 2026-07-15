@@ -23,8 +23,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import sqlite3
+import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -131,6 +134,16 @@ class BridgeConfig:
     # linked" from "linked but the daemon dropped the account at startup".
     # None/absent/unparseable counts as 0.
     accounts_store_path: Path | None = None
+    # Watchdog: signal-cli's per-account startup network check silently
+    # drops linked accounts and never retries (torn state: store > loaded).
+    # The bridge heals it — probe reachability, then restart the daemon.
+    probe_host: str = "chat.signal.org"
+    probe_port: int = 443
+    probe_timeout_seconds: float = 5.0
+    # At most one restart attempt per cooldown, persisted as the mtime of
+    # daemon-restart-marker next to messages.db (the restart cascades into
+    # the bridge's own death, so memory cannot carry it).
+    restart_cooldown_seconds: float = 600.0
 
 
 class DaemonClientFactory:
@@ -163,6 +176,9 @@ class Bridge:
         daemon_client_factory: Callable[[], JsonRpcClient] | None = None,
         accounts_refresh_seconds: float = 300.0,
         expire_interval_seconds: float = 60.0,
+        torn_refresh_seconds: float = 60.0,
+        network_probe: Callable[[], bool] | None = None,
+        restart_daemon: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self._db_lock = threading.Lock()
@@ -172,6 +188,10 @@ class Bridge:
         )
         self._accounts_refresh_seconds = accounts_refresh_seconds
         self._expire_interval_seconds = expire_interval_seconds
+        self._torn_refresh_seconds = torn_refresh_seconds
+        self._network_probe = network_probe or self._default_network_probe
+        self._restart_daemon = restart_daemon or self._default_restart_daemon
+        self._torn = False
 
         self._accounts: list[dict] = []
         self._accounts_lock = threading.Lock()
@@ -246,7 +266,9 @@ class Bridge:
         with self._accounts_lock:
             self._accounts = accounts
         log.info("refreshed accounts: %r", accounts)
-        self._write_accounts_health(len(accounts))
+        store = self._store_account_count()
+        self._write_accounts_health(store=store, loaded=len(accounts))
+        self._maybe_heal(store, len(accounts))
 
     def _store_account_count(self) -> int:
         """Entries in signal-cli's on-disk data/accounts.json; 0 when the
@@ -262,7 +284,7 @@ class Bridge:
         accounts = data.get("accounts") if isinstance(data, dict) else None
         return len(accounts) if isinstance(accounts, list) else 0
 
-    def _write_accounts_health(self, loaded: int) -> None:
+    def _write_accounts_health(self, *, store: int, loaded: int) -> None:
         """Export accounts-health.json next to messages.db after each
         successful listAccounts poll: `store` (on-disk account count) vs
         `loaded` (what the daemon actually serves). store > loaded means
@@ -273,7 +295,7 @@ class Bridge:
         write failure must not disturb the forwarder.
         """
         health = {
-            "store": self._store_account_count(),
+            "store": store,
             "loaded": loaded,
             "updated": datetime.now(UTC).isoformat(),
         }
@@ -285,12 +307,101 @@ class Bridge:
         except OSError as exc:
             log.warning("accounts-health write failed: %s", exc)
 
+    # ── torn-state watchdog ─────────────────────────────────────────
+
+    def _default_network_probe(self) -> bool:
+        """TCP-dial the Signal endpoint. The anti-hammering gate: while
+        the network is genuinely down a daemon restart would just re-run
+        signal-cli's failing account check and re-drop the account.
+        """
+        try:
+            with socket.create_connection(
+                (self.config.probe_host, self.config.probe_port),
+                timeout=self.config.probe_timeout_seconds,
+            ):
+                return True
+        except OSError:
+            return False
+
+    def _default_restart_daemon(self) -> None:
+        # --no-block is load-bearing: this bridge Requires= the daemon, so
+        # the restart cascades into our own death; a blocking call would
+        # deadlock waiting for it. Restart=always revives us and the fresh
+        # startup poll confirms the heal.
+        subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "--no-block",
+                "restart",
+                "spaces-signal-cli.service",
+            ],
+            check=False,
+        )
+
+    @property
+    def _restart_marker(self) -> Path:
+        return self.config.db_path.parent / "daemon-restart-marker"
+
+    def _restart_cooldown_active(self) -> bool:
+        try:
+            age = time.time() - self._restart_marker.stat().st_mtime
+        except OSError:
+            return False
+        return age < self.config.restart_cooldown_seconds
+
+    def _refresh_interval(self) -> float:
+        # Torn -> fast re-poll so the heal fires within ~1 min of the
+        # network returning, instead of the normal 5-min cadence.
+        return (
+            self._torn_refresh_seconds if self._torn else self._accounts_refresh_seconds
+        )
+
+    def _maybe_heal(self, store: int, loaded: int) -> None:
+        """Store > loaded means signal-cli's startup network check dropped
+        a linked account (it never retries). Heal: probe, cooldown-gate,
+        restart the daemon. Worst case (account deregistered, probe green)
+        is one restart per cooldown — the MCP gate keeps reporting torn.
+        """
+        self._torn = store > loaded
+        if not self._torn:
+            return
+        if not self._network_probe():
+            log.warning(
+                "torn account state (store=%d loaded=%d), network unreachable"
+                " — re-polling in %.0fs",
+                store,
+                loaded,
+                self._torn_refresh_seconds,
+            )
+            return
+        if self._restart_cooldown_active():
+            log.info(
+                "torn account state (store=%d loaded=%d), restart cooldown"
+                " active — skipping",
+                store,
+                loaded,
+            )
+            return
+        try:
+            self._restart_marker.touch()
+        except OSError as exc:
+            log.warning("restart marker write failed: %s", exc)
+        log.warning(
+            "torn account state (store=%d loaded=%d), network reachable"
+            " — restarting spaces-signal-cli (expect our own restart in the"
+            " cascade)",
+            store,
+            loaded,
+        )
+        self._restart_daemon()
+
     def _accounts_snapshot(self) -> list[dict]:
         with self._accounts_lock:
             return list(self._accounts)
 
     def _run_accounts_refresher(self) -> None:
-        while not self._stop.wait(self._accounts_refresh_seconds):
+        while not self._stop.wait(self._refresh_interval()):
             self._refresh_accounts()
 
     def _request_initial_sync(self) -> None:

@@ -11,7 +11,8 @@
 #   - carry NO wantedBy (no nix-driven autostart at login);
 #   - carry NO ConditionPathExistsGlob (the daemon must run UNLINKED so the
 #     panel setup flow's startLink JSON-RPC works before any device exists);
-#   - are pulled in by the Signal integration socket (Wants=/After=) and torn
+#   - are pulled in by the Signal integration socket (Wants=, deliberately no
+#     After= — shutdown ordering cycle) and torn
 #     down with it (PartOf=spaces-integration-signal.socket, injected by the
 #     spaces-integrations module from the signal manifest's extraServices);
 # and the old spaces-signal-link path unit is GONE.
@@ -90,6 +91,7 @@ let
 
   service = enabledSystem.config.systemd.user.services.spaces-signal-cli;
   bridge = enabledSystem.config.systemd.user.services.spaces-signal-bridge;
+  integSocket = enabledSystem.config.systemd.user.sockets.spaces-integration-signal;
 in
 pkgs.runCommand "spaces-signal-nix-eval-test"
   {
@@ -112,6 +114,8 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
     bridgeCondition = lib.concatStringsSep " " (
       lib.toList (bridge.unitConfig.ConditionPathExistsGlob or [ ])
     );
+    socketWants = lib.concatStringsSep " " (integSocket.wants or [ ]);
+    socketAfter = lib.concatStringsSep " " (integSocket.after or [ ]);
     brokenSucceeded = if brokenAttempt.success then "yes" else "no";
     enabledTmpfiles = lib.concatStringsSep "\n" enabledSystem.config.systemd.user.tmpfiles.rules;
     # The old path-activation unit must no longer exist anywhere.
@@ -198,6 +202,23 @@ pkgs.runCommand "spaces-signal-nix-eval-test"
       *" $partof "*) ;;
       *) fail "bridge must be PartOf=$partof (GUI lifecycle), got '$bridgePartOf'" ;;
     esac
+
+    # ── 3b. socket pulls daemons via Wants= WITHOUT After= ────────────
+    # After= on the backing daemons inverts on shutdown (daemon stops
+    # after bridge after socket) and collided with default deps into an
+    # ordering cycle (`Job spaces-signal-cli.service/stop deleted`,
+    # journal 2026-07-10). Wants= alone is sufficient: the MCP server
+    # dials the daemon socket lazily per tool call.
+    for svc in spaces-signal-cli.service spaces-signal-bridge.service; do
+      case " $socketWants " in
+        *" $svc "*) ;;
+        *) fail "integration socket must Wants=$svc, got '$socketWants'" ;;
+      esac
+      case " $socketAfter " in
+        *" $svc "*) fail "integration socket must NOT be After=$svc (shutdown ordering cycle), got '$socketAfter'" ;;
+        *) ;;
+      esac
+    done
 
     # ── 4. the old path-activation unit is gone ──────────────────────
     [ "$hasPathUnit" = "no" ] \

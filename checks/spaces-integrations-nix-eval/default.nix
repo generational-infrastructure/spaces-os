@@ -277,13 +277,16 @@ assert !(bridgeSvc.serviceConfig ? StateDirectory);
 # definition.extraServices carries just the NAME regardless of form; setupPark verbatim.
 assert protonlikeDef.extraServices == [ "spaces-protonlike-bridge.service" ];
 assert protonlikeDef.setupPark == [ "spaces-protonlike-bridge.service" ];
-# the socket Wants/After the backing unit NAME.
+# the socket Wants the backing unit NAME — deliberately NO After=: an After=
+# edge inverts on shutdown (daemon stops after bridge after socket) and
+# collided with default deps into an ordering cycle (journal 2026-07-10).
 assert protonlikeInteg.socketUnit.wants == [ "spaces-protonlike-bridge.service" ];
-assert protonlikeInteg.socketUnit.after == [ "spaces-protonlike-bridge.service" ];
+assert !(protonlikeInteg.socketUnit ? after);
 # ── Bare-string extraService: today's EXACT behavior (regression) ────────────
-# name flows to socket Wants/After + definition; NO confined unit generated.
+# name flows to socket Wants (no After=, see above) + definition; NO confined
+# unit generated.
 assert bareInteg.socketUnit.wants == [ "spaces-external-daemon.service" ];
-assert bareInteg.socketUnit.after == [ "spaces-external-daemon.service" ];
+assert !(bareInteg.socketUnit ? after);
 assert bareInteg.definition.extraServices == [ "spaces-external-daemon.service" ];
 assert bareInteg.definition.setupPark == [ ];
 assert bareInteg.extraServiceUnits == { };

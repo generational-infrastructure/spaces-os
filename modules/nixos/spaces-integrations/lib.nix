@@ -423,8 +423,14 @@ in
           # Starting this socket pulls in the integration's backing daemons; the
           # spaces-integrations module injects the reverse PartOf onto each so a
           # GUI disable (socket stop) tears them down too.
+          #
+          # Wants= WITHOUT After=: an After= edge here inverts on shutdown
+          # (daemon stops after bridge after socket) and collides with default
+          # dependencies into an ordering cycle — systemd resolved it by
+          # DELETING the daemon's stop job (journal 2026-07-10). Ordering buys
+          # nothing anyway: the MCP server dials the daemon's own socket
+          # lazily per tool call and tolerates its absence.
           wants = extraServiceNames;
-          after = extraServiceNames;
         };
     in
     {

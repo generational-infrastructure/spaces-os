@@ -104,9 +104,11 @@ assert
   signal.setupSocketUnit.socketConfig.ListenStream == "%t/spaces-integration-signal-setup.sock";
 assert signal.setupSocketUnit.socketConfig.SocketMode == "0600";
 assert !(signal.setupSocketUnit ? wantedBy);
-# ── signal: main socket Wants/After on extraServices ─────────────────────────
+# ── signal: main socket Wants extraServices, deliberately NO After= ───────────
+# An After= edge inverts on shutdown (daemon stops after bridge after socket)
+# and collided with default deps into an ordering cycle (journal 2026-07-10).
 assert signal.socketUnit.wants == extraServices;
-assert signal.socketUnit.after == extraServices;
+assert !(signal.socketUnit ? after);
 # ── signal: definition JSON carries setup + extraServices + setupRestart ─────
 assert signal.definition.setup == true;
 assert signal.definition.extraServices == extraServices;
