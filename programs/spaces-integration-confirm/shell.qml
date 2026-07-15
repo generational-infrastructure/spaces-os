@@ -8,8 +8,9 @@
 //
 // The root is a Quickshell PanelWindow on the wlr layer-shell Overlay layer with
 // no anchors, so a layer-shell compositor (niri) centers it as a floating
-// overlay above everything and never tiles it. Under QT_QPA_PLATFORM=offscreen
-// (the contract check) it boots headless exactly like pi-chat's QuickBar.
+// overlay above everything and never tiles it. The contract check boots it as
+// a client of a throwaway headless wlroots compositor (PanelWindow needs a
+// real wayland platform; QT_QPA_PLATFORM=offscreen has none).
 //
 // Contract (design §2): read the request from SPACES_CONFIRM_REQUEST (JSON) and
 // write one verdict token — once | session | deny — to SPACES_CONFIRM_VERDICT_FILE,
