@@ -1,10 +1,17 @@
 /**
  * The harness-facing MCP server: turns the aggregated registry into one MCP
  * surface (initialize / tools/list / tools/call), enforces the autoRun
- * allowlist and per-connection session grants, and runs the confirm command for
+ * allowlist and session grants, and runs the confirm command for
  * everything else. Transport-agnostic — mcpExchange/socket plumbing lives in
  * gateway-core + main.ts; this module is the pure request handler so the
  * approval decisions are unit-testable without a socket.
+ *
+ * Session grants: by default a `session` verdict is scoped to one connection.
+ * A client MAY declare a session key (the `spaces/session` notification) so its
+ * grants are shared across all connections presenting the same key — keyed by a
+ * process-lifetime random value, this makes grants per-process; key-less
+ * connections keep the private, per-connection behavior. Shared entries idle
+ * past SESSION_GRANT_TTL_MS are swept lazily on the next binding.
  */
 
 import {
@@ -31,11 +38,25 @@ export interface ConfirmRequest {
   context?: string;
 }
 
-// Per-connection state. A "session" is one MCP client connection; a `session`
-// grant lives only as long as that connection.
+// Per-connection state. A "session" is one MCP client connection. By default a
+// `session` grant lives only as long as that connection (a private `grants`
+// Set); a client that declares a session key (spaces/session) has its `grants`
+// swapped for a per-key set shared across that process's connections.
 export interface GatewaySession {
   grants: Set<string>;
 }
+
+// Shared session-grant store, keyed by a client-declared per-process key. Grants
+// are shared across every connection presenting the same key; `lastSeen` drives
+// the lazy TTL sweep. Runtime collection (dynamic keys, insert/delete, .size).
+export type GrantStore = Map<string, { grants: Set<string>; lastSeen: number }>;
+
+// Keys longer than this are rejected (a client-declared key is untrusted input;
+// a random UUID is ~36 chars, so this is generous headroom, not a real limit).
+const MAX_KEY_LEN = 128;
+// A shared grant entry unreferenced for this long is swept on the next binding:
+// a dead process's key never returns, so retention is only memory hygiene.
+export const SESSION_GRANT_TTL_MS = 30 * 60 * 1000;
 
 export interface GatewayDeps {
   getRegistry: () => Promise<Registry>;
@@ -48,6 +69,10 @@ export interface GatewayDeps {
     signal?: AbortSignal,
     timeoutMs?: number,
   ) => Promise<{ text: string; isError: boolean }>;
+  // Shared per-key grant store; absent ⇒ every connection stays private.
+  grantStore?: GrantStore;
+  // Injectable clock for the TTL sweep (defaults to Date.now).
+  now?: () => number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,6 +81,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function newSession(): GatewaySession {
   return { grants: new Set() };
+}
+
+// Bind a connection to a client-declared session key (spaces/session): its
+// grants become the shared per-key set, so a `session` grant made on any of a
+// process's connections applies to the others. Invalid keys (non-string, empty,
+// or oversized) are ignored — the connection keeps its private set. Sweeps
+// entries idle past the TTL on each binding (lazy memory hygiene). No-op when no
+// store is configured (key-less, per-connection semantics).
+function bindSessionKey(
+  params: unknown,
+  session: GatewaySession,
+  deps: GatewayDeps,
+): void {
+  const store = deps.grantStore;
+  if (!store) return;
+  const key = isRecord(params) ? params.key : undefined;
+  if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LEN) {
+    return;
+  }
+  const now = (deps.now ?? Date.now)();
+  for (const [k, entry] of store) {
+    if (now - entry.lastSeen > SESSION_GRANT_TTL_MS) store.delete(k);
+  }
+  let entry = store.get(key);
+  if (!entry) {
+    entry = { grants: new Set(), lastSeen: now };
+    store.set(key, entry);
+  } else {
+    entry.lastSeen = now;
+  }
+  session.grants = entry.grants;
 }
 
 // The MCP tools/list payload for the aggregated registry: the namespaced name,
@@ -158,6 +214,9 @@ export async function handleMcpRequest(
       capabilities: { tools: {} },
     };
   } else if (method === "notifications/initialized") {
+    return null;
+  } else if (method === "spaces/session") {
+    bindSessionKey(req.params, session, deps);
     return null;
   } else if (method === "tools/list") {
     result = { tools: advertisedTools(await deps.getRegistry()) };

@@ -7,9 +7,13 @@
  * MCP-client extension, MCP-native harnesses via spaces-mcp-connect).
  *
  * Transport: newline-delimited MCP JSON-RPC over the unix socket
- * SPACES_INTEGRATION_GATEWAY_SOCKET. One connection = one
- * session (its own confirm/"session"-grant state). The request-decision logic
- * lives in mcp-server.ts; this file is only the socket transport + env wiring.
+ * SPACES_INTEGRATION_GATEWAY_SOCKET. One connection = one session. A `session`
+ * grant is private to its connection unless the client declares a session key
+ * (the `spaces/session` notification): grants are then shared across every
+ * connection presenting the same key — keyed by a process-lifetime random
+ * value, so grants are per-process and die with the process. Key-less clients
+ * keep the per-connection behavior. The request-decision logic lives in
+ * mcp-server.ts; this file is only the socket transport + env wiring.
  */
 
 import { unlinkSync } from "node:fs";
@@ -23,6 +27,7 @@ import { runConfirm } from "./confirm";
 import {
   type ConfirmRequest,
   type GatewayDeps,
+  type GrantStore,
   handleMcpRequest,
   newSession,
 } from "./mcp-server";
@@ -61,10 +66,15 @@ async function getRegistry(): Promise<Registry> {
   return registry;
 }
 
+// Shared across every connection presenting the same client-declared session
+// key (spaces/session); key-less connections never touch it. Lives for the
+// gateway process's lifetime, swept lazily of idle entries.
+const grantStore: GrantStore = new Map();
 const deps: GatewayDeps = {
   getRegistry,
   confirm: (req: ConfirmRequest) => runConfirm(CONFIRM_CMD, req),
   callTool: callIntegrationTool,
+  grantStore,
 };
 
 function serveConnection(conn: Socket): void {

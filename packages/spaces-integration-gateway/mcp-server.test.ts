@@ -4,8 +4,10 @@ import {
   advertisedTools,
   type ConfirmRequest,
   type GatewayDeps,
+  type GrantStore,
   handleMcpRequest,
   newSession,
+  SESSION_GRANT_TTL_MS,
   type Verdict,
 } from "./mcp-server";
 
@@ -311,4 +313,92 @@ test("a failed confirmPreview fails closed: surfaces the error, no prompt, no se
   };
   expect(result.isError).toBe(true);
   expect(result.content[0]!.text).toBe("preview boom");
+});
+
+// ---- spaces/session: per-process shared grant keys --------------------------
+
+const bindKey = (key: unknown) => ({
+  jsonrpc: "2.0",
+  method: "spaces/session",
+  params: { key },
+});
+
+test("spaces/session is a notification: it owes no reply", async () => {
+  const { deps } = makeDeps({ registry: reg([]) });
+  const store: GrantStore = new Map();
+  const res = await handleMcpRequest(bindKey("k1"), newSession(), {
+    ...deps,
+    grantStore: store,
+  });
+  expect(res).toBeNull();
+});
+
+test("two sessions sharing one key share a session grant", async () => {
+  const r = reg([{ integration: "github", tool: "create_issue" }]);
+  const { deps, calls, confirms } = makeDeps({
+    registry: r,
+    verdict: "session",
+  });
+  const store: GrantStore = new Map();
+  const d = { ...deps, grantStore: store };
+
+  const a = newSession();
+  await handleMcpRequest(bindKey("shared"), a, d);
+  await handleMcpRequest(call("github_create_issue", { title: "x" }), a, d);
+
+  const b = newSession();
+  await handleMcpRequest(bindKey("shared"), b, d);
+  await handleMcpRequest(call("github_create_issue", { title: "y" }), b, d);
+
+  expect(confirms).toHaveLength(1); // only session A prompted; B inherited the grant
+  expect(calls).toHaveLength(2); // both forwarded
+});
+
+test("distinct keys keep grants isolated", async () => {
+  const r = reg([{ integration: "github", tool: "create_issue" }]);
+  const { deps, confirms } = makeDeps({ registry: r, verdict: "session" });
+  const store: GrantStore = new Map();
+  const d = { ...deps, grantStore: store };
+
+  const a = newSession();
+  await handleMcpRequest(bindKey("keyA"), a, d);
+  await handleMcpRequest(call("github_create_issue"), a, d);
+
+  const b = newSession();
+  await handleMcpRequest(bindKey("keyB"), b, d);
+  await handleMcpRequest(call("github_create_issue"), b, d);
+
+  expect(confirms).toHaveLength(2); // different key ⇒ B still prompts
+});
+
+test("a bad key (empty / oversized / non-string) does not bind a shared set", async () => {
+  const r = reg([{ integration: "github", tool: "create_issue" }]);
+  const { deps, confirms } = makeDeps({ registry: r, verdict: "session" });
+  const store: GrantStore = new Map();
+  const d = { ...deps, grantStore: store };
+
+  for (const bad of ["", "x".repeat(129), 42, null]) {
+    const s = newSession();
+    await handleMcpRequest(bindKey(bad), s, d);
+    await handleMcpRequest(call("github_create_issue"), s, d);
+  }
+  // each session kept its own private set ⇒ each prompted independently
+  expect(confirms).toHaveLength(4);
+  expect(store.size).toBe(0);
+});
+
+test("binding sweeps entries idle beyond the TTL", async () => {
+  const r = reg([{ integration: "github", tool: "create_issue" }]);
+  const { deps } = makeDeps({ registry: r, verdict: "session" });
+  const store: GrantStore = new Map();
+  let t = 1_000_000;
+  const d = { ...deps, grantStore: store, now: () => t };
+
+  await handleMcpRequest(bindKey("stale"), newSession(), d);
+  expect(store.has("stale")).toBe(true);
+
+  t += SESSION_GRANT_TTL_MS + 1; // let "stale" age past the TTL
+  await handleMcpRequest(bindKey("fresh"), newSession(), d);
+  expect(store.has("stale")).toBe(false); // swept lazily on the new binding
+  expect(store.has("fresh")).toBe(true);
 });

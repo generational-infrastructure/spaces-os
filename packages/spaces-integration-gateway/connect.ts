@@ -6,6 +6,7 @@
  * service, so many harnesses share one instance (and one confirm/grant state).
  */
 
+import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 
 export function bridge(
@@ -13,6 +14,10 @@ export function bridge(
   input: NodeJS.ReadableStream,
   output: NodeJS.WritableStream,
 ): Promise<void> {
+  // One random key per bridge invocation. The CLI calls bridge exactly once per
+  // process, so this key's lifetime is the bridge process's: the gateway's
+  // per-process grant set dies with the bridge.
+  const sessionKey = randomUUID();
   const { promise, resolve } = Promise.withResolvers<void>();
   const sock = createConnection(socketPath);
   let settled = false;
@@ -22,6 +27,11 @@ export function bridge(
     resolve();
   };
   sock.on("connect", () => {
+    // Declare this process's session key BEFORE any client bytes, so grants are
+    // shared across the bridge's (single) connection with per-process lifetime.
+    sock.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "spaces/session", params: { key: sessionKey } })}\n`,
+    );
     input.pipe(sock);
     sock.pipe(output);
   });

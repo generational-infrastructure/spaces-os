@@ -5,15 +5,22 @@
 // Pi ships no MCP client, so this thin extension *is* pi's MCP client for the
 // gateway: on load it connects to SPACES_INTEGRATION_GATEWAY_SOCKET, runs
 // initialize + tools/list, and registers one forwarding tool per aggregated
-// tool. execute() forwards a tools/call over the SAME persistent connection, so
-// the gateway's per-connection "allow for this session" grants persist across
-// calls. All approval logic lives in the gateway — this holds none.
+// tool. execute() forwards a tools/call over the SAME persistent connection. It
+// also declares a per-pi-process session key (spaces/session) so "allow for this
+// session" grants are shared across this process's connection(s) and survive a
+// reconnect for the process's lifetime. All approval logic lives in the gateway
+// — this holds none.
 //
 // The gateway is a separate --user service outside the agent's Landlock domain;
 // the model cannot make it skip a confirm. A down/absent gateway ⇒ zero tools
 // (never blocks pi startup).
 
+import { randomUUID } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
+
+// One random key per pi process: grants made under it are shared across this
+// process's gateway connection(s) and die with the process (design §3).
+const SESSION_KEY = randomUUID();
 
 // Cap the startup handshake so a slow/wedged gateway degrades to "no tools"
 // instead of stalling pi startup (the factory is awaited before pi is ready).
@@ -109,9 +116,13 @@ class GatewayClient {
     }
   }
 
-  private notify(method: string): void {
-    if (this.alive)
-      this.sock.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
+  private notify(method: string, params?: Record<string, unknown>): void {
+    if (!this.alive) return;
+    const msg =
+      params === undefined
+        ? { jsonrpc: "2.0", method }
+        : { jsonrpc: "2.0", method, params };
+    this.sock.write(`${JSON.stringify(msg)}\n`);
   }
 
   private request(
@@ -140,6 +151,9 @@ class GatewayClient {
   }
 
   async listTools(): Promise<AdvertisedTool[]> {
+    // Declare this process's session key before initialize, so a `session`
+    // grant persists across reconnects for the pi process's lifetime.
+    this.notify("spaces/session", { key: SESSION_KEY });
     await this.request(
       "initialize",
       {
