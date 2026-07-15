@@ -262,15 +262,32 @@ TOOLS, call_tool, main = make_server(
         },
         {
             "name": "message_send",
-            "description": "Send a raw RFC822 message (headers and body)",
+            "description": "Send an email composed from structured fields"
+            " (the sender is the profile's own address)",
             "schema": {
                 "properties": {
-                    "message": {
+                    "to": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "recipient addresses",
+                    },
+                    "cc": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "carbon-copy addresses",
+                    },
+                    "bcc": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "blind-carbon-copy addresses",
+                    },
+                    "subject": {"type": "string", "description": "subject line"},
+                    "body": {
                         "type": "string",
-                        "description": "raw RFC822 message, including headers and body",
+                        "description": "plain-text message body (UTF-8)",
                     },
                 },
-                "required": ["message"],
+                "required": ["to", "subject", "body"],
             },
             "needs_fields": _NEEDS,
             "impl": _impls["message_send"],

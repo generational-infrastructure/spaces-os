@@ -1,3 +1,6 @@
+import email
+import email.policy
+import email.utils
 import hashlib
 import json
 import os
@@ -197,6 +200,11 @@ def _calls(env):
     return open(p).read().splitlines() if os.path.exists(p) else []
 
 
+def _sent_message(env):
+    with open(os.path.join(env["stub"], "last_stdin"), "rb") as f:
+        return email.message_from_bytes(f.read(), policy=email.policy.default)
+
+
 # --- constants / protocol shape ---------------------------------------------
 
 
@@ -328,17 +336,137 @@ def test_message_read_missing_id_is_error(client):
     assert resp["result"]["isError"] is True
 
 
-def test_message_send_passes_body_on_stdin(client, env):
-    raw = "From: me@personal.test\r\nTo: you@x.test\r\nSubject: Hi\r\n\r\nBody"
-    resp = call_tool(client, "message_send", {"profile": "personal", "message": raw})
+def test_message_send_composes_rfc822_from_fields(client, env):
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test", "bob@y.test"],
+            "cc": ["carol@z.test"],
+            "subject": "Quarterly numbers",
+            "body": "The numbers are up.",
+        },
+    )
     assert resp["result"]["isError"] is False
-    with open(os.path.join(env["stub"], "last_stdin"), "rb") as f:
-        assert f.read() == raw.encode()
+    argv = _argv(env)
+    assert "message" in argv
+    assert "send" in argv
+    msg = _sent_message(env)
+    assert msg["From"] == "me@personal.test"
+    assert [a.addr_spec for a in msg["To"].addresses] == [
+        "alice@x.test",
+        "bob@y.test",
+    ]
+    assert [a.addr_spec for a in msg["Cc"].addresses] == ["carol@z.test"]
+    assert msg["Subject"] == "Quarterly numbers"
+    assert msg.get_content().strip() == "The numbers are up."
 
 
-def test_message_send_missing_message_is_error(client):
-    resp = call_tool(client, "message_send", {"profile": "personal"})
+def test_message_send_carries_rfc5322_required_headers(client, env):
+    # Proton Bridge's IMAP append validates RFC 5322 and rejects a message
+    # without Date ("Required header field 'Date' not found or empty") —
+    # himalaya forwards our bytes verbatim, so the server must stamp them.
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "subject": "Hi",
+            "body": "Body",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert msg["Date"], "composed message must carry a Date header"
+    assert email.utils.parsedate_to_datetime(str(msg["Date"])).tzinfo is not None
+    mid = str(msg["Message-ID"] or "")
+    assert mid.startswith("<")
+    assert mid.endswith(">")
+    assert "@" in mid
+
+
+def test_message_send_bcc_reaches_composed_message(client, env):
+    # himalaya extracts recipients from the composed message, so Bcc must be
+    # present on stdin (SMTP transmission strips it later).
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "bcc": ["hidden@y.test"],
+            "subject": "FYI",
+            "body": "Quiet copy.",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert [a.addr_spec for a in msg["Bcc"].addresses] == ["hidden@y.test"]
+
+
+def test_message_send_non_ascii_round_trips(client, env):
+    # RFC 2047 subject encoding and body CTE are the server's job; the parsed
+    # message must yield the original unicode back.
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "subject": "Grüße aus München",
+            "body": "Schöne Grüße — bis bald!",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert msg["Subject"] == "Grüße aus München"
+    assert msg.get_content().strip() == "Schöne Grüße — bis bald!"
+
+
+def test_message_send_missing_to_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "subject": "Hi", "body": "Body"},
+    )
     assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_empty_to_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": [], "subject": "Hi", "body": "Body"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_missing_subject_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": ["alice@x.test"], "body": "Body"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_missing_body_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": ["alice@x.test"], "subject": "Hi"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
 
 
 # --- error paths ------------------------------------------------------------

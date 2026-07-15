@@ -1,3 +1,6 @@
+import email
+import email.policy
+import email.utils
 import hashlib
 import json
 import os
@@ -182,6 +185,16 @@ def _argv(env):
     return (Path(env["stub"]) / "last_argv").read_text().split("\n")
 
 
+def _calls(env):
+    p = Path(env["stub"]) / "calls.log"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def _sent_message(env):
+    raw = (Path(env["stub"]) / "last_stdin").read_bytes()
+    return email.message_from_bytes(raw, policy=email.policy.default)
+
+
 def _last_config(env):
     with (Path(env["stub"]) / "last_config").open("rb") as f:
         return tomllib.load(f)
@@ -206,7 +219,7 @@ def test_tools_list_shape(client):
         assert "profile" in t["inputSchema"]["properties"]
         assert "profile" not in t["inputSchema"]["required"]
     assert tools["message_read"]["inputSchema"]["required"] == ["id"]
-    assert tools["message_send"]["inputSchema"]["required"] == ["message"]
+    assert tools["message_send"]["inputSchema"]["required"] == ["to", "subject", "body"]
     assert "secret_fingerprint" not in tools
 
 
@@ -310,20 +323,138 @@ def test_message_read_missing_id_is_error(client):
     assert resp["result"]["isError"] is True
 
 
-def test_message_send_passes_body_on_stdin(client, env):
-    raw = "From: me@personal.test\r\nTo: you@x.test\r\nSubject: Hi\r\n\r\nBody here"
-    resp = call_tool(client, "message_send", {"profile": "personal", "message": raw})
+def test_message_send_composes_rfc822_from_fields(client, env):
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test", "bob@y.test"],
+            "cc": ["carol@z.test"],
+            "subject": "Quarterly numbers",
+            "body": "The numbers are up.",
+        },
+    )
     assert resp["result"]["isError"] is False
     assert _text(resp) == "Message sent!"
     argv = _argv(env)
     assert "message" in argv
     assert "send" in argv
-    assert (Path(env["stub"]) / "last_stdin").read_bytes() == raw.encode()
+    msg = _sent_message(env)
+    assert msg["From"] == "me@personal.test"
+    assert [a.addr_spec for a in msg["To"].addresses] == [
+        "alice@x.test",
+        "bob@y.test",
+    ]
+    assert [a.addr_spec for a in msg["Cc"].addresses] == ["carol@z.test"]
+    assert msg["Subject"] == "Quarterly numbers"
+    assert msg.get_content().strip() == "The numbers are up."
 
 
-def test_message_send_missing_message_is_error(client):
-    resp = call_tool(client, "message_send", {"profile": "personal"})
+def test_message_send_carries_rfc5322_required_headers(client, env):
+    # RFC 5322 requires Date; strict providers (Proton Bridge IMAP append)
+    # reject a message without it. himalaya forwards our bytes verbatim, so
+    # the server must stamp Date and Message-ID itself.
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "subject": "Hi",
+            "body": "Body",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert msg["Date"], "composed message must carry a Date header"
+    assert email.utils.parsedate_to_datetime(str(msg["Date"])).tzinfo is not None
+    mid = str(msg["Message-ID"] or "")
+    assert mid.startswith("<")
+    assert mid.endswith(">")
+    assert "@" in mid
+
+
+def test_message_send_bcc_reaches_composed_message(client, env):
+    # himalaya extracts recipients from the composed message, so Bcc must be
+    # present on stdin (SMTP transmission strips it later).
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "bcc": ["hidden@y.test"],
+            "subject": "FYI",
+            "body": "Quiet copy.",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert [a.addr_spec for a in msg["Bcc"].addresses] == ["hidden@y.test"]
+
+
+def test_message_send_non_ascii_round_trips(client, env):
+    # RFC 2047 subject encoding and body CTE are the server's job; the parsed
+    # message must yield the original unicode back.
+    resp = call_tool(
+        client,
+        "message_send",
+        {
+            "profile": "personal",
+            "to": ["alice@x.test"],
+            "subject": "Grüße aus München",
+            "body": "Schöne Grüße — bis bald!",
+        },
+    )
+    assert resp["result"]["isError"] is False
+    msg = _sent_message(env)
+    assert msg["Subject"] == "Grüße aus München"
+    assert msg.get_content().strip() == "Schöne Grüße — bis bald!"
+
+
+def test_message_send_missing_to_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "subject": "Hi", "body": "Body"},
+    )
     assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_empty_to_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": [], "subject": "Hi", "body": "Body"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_missing_subject_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": ["alice@x.test"], "body": "Body"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
+
+
+def test_message_send_missing_body_is_error(client, env):
+    before = len(_calls(env))
+    resp = call_tool(
+        client,
+        "message_send",
+        {"profile": "personal", "to": ["alice@x.test"], "subject": "Hi"},
+    )
+    assert resp["result"]["isError"] is True
+    assert len(_calls(env)) == before, "himalaya must not be spawned on invalid args"
 
 
 # --- error paths ------------------------------------------------------------

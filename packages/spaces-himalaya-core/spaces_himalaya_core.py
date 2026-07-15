@@ -13,6 +13,9 @@ Bridge transport and msmtp-workaround details.
 """
 
 import contextlib
+import email.message
+import email.policy
+import email.utils
 import os
 import shutil
 import subprocess
@@ -56,6 +59,55 @@ def config_file(text, prefix="himalaya-"):
         yield path
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _validate_send_args(args):
+    """Return an error string for malformed message_send arguments, else None.
+    Runs before the precheck probe so schema misuse never spawns himalaya.
+    """
+    for name in ("to",):
+        addrs = args.get(name)
+        if not isinstance(addrs, list) or not addrs:
+            return f"missing required argument: {name} (non-empty array of addresses)"
+    for name in ("to", "cc", "bcc"):
+        addrs = args.get(name)
+        if addrs is None:
+            continue
+        if not isinstance(addrs, list) or not all(
+            isinstance(a, str) and a.strip() for a in addrs
+        ):
+            return f"argument {name} must be an array of address strings"
+    for name in ("subject", "body"):
+        val = args.get(name)
+        if not isinstance(val, str) or not val:
+            return f"missing required argument: {name}"
+    return None
+
+
+def compose_message(sender, args):
+    """Compose the RFC822 message from structured fields. EmailMessage under
+    policy.SMTP owns header folding, RFC 2047 encoding of non-ASCII values,
+    MIME headers, and CRLF line endings — the agent never writes raw RFC822.
+    From is the profile's stored email; Bcc is included so himalaya/msmtp `-t`
+    recipient extraction sees it (the transport strips it on transmission).
+    Date and Message-ID are stamped here: RFC 5322 requires Date, and Proton
+    Bridge's IMAP append validates it (rejecting a Date-less message with
+    "Required header field 'Date' not found"); himalaya sends the bytes
+    verbatim and adds neither.
+    """
+    msg = email.message.EmailMessage(policy=email.policy.SMTP)
+    msg["From"] = sender
+    msg["To"] = ", ".join(args["to"])
+    for header, name in (("Cc", "cc"), ("Bcc", "bcc")):
+        if args.get(name):
+            msg[header] = ", ".join(args[name])
+    msg["Subject"] = args["subject"]
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    # Domain from the sender address so the id is plausibly ours; make_msgid
+    # guarantees uniqueness.
+    msg["Message-ID"] = email.utils.make_msgid(domain=sender.rpartition("@")[2] or None)
+    msg.set_content(args["body"])
+    return msg.as_bytes()
 
 
 def run_himalaya(cfg, sub_args, stdin=None):
@@ -133,15 +185,16 @@ def make_tool_impls(build_config, precheck=None):
             return run_himalaya(cfg, ["message", "read", "-a", profile, str(mid)])
 
     def message_send(args, profile, vals):
-        message = args.get("message")
-        if not isinstance(message, str) or not message:
-            return "missing required argument: message", True
+        err = _validate_send_args(args)
+        if err:
+            return err, True
         blocked = _probe(profile, vals)
         if blocked:
             return blocked
         cfg_text, err = build_config(profile, vals)
         if err:
             return err, True
+        message = compose_message(vals["email"], args)
         with config_file(cfg_text) as cfg:
             return run_himalaya(cfg, ["message", "send", "-a", profile], stdin=message)
 
