@@ -123,8 +123,10 @@ fi
 note "SMTP positive: msmtp trusts the CA:TRUE cert via the integration's tls_trust_file"
 sed 's/^port 1025$/port 11025/' msmtprc >m_pos.rc
 pid=$(start_stub SMTP 11025 smtp_pos.log)
+# No -f: the envelope-from must come from the generated msmtprc's own `from`
+# line (a missing `from` is exit 78 EX_CONFIG before any TLS/SMTP happens).
 printf 'From: u@localhost\r\nTo: a@localhost\r\nSubject: t\r\n\r\nhi\r\n' |
-  msmtp -C m_pos.rc -f u@localhost -a test -t >msmtp_pos.out 2>&1
+  msmtp -C m_pos.rc -a test -t >msmtp_pos.out 2>&1
 wait "$pid" 2>/dev/null
 # msmtp finished STARTTLS (server log) AND raised no certificate error (its
 # dumb-stub AUTH/DATA failure is unrelated to TLS trust).
@@ -140,7 +142,7 @@ sed -e 's/^port 1025$/port 11026/' -e "s|^tls_trust_file .*|tls_trust_file $D/ot
   msmtprc >m_neg.rc
 pid=$(start_stub SMTP 11026 smtp_neg.log)
 printf 'From: u@localhost\r\nTo: a@localhost\r\nSubject: t\r\n\r\nhi\r\n' |
-  msmtp -C m_neg.rc -f u@localhost -a test -t >msmtp_neg.out 2>&1
+  msmtp -C m_neg.rc -a test -t >msmtp_neg.out 2>&1
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
 if grep -qi "certificate verification failed\|not trusted\|could not send" msmtp_neg.out; then

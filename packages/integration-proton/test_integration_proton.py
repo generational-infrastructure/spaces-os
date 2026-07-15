@@ -257,6 +257,9 @@ def test_msmtprc_pins_and_trust_file(client, env):
     assert "tls_starttls on" in rc
     assert f"tls_trust_file {env['cert']}" in rc
     assert "user me@personal.test" in rc
+    # msmtp -t only extracts recipients; the envelope-from MUST come from the
+    # config's `from` directive (exit 78 EX_CONFIG otherwise).
+    assert "from me@personal.test" in rc
     assert f'passwordeval "{env["authcmd"]} personal"' in rc
 
 

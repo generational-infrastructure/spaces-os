@@ -118,6 +118,9 @@ def _msmtprc_text(profile, email, cert):
             "tls_starttls on",
             f"tls_trust_file {cert}",
             f"user {email}",
+            # Envelope-from: `-t` only extracts recipients; without an explicit
+            # `from`, msmtp exits 78 EX_CONFIG ("envelope-from address is missing").
+            f"from {email}",
             f'passwordeval "{auth}"',
             "",
         ]
