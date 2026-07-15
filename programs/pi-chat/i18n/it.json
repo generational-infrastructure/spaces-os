@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ ritirato"
   },
   "settings": {
+    "general": "Generale",
     "nixos-hint": "La configurazione del peer (pubkey, relay, nome visualizzato) è gestita dal modulo NixOS — vedi services.pi-chat nella tua configurazione.",
     "history-limit-label": "Limite cronologia",
     "history-limit-description": "Messaggi mantenuti nel mirror in memoria del pannello (SQLite conserva tutto).",
@@ -56,6 +57,7 @@
     "integrations-offline": "Connessione al daemon delle integrazioni…",
     "integrations-empty": "Nessuna integrazione disponibile.",
     "integrations-enabled-badge": "abilitata",
+    "integrations-disabled-badge": "disabilitata",
     "integrations-enable": "Abilita",
     "integrations-disable": "Disabilita",
     "integrations-secret-set": "impostato",

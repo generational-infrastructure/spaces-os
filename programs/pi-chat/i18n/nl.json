@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ ingetrokken"
   },
   "settings": {
+    "general": "Algemeen",
     "nixos-hint": "Peer-configuratie (pubkey, relays, weergavenaam) wordt beheerd door de NixOS-module — zie services.pi-chat in je configuratie.",
     "history-limit-label": "Geschiedenislimiet",
     "history-limit-description": "Berichten bijgehouden in het in-memory-spiegel van het paneel (SQLite bewaart alles).",
@@ -56,6 +57,7 @@
     "integrations-offline": "Verbinden met de integratie-daemon…",
     "integrations-empty": "Geen integraties beschikbaar.",
     "integrations-enabled-badge": "ingeschakeld",
+    "integrations-disabled-badge": "uitgeschakeld",
     "integrations-enable": "Inschakelen",
     "integrations-disable": "Uitschakelen",
     "integrations-secret-set": "ingesteld",

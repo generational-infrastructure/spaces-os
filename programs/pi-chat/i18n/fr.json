@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ rétracté"
   },
   "settings": {
+    "general": "Général",
     "nixos-hint": "La configuration du pair (pubkey, relais, nom d'affichage) est gérée par le module NixOS — voir services.pi-chat dans votre configuration.",
     "history-limit-label": "Limite d'historique",
     "history-limit-description": "Messages conservés dans le miroir en mémoire du panneau (SQLite conserve tout).",
@@ -56,6 +57,7 @@
     "integrations-offline": "Connexion au démon d'intégrations…",
     "integrations-empty": "Aucune intégration disponible.",
     "integrations-enabled-badge": "activée",
+    "integrations-disabled-badge": "désactivée",
     "integrations-enable": "Activer",
     "integrations-disable": "Désactiver",
     "integrations-secret-set": "défini",

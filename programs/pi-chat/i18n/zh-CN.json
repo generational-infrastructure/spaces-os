@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ 已撤回"
   },
   "settings": {
+    "general": "常规",
     "nixos-hint": "对端配置（公钥、中继、显示名称）由 NixOS 模块管理 — 请参阅配置中的 services.pi-chat。",
     "history-limit-label": "历史记录上限",
     "history-limit-description": "面板内存镜像中保留的消息数（SQLite 会保留全部）。",
@@ -56,6 +57,7 @@
     "integrations-offline": "正在连接集成守护进程…",
     "integrations-empty": "没有可用的集成。",
     "integrations-enabled-badge": "已启用",
+    "integrations-disabled-badge": "已禁用",
     "integrations-enable": "启用",
     "integrations-disable": "禁用",
     "integrations-secret-set": "已设置",

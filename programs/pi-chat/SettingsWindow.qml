@@ -14,6 +14,10 @@
 // disjoint from the agent runtime, which never sees this socket. The
 // form is rendered entirely from the broker's `list` reply — secret
 // *names* and descriptions, never values.
+//
+// Layout language (cards + mono uppercase captions + status chips) is
+// adopted from the voxtype-tuner design; the palette stays the noctalia
+// Color.m* scheme (foregrounds keep their matching mOn* entries).
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
@@ -26,9 +30,9 @@ FloatingWindow {
   id: root
 
   title: "pi-chat settings"
-  implicitWidth: 480
-  implicitHeight: 420
-  minimumSize: Qt.size(400, 280)
+  implicitWidth: 560
+  implicitHeight: 640
+  minimumSize: Qt.size(480, 400)
 
   color: Color.mSurface
 
@@ -68,6 +72,11 @@ FloatingWindow {
   // Linking QR render size (square), matched to the inline pane width.
   readonly property int setupQrSize: 180
 
+  // Card corner radius (voxtype layout language).
+  readonly property int cardRadius: 16
+  // Card inner padding (voxtype spec).
+  readonly property int cardPadding: 16
+
   // Reset the inline setup pane to one consistent state: every view-state
   // var assigned, so no teardown site leaves a stale subset behind.
   function resetSetup(phase, forName) {
@@ -78,6 +87,80 @@ FloatingWindow {
     root.setupErrorText = "";
     root.setupPromptLabel = "";
     root.setupPromptSecret = false;
+  }
+
+  // ── Local layout primitives (private to this window) ───────────────────
+  //
+  // SCard: a mSurfaceVariant well with a hairline mOutline border and a
+  // padded inner ColumnLayout. Children added to the card land in that
+  // column (default property). Modelled on the voxtype-tuner Card.
+  component SCard: Rectangle {
+    id: card
+    default property alias content: cardCol.data
+    property alias spacing: cardCol.spacing
+    Layout.fillWidth: true
+    color: Color.mSurfaceVariant
+    radius: root.cardRadius
+    border.width: Style.borderS
+    border.color: Color.mOutline
+    implicitWidth: cardCol.implicitWidth + root.cardPadding * 2
+    implicitHeight: cardCol.implicitHeight + root.cardPadding * 2
+
+    ColumnLayout {
+      id: cardCol
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.margins: root.cardPadding
+      spacing: Style.marginS
+    }
+  }
+
+  // SSectionLabel: a MONO UPPERCASE caption for section / field headers.
+  // Renders the given text uppercased in a monospace face at the XS size.
+  component SSectionLabel: NText {
+    property string label: ""
+    text: label.toUpperCase()
+    font.family: "monospace"
+    font.letterSpacing: 1
+    pointSize: Style.fontSizeXS
+    color: Color.mOnSurfaceVariant
+    wrapMode: Text.NoWrap
+  }
+
+  // SStatusChip: a small pill with a coloured status dot and a mono caption
+  // (e.g. enabled/disabled, secret set/unset). The dot colour signals state.
+  component SStatusChip: Rectangle {
+    id: chip
+    property string label: ""
+    property color dotColor: Color.mOnSurfaceVariant
+    implicitWidth: chipRow.implicitWidth + Style.marginS * 2
+    implicitHeight: chipRow.implicitHeight + Style.marginXS * 2
+    radius: height / 2
+    color: Color.mSurface
+    border.width: Style.borderS
+    border.color: Color.mOutline
+
+    Row {
+      id: chipRow
+      anchors.centerIn: parent
+      spacing: Style.marginXS
+
+      Rectangle {
+        width: 7
+        height: 7
+        radius: 3.5
+        color: chip.dotColor
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      NText {
+        text: chip.label
+        font.family: "monospace"
+        pointSize: Style.fontSizeXS
+        color: Color.mOnSurfaceVariant
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
   }
 
   IntegrationsBridge {
@@ -125,6 +208,10 @@ FloatingWindow {
   // (masked), each saved through the broker via setField. Reused for every
   // profile of a multi-account integration, for the "add account" draft, and
   // for the implicit "default" profile of a single-account integration.
+  //
+  // Field rows use the caption-over-input arrangement: a mono uppercase
+  // field label (SSectionLabel) above the input+Save row (or a static value
+  // row when the profile is Nix-managed).
   component ProfileEditor: ColumnLayout {
     id: pe
     property string intName: ""
@@ -142,7 +229,7 @@ FloatingWindow {
     // This managed account shadows a same-named locally-configured one.
     property bool shadowed: false
     Layout.fillWidth: true
-    spacing: Style.marginXS
+    spacing: Style.marginS
 
     RowLayout {
       visible: pe.showName
@@ -150,9 +237,9 @@ FloatingWindow {
       spacing: Style.marginS
       NText {
         text: pe.profileName
-        font.bold: true
+        font.weight: Font.DemiBold
         color: Color.mOnSurface
-        pointSize: Style.fontSizeS
+        pointSize: Style.fontSizeM
       }
       Item { Layout.fillWidth: true }
       // Remove is a user-only affordance: never instantiated for a managed
@@ -203,18 +290,17 @@ FloatingWindow {
       }
     }
 
-    // Config — managed: static "name / value" rows (never editable).
+    // Config — managed: caption over a static value (never editable).
     Repeater {
       model: pe.managed ? pe.configSchema : []
-      delegate: RowLayout {
+      delegate: ColumnLayout {
         id: cfgStaticRow
         required property var modelData
         Layout.fillWidth: true
-        spacing: Style.marginS
-        NText {
-          text: cfgStaticRow.modelData.name
-          color: Color.mOnSurfaceVariant
-          pointSize: Style.fontSizeS
+        spacing: Style.marginXXS
+        SSectionLabel {
+          label: cfgStaticRow.modelData.name
+          Layout.fillWidth: true
         }
         NText {
           objectName: "cfgRow-" + pe.intName + "-" + pe.profileName + "-" + cfgStaticRow.modelData.name
@@ -227,81 +313,98 @@ FloatingWindow {
       }
     }
 
-    // Config — user-editable: input + Save (unmanaged accounts only).
+    // Config — user-editable: caption over input + Save (unmanaged only).
     Repeater {
       model: pe.managed ? [] : pe.configSchema
-      delegate: RowLayout {
+      delegate: ColumnLayout {
         id: cfgRow
         required property var modelData
         Layout.fillWidth: true
-        spacing: Style.marginS
-        NText {
-          text: cfgRow.modelData.name + (cfgRow.modelData.required ? " *" : "")
-          color: Color.mOnSurfaceVariant
-          pointSize: Style.fontSizeS
-        }
-        NTextInput {
-          id: cfgInput
-          objectName: "cfgInput-" + pe.intName + "-" + pe.profileName + "-" + cfgRow.modelData.name
+        spacing: Style.marginXXS
+        SSectionLabel {
+          label: cfgRow.modelData.name + (cfgRow.modelData.required ? " *" : "")
           Layout.fillWidth: true
-          text: (pe.configValues && pe.configValues[cfgRow.modelData.name]) || ""
-          placeholderText: cfgRow.modelData.description || cfgRow.modelData.name
         }
-        NButton {
-          text: I18n.tr("settings.integrations-secret-save")
-          enabled: cfgInput.text.length > 0
-          onClicked: integrations.setField(pe.intName, pe.profileName, cfgRow.modelData.name, cfgInput.text)
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.marginS
+          NTextInput {
+            id: cfgInput
+            objectName: "cfgInput-" + pe.intName + "-" + pe.profileName + "-" + cfgRow.modelData.name
+            Layout.fillWidth: true
+            text: (pe.configValues && pe.configValues[cfgRow.modelData.name]) || ""
+            placeholderText: cfgRow.modelData.description || cfgRow.modelData.name
+          }
+          NButton {
+            text: I18n.tr("settings.integrations-secret-save")
+            enabled: cfgInput.text.length > 0
+            onClicked: integrations.setField(pe.intName, pe.profileName, cfgRow.modelData.name, cfgInput.text)
+          }
         }
       }
     }
 
-    // Secrets — managed: static "set"/"not set" badge (never the value).
+    // Secrets — managed: caption over a static "set"/"not set" chip.
     Repeater {
       model: pe.managed ? pe.secretSchema : []
-      delegate: RowLayout {
+      delegate: ColumnLayout {
         id: secStaticRow
         required property var modelData
         Layout.fillWidth: true
-        spacing: Style.marginS
-        NText {
+        spacing: Style.marginXXS
+        SSectionLabel {
+          label: secStaticRow.modelData.name
+          Layout.fillWidth: true
+        }
+        SStatusChip {
           objectName: "secretBadge-" + pe.intName + "-" + pe.profileName + "-" + secStaticRow.modelData.name
-          text: secStaticRow.modelData.name + " · " + ((pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name])
+          label: (pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name])
             ? I18n.tr("settings.integrations-secret-set")
-            : I18n.tr("settings.integrations-secret-unset"))
-          color: (pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
-          pointSize: Style.fontSizeS
+            : I18n.tr("settings.integrations-secret-unset")
+          dotColor: (pe.secretStatus && pe.secretStatus[secStaticRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
         }
       }
     }
 
-    // Secrets — user-editable: masked input + Save (unmanaged accounts only).
+    // Secrets — user-editable: caption + status chip over masked input + Save.
     Repeater {
       model: pe.managed ? [] : pe.secretSchema
-      delegate: RowLayout {
+      delegate: ColumnLayout {
         id: secRow
         required property var modelData
         Layout.fillWidth: true
-        spacing: Style.marginS
-        NText {
-          text: secRow.modelData.name + " · " + ((pe.secretStatus && pe.secretStatus[secRow.modelData.name])
-            ? I18n.tr("settings.integrations-secret-set")
-            : I18n.tr("settings.integrations-secret-unset"))
-          color: (pe.secretStatus && pe.secretStatus[secRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
-          pointSize: Style.fontSizeS
-        }
-        NTextInput {
-          id: secInput
-          objectName: "secInput-" + pe.intName + "-" + pe.profileName + "-" + secRow.modelData.name
+        spacing: Style.marginXXS
+        RowLayout {
           Layout.fillWidth: true
-          echoMode: TextInput.Password
-          placeholderText: secRow.modelData.description || secRow.modelData.name
+          spacing: Style.marginS
+          SSectionLabel {
+            label: secRow.modelData.name
+          }
+          Item { Layout.fillWidth: true }
+          SStatusChip {
+            label: (pe.secretStatus && pe.secretStatus[secRow.modelData.name])
+              ? I18n.tr("settings.integrations-secret-set")
+              : I18n.tr("settings.integrations-secret-unset")
+            dotColor: (pe.secretStatus && pe.secretStatus[secRow.modelData.name]) ? Color.mTertiary : Color.mOnSurfaceVariant
+          }
         }
-        NButton {
-          text: I18n.tr("settings.integrations-secret-save")
-          enabled: secInput.text.length > 0
-          onClicked: {
-            integrations.setField(pe.intName, pe.profileName, secRow.modelData.name, secInput.text);
-            secInput.text = "";
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.marginS
+          NTextInput {
+            id: secInput
+            objectName: "secInput-" + pe.intName + "-" + pe.profileName + "-" + secRow.modelData.name
+            Layout.fillWidth: true
+            echoMode: TextInput.Password
+            placeholderText: secRow.modelData.description || secRow.modelData.name
+          }
+          NButton {
+            text: I18n.tr("settings.integrations-secret-save")
+            enabled: secInput.text.length > 0
+            onClicked: {
+              integrations.setField(pe.intName, pe.profileName, secRow.modelData.name, secInput.text);
+              secInput.text = "";
+            }
           }
         }
       }
@@ -318,34 +421,41 @@ FloatingWindow {
       width: scroller.availableWidth
       spacing: Style.marginM
 
-      NText {
-        Layout.fillWidth: true
-        text: I18n.tr("settings.nixos-hint")
-        wrapMode: Text.Wrap
-        color: Color.mOnSurfaceVariant
-      }
+      // General preferences card.
+      SCard {
+        SSectionLabel {
+          label: I18n.tr("settings.general")
+          Layout.fillWidth: true
+        }
 
-      NSpinBox {
-        Layout.fillWidth: true
-        label: I18n.tr("settings.history-limit-label")
-        description: I18n.tr("settings.history-limit-description")
-        from: 20
-        to: 1000
-        stepSize: 20
-        value: Settings.data.maxHistory
-        onValueModified: v => {
-          Settings.data.maxHistory = v;
-          Settings.persist();
+        NText {
+          Layout.fillWidth: true
+          text: I18n.tr("settings.nixos-hint")
+          wrapMode: Text.Wrap
+          color: Color.mOnSurfaceVariant
+          pointSize: Style.fontSizeS
+        }
+
+        NSpinBox {
+          Layout.fillWidth: true
+          label: I18n.tr("settings.history-limit-label")
+          description: I18n.tr("settings.history-limit-description")
+          from: 20
+          to: 1000
+          stepSize: 20
+          value: Settings.data.maxHistory
+          onValueModified: v => {
+            Settings.data.maxHistory = v;
+            Settings.persist();
+          }
         }
       }
-
-      NDivider { Layout.fillWidth: true }
 
       NText {
         Layout.fillWidth: true
         text: I18n.tr("settings.integrations-title")
         pointSize: Style.fontSizeL
-        font.bold: true
+        font.weight: Font.DemiBold
         color: Color.mOnSurface
       }
 
@@ -378,7 +488,7 @@ FloatingWindow {
 
       Repeater {
         model: integrations.integrations
-        delegate: ColumnLayout {
+        delegate: SCard {
           id: intRow
           required property var modelData
           // Names of this integration's Nix-managed profiles — the add-account
@@ -391,23 +501,22 @@ FloatingWindow {
           readonly property bool draftCollides: intRow.managedNames.indexOf(newProfile.text) >= 0
           // Single-account integrations: the implicit sole profile, if any.
           readonly property var defaultProfile: (intRow.modelData.profiles && intRow.modelData.profiles.length > 0) ? intRow.modelData.profiles[0] : null
-          Layout.fillWidth: true
-          spacing: Style.marginXS
 
           RowLayout {
             Layout.fillWidth: true
             spacing: Style.marginS
             NText {
               text: intRow.modelData.name || ""
-              font.bold: true
+              font.weight: Font.DemiBold
               color: Color.mOnSurface
-              pointSize: Style.fontSizeM
+              pointSize: Style.fontSizeL
             }
-            NText {
-              visible: intRow.modelData.enabled === true
-              text: I18n.tr("settings.integrations-enabled-badge")
-              color: Color.mTertiary
-              pointSize: Style.fontSizeXS
+            // Enabled/disabled status chip: a coloured dot signals state.
+            SStatusChip {
+              label: intRow.modelData.enabled === true
+                ? I18n.tr("settings.integrations-enabled-badge")
+                : I18n.tr("settings.integrations-disabled-badge")
+              dotColor: intRow.modelData.enabled === true ? Color.mTertiary : Color.mOnSurfaceVariant
             }
             Item { Layout.fillWidth: true }
             NButton {
@@ -476,11 +585,9 @@ FloatingWindow {
               Layout.fillWidth: true
               spacing: Style.marginXS
 
-              NText {
-                text: I18n.tr("settings.integrations-setup-title")
-                font.bold: true
-                color: Color.mOnSurface
-                pointSize: Style.fontSizeS
+              SSectionLabel {
+                label: I18n.tr("settings.integrations-setup-title")
+                Layout.fillWidth: true
               }
 
               Image {
@@ -583,7 +690,7 @@ FloatingWindow {
           ColumnLayout {
             visible: intRow.modelData.multiProfile === true && !intRow.setupPaneOpen
             Layout.fillWidth: true
-            spacing: Style.marginS
+            spacing: Style.marginM
 
             Repeater {
               model: intRow.modelData.profiles || []

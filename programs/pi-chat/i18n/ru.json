@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ отозвано"
   },
   "settings": {
+    "general": "Общие",
     "nixos-hint": "Конфигурация собеседника (pubkey, релеи, отображаемое имя) управляется модулем NixOS — см. services.pi-chat в вашей конфигурации.",
     "history-limit-label": "Лимит истории",
     "history-limit-description": "Сообщения, хранящиеся в зеркале панели в памяти (SQLite сохраняет всё).",
@@ -56,6 +57,7 @@
     "integrations-offline": "Подключение к демону интеграций…",
     "integrations-empty": "Нет доступных интеграций.",
     "integrations-enabled-badge": "включено",
+    "integrations-disabled-badge": "отключено",
     "integrations-enable": "Включить",
     "integrations-disable": "Отключить",
     "integrations-secret-set": "задан",

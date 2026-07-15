@@ -49,6 +49,7 @@
     "prompt-retracted": "⚠ wycofano"
   },
   "settings": {
+    "general": "Ogólne",
     "nixos-hint": "Konfiguracja peera (pubkey, przekaźniki, nazwa wyświetlana) jest zarządzana przez moduł NixOS — zobacz services.pi-chat w swojej konfiguracji.",
     "history-limit-label": "Limit historii",
     "history-limit-description": "Wiadomości przechowywane w odbiciu panelu w pamięci (SQLite zachowuje wszystko).",
@@ -56,6 +57,7 @@
     "integrations-offline": "Łączenie z demonem integracji…",
     "integrations-empty": "Brak dostępnych integracji.",
     "integrations-enabled-badge": "włączona",
+    "integrations-disabled-badge": "wyłączona",
     "integrations-enable": "Włącz",
     "integrations-disable": "Wyłącz",
     "integrations-secret-set": "ustawiony",
