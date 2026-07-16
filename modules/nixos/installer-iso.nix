@@ -117,6 +117,12 @@ in
         inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.spaces-logos
       }/spaces-logo-white.svg -o $out";
 
+  # The mnemonic-restore CLI on the live medium, so a fresh boot can resolve the
+  # config pointer and drive the restore.
+  environment.systemPackages = [
+    inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.spaces-restore
+  ];
+
   # Pre-stage everything `nix-build` + `nixos-install` will touch:
   #
   #   - spacesSrc itself (referenced by `path:<store>` in default.nix);
