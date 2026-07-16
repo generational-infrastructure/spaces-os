@@ -1,3 +1,6 @@
+import email
+import email.policy
+import email.utils
 import os
 import stat
 import sys
@@ -104,6 +107,47 @@ def test_run_himalaya_spawn_failure(monkeypatch, tmp_path):
     out, is_error = core.run_himalaya(str(cfg), ["envelope", "list"])
     assert is_error is True
     assert "failed to run himalaya-does-not-exist-zzz" in out
+
+
+# --- compose_message --------------------------------------------------------
+
+
+def _composed(args=None):
+    msg = core.compose_message(
+        "me@x.test",
+        args
+        or {
+            "to": ["alice@y.test"],
+            "subject": "Hi",
+            "body": "Body",
+        },
+    )
+    return email.message_from_bytes(msg, policy=email.policy.default)
+
+
+def test_compose_message_stamps_date():
+    # RFC 5322 requires Date; Proton Bridge's IMAP append validates and
+    # rejects a message without it ("Required header field 'Date' not found").
+    msg = _composed()
+    assert msg["Date"] is not None
+    parsed = email.utils.parsedate_to_datetime(str(msg["Date"]))
+    assert parsed.tzinfo is not None  # zone-aware, not a bare local time
+
+
+def test_compose_message_stamps_message_id():
+    # Message-ID is a SHOULD that strict providers flag; stamp it server-side
+    # so the agent never has to.
+    msg = _composed()
+    mid = str(msg["Message-ID"] or "")
+    assert mid.startswith("<")
+    assert mid.endswith(">")
+    assert "@" in mid
+
+
+def test_compose_message_ids_are_unique():
+    a = str(_composed()["Message-ID"])
+    b = str(_composed()["Message-ID"])
+    assert a != b
 
 
 # --- make_tool_impls --------------------------------------------------------
