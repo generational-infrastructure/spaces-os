@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spaces-restore"
+version = "0.1.0"
+description = "Mnemonic bare-metal restore: key derivation, encrypted rendezvous record, discovery"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["PyNaCl", "mnemonic", "coincurve", "websocket-client", "bech32"]
+
+[project.scripts]
+spaces-restore = "spaces_restore.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spaces_restore"]
