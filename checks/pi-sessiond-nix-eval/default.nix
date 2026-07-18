@@ -62,18 +62,13 @@ let
 
   disabledServices = disabledSystem.config.systemd.user.services;
 in
-# The wrapper must force --user: per-bash confinement units have to land in
-# the user manager, not pid 1. writeShellScript is trivially buildable at
-# eval, so read its content here rather than dragging shell parsing into
-# the runCommand below.
-assert lib.hasInfix "--user" (builtins.readFile daemon.environment.SPACES_SESSIOND_SYSTEMD_RUN);
 # PI_BIN points at the pi build the supervisor spawns as the rpc child; assert
 # its shape at eval (a string match never realizes the path, keeping this check
 # off the pi build — same reason ExecStart is stripped below).
 assert lib.hasSuffix "/bin/pi" daemon.environment.SPACES_SESSIOND_PI_BIN;
-# Memory now loads inside the child via settings.json (not a daemon env var);
-# the generated settings must still list the sediment extension.
-assert lib.hasInfix "memory" (builtins.readFile daemon.environment.SPACES_SESSIOND_PI_SETTINGS);
+# The --user wrapper and the settings.json `memory` extension are content
+# assertions grepped in the runCommand: reading either file here would be
+# import-from-derivation, disabled repo-wide.
 # Landlock is the desktop executor's only sandbox: the daemon always points each
 # pi child at landlock-exec. A string match never realizes the Rust build
 # (same discipline as PI_BIN / ExecStart).
@@ -85,6 +80,9 @@ pkgs.runCommand "pi-sessiond-nix-eval-test"
     daemonEnvironment = builtins.toJSON (
       builtins.removeAttrs daemon.environment [ "SPACES_SESSIOND_PI_BIN" ]
     );
+    # Grepped below; already inputs via daemonEnvironment, so naming is free.
+    systemdRunWrapper = daemon.environment.SPACES_SESSIOND_SYSTEMD_RUN;
+    piSettings = daemon.environment.SPACES_SESSIOND_PI_SETTINGS;
     daemonRequires = builtins.toJSON daemon.requires;
     daemonAfter = builtins.toJSON daemon.after;
     tokenServiceConfig = builtins.toJSON tokenUnit.serviceConfig;
@@ -119,9 +117,12 @@ pkgs.runCommand "pi-sessiond-nix-eval-test"
 
     # ── 1b. Memory parity: sediment runs in the child, which inherits the
     # supervisor's SEDIMENT_DB/HF_HOME; the extension itself loads via
-    # settings.json (asserted at eval above). ───────────────────────
+    # settings.json (grepped below). ────────────────────────────────
     env_ '.SEDIMENT_DB == "%h/.local/state/spaces/pi/sediment/data"'
     env_ '.HF_HOME | startswith("/nix/store/")'
+    # Memory loads inside the child via settings.json, not a daemon env var —
+    # the generated settings must still list the sediment extension.
+    grep -q memory "$piSettings" || fail "settings.json does not list the memory extension"
 
     # Ordered after (and hard-required on) the token generator.
     jq -e 'index("pi-sessiond-token.service") != null' <<<"$daemonRequires" >/dev/null \
@@ -137,9 +138,10 @@ pkgs.runCommand "pi-sessiond-nix-eval-test"
     # $STATE_DIRECTORY (from StateDirectory= above) must win.
     env_ 'has("SPACES_SESSIOND_STATE_DIR") | not'
     env_ '.HOME == "%S/pi-sessiond"'
-    # The --user content check happened at eval; here just pin that the
-    # wrapper is a real store path, not a bare "systemd-run".
+    # The wrapper must force --user so per-session confinement units land in the
+    # user manager, not pid 1. Pin a real store path, then grep for the flag.
     env_ '.SPACES_SESSIOND_SYSTEMD_RUN | startswith("/nix/store/")'
+    grep -q -- --user "$systemdRunWrapper" || fail "systemd-run wrapper does not force --user"
 
     # ── 3. Token oneshot owns the runtime dir and stays "active" ────
     tok '.RuntimeDirectory == "pi-sessiond"'
