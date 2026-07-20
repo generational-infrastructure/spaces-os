@@ -17,12 +17,10 @@ let
   cfg = config.services.llama-swap;
   nvidiaEnabled = config.hardware.nvidia.enabled or false;
 
-  llama-cpp-accelerated = pkgs.llama-cpp.override {
+  # Shared with the llama-cpp-cuda package so the cached build matches this one.
+  llama-cpp-accelerated = import ../../lib/llama-cpp-accelerated.nix {
+    inherit pkgs;
     cudaSupport = nvidiaEnabled;
-    vulkanSupport = true;
-    blasSupport = true;
-    rocmSupport = false;
-    metalSupport = false;
   };
 
   llama-server = lib.getExe' cfg.llama-server-package "llama-server";
