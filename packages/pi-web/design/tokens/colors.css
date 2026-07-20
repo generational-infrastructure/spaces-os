@@ -1,36 +1,93 @@
 /* ============================================================
-   Spaces OS — Color tokens
-   Material-3-flavoured palette, "Noctalia-default dark".
-   Mirrored verbatim from the pi-chat panel's Commons/Color.qml.
-   The live panel re-themes from noctalia's colors.json at runtime;
-   these are the canonical defaults shipped when no scheme is present.
+   Spaces OS / Kin — Color tokens (light "Clan" theme)
+   The PWA wears the Kin / Spaces OS design language: white
+   canvases, near-black ink type, a cool teal-slate "Clan" palette,
+   and saturation rationed to brand + agent moments.
+
+   The product code throughout index.html/app.ts speaks the `--m-*`
+   role names (a Material-3-flavoured semantic layer, kept for
+   continuity with the pi-chat panel's Commons/Color.qml). Those
+   names are preserved here but re-pointed at the Kin light palette
+   below, so the existing chat UI re-skins without touching its DOM.
+
+   Raw Kin palette (--clan-* / --ink-* / --kin-*) is exposed too, so
+   new product surfaces can author against the design system directly.
    ============================================================ */
 
 :root {
-  /* ---- Base palette (M3 role names, as in Color.qml) ---- */
-  --m-primary:            #fff59b; /* pale chartreuse — accent / own bubbles */
-  --m-on-primary:         #0e0e43; /* deep navy ink on primary */
-  --m-secondary:          #a9aefe; /* periwinkle — links, focus ring */
-  --m-on-secondary:       #0e0e43;
-  --m-tertiary:           #9bfece; /* mint — success, live/connected dot */
-  --m-on-tertiary:        #0e0e43;
-  --m-error:              #fd4663; /* hot pink-red — errors, recording */
-  --m-on-error:           #0e0e43;
+  /* ---- Clan primary (teal-slate) — the product UI anchor ---- */
+  --clan-primary-50:  rgb(244, 249, 249);
+  --clan-primary-600: rgb(75, 103, 103);
+  --clan-primary-700: rgb(52, 82, 83);
+  --clan-primary-800: rgb(43, 70, 71);
+  --clan-primary-900: rgb(32, 54, 55);
 
-  --m-surface:            #070722; /* near-black indigo — window base */
-  --m-on-surface:         #f3edf7; /* near-white, faint lilac — body text */
-  --m-surface-variant:    #11112d; /* raised cards, inputs, peer bubbles */
-  --m-on-surface-variant: #7c80b4; /* muted lavender-grey — secondary text */
+  /* ---- Clan secondary (cool sage-grey) — surfaces, accents, text ---- */
+  --clan-secondary-50:  rgb(247, 249, 250);
+  --clan-secondary-100: rgb(231, 242, 244);
+  --clan-secondary-300: rgb(175, 198, 202);
+  --clan-secondary-400: rgb(144, 178, 183);
+  --clan-secondary-600: rgb(79, 116, 122);
+  --clan-secondary-700: rgb(65, 94, 99);
 
-  --m-outline:            #21215f; /* hairline borders / dividers */
-  --m-shadow:             #070722; /* shadow colour = surface (flat UI) */
-  --m-hover:              #9bfece; /* hover fill (mint) */
-  --m-on-hover:           #0e0e43; /* ink on hover fill */
+  /* ---- Semantic accents ---- */
+  --clan-info-500:    rgb(6, 170, 241);   /* link / focus blue */
+  --clan-error-500:   rgb(215, 93, 159);  /* destructive magenta */
+  --clan-error-600:   rgb(196, 62, 129);
+  --clan-success-500: rgb(23, 178, 57);   /* toggle / online green */
+  --clan-success-600: rgb(0, 150, 46);
+
+  /* ---- True neutrals (UI chrome paints near-black on white) ---- */
+  --ink-900: rgb(23, 23, 23);   /* primary text / near-black pill buttons */
+  --ink-700: rgb(50, 50, 50);
+  --ink-500: rgb(107, 107, 107);
+  --ink-400: rgb(158, 163, 158);
+  --ink-300: rgb(217, 217, 217);
+  --ink-200: rgb(235, 235, 235);
+  --ink-100: rgb(243, 243, 243);
+  --ink-50:  rgb(250, 250, 250);
+
+  /* ---- Brand (the "Kin" world) ---- */
+  --kin-sage: #8a9b6f;   /* generational-green headline ink */
+  --kin-sky:  #bae6ff;   /* signature light blue (folders, fills) */
+  --grad-arlo: linear-gradient(143deg, rgb(249, 50, 141) 14%, rgb(85, 35, 235) 103%);
+
+  /* ============================================================
+     --m-* role layer (consumed by index.html / app.ts)
+     ============================================================ */
+
+  /* Primary = the near-black Kin ink pill: own bubbles + primary action. */
+  --m-primary:            var(--ink-900);
+  --m-on-primary:         #fff;
+  /* Secondary = the info-blue used for links + focus rings. */
+  --m-secondary:          var(--clan-info-500);
+  --m-on-secondary:       #fff;
+  /* Tertiary = success green — the live / connected dot. */
+  --m-tertiary:           var(--clan-success-500);
+  --m-on-tertiary:        #fff;
+  /* Error = the destructive magenta — offline, errors, recording. */
+  --m-error:              var(--clan-error-500);
+  --m-on-error:           #fff;
+  /* Accent = teal-slate "Clan" identity — machine names, working pulse,
+     the pending-confirm ring. Kept distinct from --m-primary so the brand
+     accent and the near-black action pill don't collapse into one colour. */
+  --m-accent:             var(--clan-secondary-600);
+  --m-on-accent:          #fff;
+
+  --m-surface:            #fff;            /* window base — white canvas */
+  --m-on-surface:         var(--ink-900);  /* body text — near-black ink */
+  --m-surface-variant:    var(--ink-100);  /* raised wells, inputs, peer bubbles */
+  --m-on-surface-variant: var(--ink-500);  /* muted secondary text */
+
+  --m-outline:            var(--ink-200);  /* hairline borders / dividers */
+  --m-shadow:             rgba(0, 0, 0, 1);/* shadow ink (alpha applied per token) */
+  --m-hover:              var(--ink-100);  /* hover warms a quiet grey fill */
+  --m-on-hover:           var(--ink-900);  /* text stays near-black on hover */
 
   /* ---- Semantic aliases (use these in product code) ---- */
   --surface-base:         var(--m-surface);
   --surface-raised:       var(--m-surface-variant);
-  --surface-card:         var(--m-surface-variant);
+  --surface-card:         var(--m-surface);
 
   --text-body:            var(--m-on-surface);
   --text-muted:           var(--m-on-surface-variant);
@@ -40,16 +97,18 @@
   --divider:              var(--m-outline);
   --focus-ring:           var(--m-secondary);
 
-  --accent:               var(--m-primary);
-  --on-accent:            var(--m-on-primary);
+  --accent:               var(--m-accent);
+  --on-accent:            var(--m-on-accent);
   --link:                 var(--m-secondary);
   --positive:             var(--m-tertiary);
   --danger:               var(--m-error);
 
-  /* ---- Common derived overlays (Qt.alpha equivalents in the panel) ---- */
-  --overlay-on-surface-08: rgba(243, 237, 247, 0.08); /* quote bg on peer bubble */
-  --overlay-on-surface-45: rgba(243, 237, 247, 0.45); /* notification text */
-  --overlay-on-primary-15: rgba(14, 14, 67, 0.15);    /* quote bg on own bubble */
-  --overlay-on-primary-60: rgba(14, 14, 67, 0.60);    /* timestamp on own bubble */
-  --overlay-on-primary-80: rgba(14, 14, 67, 0.80);    /* ack ticks on own bubble */
+  /* ---- Common derived overlays ---- */
+  /* On the white canvas: a faint near-black tint for hover/active wells. */
+  --overlay-on-surface-08: rgba(23, 23, 23, 0.05); /* tab hover/active fill */
+  --overlay-on-surface-45: rgba(23, 23, 23, 0.45); /* notification text */
+  /* On the dark own-bubble: white-based tints for quotes / timestamps / ticks. */
+  --overlay-on-primary-15: rgba(255, 255, 255, 0.15);
+  --overlay-on-primary-60: rgba(255, 255, 255, 0.60);
+  --overlay-on-primary-80: rgba(255, 255, 255, 0.80);
 }

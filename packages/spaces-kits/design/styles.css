@@ -1,0 +1,16 @@
+/* ============================================================
+   Kin / Spaces OS design system — spaces-kits entry point.
+   Native design-system tokens (the same vocabulary the Figma
+   handoff uses: --clan-*, --ink-*, --kin-*, --fs-*, --radius-*).
+
+   No fonts.css here on purpose: the nix build is fully offline,
+   so the Inter Tight / Inter / DM Mono webfonts can't be fetched.
+   The token stacks fall back to system-ui / ui-monospace — a clean
+   degrade, and on the real Spaces OS target those families are
+   installed system fonts. To self-host, drop .woff2 files under
+   design/fonts/ and add the @font-face rules in a new fonts.css.
+   ============================================================ */
+
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";

@@ -1,32 +1,35 @@
 /* ============================================================
-   Spaces OS — Typography tokens
-   Fonts: Inter (UI) + JetBrains Mono (code / shell commands).
-   Both are the exact families named in Commons/Settings.qml
-   (ui.fontDefault = "Inter", ui.fontFixed = "JetBrains Mono").
+   Spaces OS / Kin — Typography tokens
+   Inter Tight drives the OS interface (tight, confident, medium/
+   semibold, sentence case). Inter carries longer body copy. DM Mono
+   is reserved for metadata, machine ids, and timestamps.
 
-   The native panel sizes in *points* (it is a desktop surface):
-   XS 9 · S 10 · M 11 · L 13 · XL 16, single weight (Medium 500).
-   Re-expressed below as px for web use (1pt ≈ 1.333px), preserving
-   the same visual rhythm. Only Medium (500) and Bold are used.
+   No @font-face / webfont @import here on purpose: the pi-web nix
+   build is fully offline and the e2e sandbox can't reach Google
+   Fonts. The stacks fall back to system-ui / ui-monospace, a clean
+   degrade — and on the real Spaces OS target Inter Tight + DM Mono
+   are installed system fonts, so the panel and PWA match. To
+   self-host webfonts, drop .woff2 files in design/fonts/ and add
+   the @font-face rules in a new fonts.css imported from styles.css.
    ============================================================ */
 
 :root {
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+  --font-sans: "Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "DM Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", "Menlo", monospace;
 
-  /* Type scale (px equivalents of the panel's pt sizes) */
-  --text-xs:  12px;  /* 9pt  — quotes, timestamps, thinking trace */
-  --text-s:   13px;  /* 10pt — secondary labels, combo items, hints */
-  --text-m:   15px;  /* 11pt — body copy, message text */
-  --text-l:   17px;  /* 13pt — peer name / section headings */
-  --text-xl:  21px;  /* 16pt — header glyph / launcher prompt */
+  /* Type scale — the OS chrome is compact; 12–40 covers the PWA. */
+  --text-xs:  12px;  /* metadata, timestamps, captions */
+  --text-s:   13px;  /* secondary labels, hints, badges */
+  --text-m:   15px;  /* body copy, message text */
+  --text-l:   17px;  /* chat title / section headings */
+  --text-xl:  21px;  /* launcher prompt */
 
-  /* Display sizes (web surfaces only — not present in the panel) */
+  /* Display sizes (web surfaces only). */
   --text-2xl: 28px;
-  --text-3xl: 40px;
+  --text-3xl: 34px;  /* page titles ("Chats"), hero headline */
   --text-4xl: 56px;
 
-  /* Weights — the panel uses Medium throughout; Bold for emphasis */
+  /* Weights — the design leans on Medium + SemiBold; Bold for titles. */
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
@@ -36,8 +39,8 @@
   --leading-snug: 1.35;
   --leading-normal: 1.55;
 
-  /* Letter spacing */
-  --tracking-tight: -0.01em;
-  --tracking-normal: 0;
-  --tracking-wide: 0.02em;
+  /* Letter spacing — slightly negative on larger sizes, per the brand. */
+  --tracking-tight: -0.02em;
+  --tracking-normal: -0.01em;
+  --tracking-wide: 0.04em;
 }

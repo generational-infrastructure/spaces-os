@@ -1,48 +1,48 @@
 /* ============================================================
-   Spaces OS — Spacing, radii, borders, elevation, motion
-   Derived from Commons/Style.qml. The panel scales every margin
-   by noctalia's scaleRatio (default 1.0); the base constants are
-   captured here. Margins are small and tight — this is a dense
-   desktop panel UI, not an airy marketing page.
+   Spaces OS / Kin — Spacing, radii, borders, elevation, motion
+   Soft is the rule: pills for actionable chrome (buttons, toggles,
+   chips, search), generous radii on cards/inputs, diffuse low-alpha
+   shadows (often just a 1px hairline ring), and fast, gentle easing
+   with no bounce.
    ============================================================ */
 
 :root {
-  /* Spacing scale (Style.qml margin* constants, px) */
-  --space-xxs: 2px;   /* marginXXS — bubble inner row gap */
-  --space-xs:  4px;   /* marginXS  — icon/text gaps */
-  --space-s:   6px;   /* marginS   — control padding, row gaps */
-  --space-m:   9px;   /* marginM   — bubble padding, section gaps */
-  --space-l:   13px;  /* marginL   — panel outer margin, pill padding */
-  --space-xl:  18px;  /* 2× scale step for web layouts */
-  --space-2xl: 26px;
+  /* Spacing scale (4px-ish base, kept on the panel's t-shirt names). */
+  --space-xxs: 2px;
+  --space-xs:  4px;
+  --space-s:   8px;
+  --space-m:   12px;
+  --space-l:   16px;
+  --space-xl:  20px;
+  --space-2xl: 28px;
   --space-3xl: 40px;
 
-  /* Radii — sharpened from the noctalia draft for a crisper, more
-     technical/terminal feel. Corners are tight; nothing is a lozenge
-     except true circles (status dots, handled with 50%). */
-  --radius-xs: 2px;   /* quote chips, inner cards, count badges */
-  --radius-s:  4px;   /* bubbles, cards, session tabs, banners */
-  --radius-input: 6px; /* buttons, inputs, combo, chips */
-  --radius-pill: 999px; /* reserved for genuinely circular elements */
+  /* Radii — soft is the default; pills for anything actionable. */
+  --radius-xs:    8px;    /* count badges, small chips */
+  --radius-s:     16px;   /* bubbles, cards, banners, sheets */
+  --radius-input: 12px;   /* text fields, wells */
+  --radius-pill:  999px;  /* buttons, toggles, chips, search, status pills */
 
-  /* Borders (Style.qml: borderS = max(1, round(scaleRatio))) */
+  /* Borders — rare and hairline. Separation is carried by fill / shadow. */
   --border-width: 1px;
   --border: var(--border-width) solid var(--m-outline);
+  /* A 1px hairline ring used in lieu of a border on cards. */
+  --ring-hairline: 0 0 0 1px rgba(0, 0, 0, 0.06);
 
-  /* Control sizing (Style.qml baseWidgetSize = 33) */
-  --control-size: 33px;
-  --control-size-sm: 28px;   /* baseSize * 0.85 */
-  --control-size-lg: 36px;   /* baseSize * 1.1  */
+  /* Control sizing — Kin pills run a touch larger than the dense panel. */
+  --control-size: 40px;
+  --control-size-sm: 32px;
+  --control-size-lg: 48px;
 
-  /* Elevation — this UI is flat. Surfaces separate by fill + 1px
-     outline, not by drop shadow. The single shadow used is a soft
-     ambient lift for floating popups/overlays over the panel. */
+  /* Elevation — diffuse, low-alpha, never harsh. */
   --shadow-none: none;
-  --shadow-popup: 0 8px 28px rgba(7, 7, 34, 0.55);
-  --shadow-overlay: 0 12px 48px rgba(7, 7, 34, 0.7);
+  --shadow-sm:      0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-md:      0 6px 18px rgba(0, 0, 0, 0.08);
+  --shadow-popup:   0 12px 32px rgba(0, 0, 0, 0.16);  /* menus, sheets, popovers */
+  --shadow-overlay: 0 16px 40px rgba(0, 0, 0, 0.12);
 
-  /* Motion (Style.qml: animationFast 150ms, Easing.InOutQuad) */
-  --duration-fast: 150ms;                          /* @kind other */
-  --duration-quick: 100ms;                         /* @kind other */
-  --ease-standard: cubic-bezier(0.45, 0, 0.55, 1); /* @kind other */
+  /* Motion — fast and gentle, no bounce on chrome. */
+  --duration-fast: 160ms;                        /* @kind other */
+  --duration-quick: 120ms;                       /* @kind other */
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1); /* @kind other */
 }

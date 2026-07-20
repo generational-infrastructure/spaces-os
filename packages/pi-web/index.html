@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#070722" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/design/styles.css" />
     <title>pi · loading…</title>
@@ -15,8 +15,10 @@
          pi-web — application layout.
          Foundations (colour, type, spacing, radii, motion) come from
          /design/styles.css; this stylesheet is the app-specific
-         compose-from-tokens layer (PWA UI kit recreation, vanilla TS
-         translation of docs/design-system/source/ui_kits/pwa/pwa.jsx).
+         compose-from-tokens layer. The PWA wears the Kin / Spaces OS
+         design language: white canvas, near-black ink type, soft
+         fully-rounded geometry, hairline rings + diffuse shadows, and
+         a teal-slate "Clan" accent rationed to machine identity.
          ============================================================ */
 
       /* Make `hidden` reliable: any `display:` rule with non-zero specificity
@@ -38,6 +40,7 @@
         font:
           var(--weight-medium) var(--text-m) / var(--leading-snug)
           var(--font-sans);
+        letter-spacing: var(--tracking-normal);
         -webkit-font-smoothing: antialiased;
       }
       button {
@@ -81,6 +84,7 @@
       }
 
       /* ---------- generic controls ---------- */
+      /* Secondary action: a soft grey pill (Kin "Cancel"/"Create"). */
       .btn {
         display: inline-flex;
         align-items: center;
@@ -90,33 +94,36 @@
         padding: 0 var(--space-l);
         background: var(--m-surface-variant);
         color: var(--m-on-surface);
-        border: var(--border);
-        border-radius: var(--radius-input);
+        border: none;
+        border-radius: var(--radius-pill);
+        font-weight: var(--weight-semibold);
         transition:
           background var(--duration-fast) var(--ease-standard),
-          color var(--duration-fast) var(--ease-standard),
-          border-color var(--duration-fast) var(--ease-standard);
+          transform var(--duration-quick) var(--ease-standard),
+          filter var(--duration-fast) var(--ease-standard);
       }
       .btn:hover:not(:disabled) {
-        background: var(--m-hover);
-        color: var(--m-on-hover);
-        border-color: transparent;
+        background: var(--ink-200);
+      }
+      .btn:active:not(:disabled) {
+        transform: scale(0.97);
       }
       .btn:disabled {
-        opacity: 0.6;
+        opacity: 0.4;
         cursor: not-allowed;
       }
+      /* Primary action: the near-black Kin ink pill. */
       .btn.primary {
         background: var(--m-primary);
         color: var(--m-on-primary);
-        border-color: transparent;
       }
       .btn.primary:hover:not(:disabled) {
-        filter: brightness(1.08);
+        filter: brightness(1.12);
         background: var(--m-primary);
         color: var(--m-on-primary);
       }
 
+      /* Icon-only control: a quiet soft-rounded square that warms on hover. */
       .icon-btn {
         display: inline-flex;
         align-items: center;
@@ -124,21 +131,23 @@
         width: var(--control-size);
         height: var(--control-size);
         background: transparent;
-        color: var(--m-on-surface);
-        border: var(--border);
+        color: var(--m-on-surface-variant);
+        border: none;
         border-radius: var(--radius-input);
         transition:
           background var(--duration-fast) var(--ease-standard),
           color var(--duration-fast) var(--ease-standard),
-          border-color var(--duration-fast) var(--ease-standard);
+          transform var(--duration-quick) var(--ease-standard);
       }
       .icon-btn:hover:not(:disabled) {
         background: var(--m-hover);
         color: var(--m-on-hover);
-        border-color: transparent;
+      }
+      .icon-btn:active:not(:disabled) {
+        transform: scale(0.97);
       }
       .icon-btn:disabled {
-        opacity: 0.6;
+        opacity: 0.4;
         cursor: not-allowed;
       }
       .icon-btn.ghost {
@@ -151,7 +160,11 @@
       .icon-btn.primary {
         background: var(--m-primary);
         color: var(--m-on-primary);
-        border-color: transparent;
+      }
+      .icon-btn.primary:hover:not(:disabled) {
+        filter: brightness(1.12);
+        background: var(--m-primary);
+        color: var(--m-on-primary);
       }
       .icon-btn.primary:disabled {
         background: var(--m-surface-variant);
@@ -163,6 +176,7 @@
       .icon-btn.primary.empty {
         background: var(--m-surface-variant);
         color: var(--m-on-surface-variant);
+        filter: none;
       }
 
       /* ---------- gate ---------- */
@@ -195,14 +209,19 @@
         width: 100%;
         background: var(--m-surface-variant);
         color: var(--m-on-surface);
-        border: var(--border);
+        border: none;
         border-radius: var(--radius-input);
         padding: var(--space-m) var(--space-l);
         outline: none;
-        transition: border-color var(--duration-fast) var(--ease-standard);
+        box-shadow: inset 0 0 0 1px transparent;
+        transition: box-shadow var(--duration-fast) var(--ease-standard),
+          background var(--duration-fast) var(--ease-standard);
       }
       .gate-card input:focus {
-        border-color: var(--m-secondary);
+        background: var(--m-surface);
+        box-shadow:
+          0 0 0 2px color-mix(in srgb, var(--focus-ring) 35%, transparent),
+          inset 0 0 0 1px var(--focus-ring);
       }
 
       /* ---------- app shell ---------- */
@@ -272,10 +291,11 @@
         padding: var(--space-l) var(--space-s);
         background: transparent;
         border: none;
-        border-bottom: var(--border);
+        border-bottom: 1px solid var(--m-outline);
         cursor: pointer;
         text-align: left;
         color: inherit;
+        border-radius: var(--radius-input);
         transition: background var(--duration-fast) var(--ease-standard);
       }
       .tab:hover {
@@ -286,13 +306,13 @@
       }
       .tab.active .chat-name,
       .tab:hover .chat-name {
-        color: var(--m-primary);
+        color: var(--m-accent);
       }
       .machine-rail {
         width: 3px;
         align-self: stretch;
-        background: var(--m-primary);
-        border-radius: var(--radius-xs);
+        background: var(--m-accent);
+        border-radius: var(--radius-pill);
         flex-shrink: 0;
       }
       .chat-row {
@@ -318,7 +338,7 @@
       .chat-machine {
         font:
           var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-        color: var(--m-primary);
+        color: var(--m-accent);
         flex-shrink: 0;
       }
       .chat-time {
@@ -352,14 +372,14 @@
         flex-shrink: 0;
       }
       .chat-badge.working {
-        color: var(--m-primary);
+        color: var(--m-accent);
       }
       .chat-badge.needs-you {
-        height: 19px;
+        height: 20px;
         padding: 0 var(--space-s);
         background: var(--m-primary);
         color: var(--m-on-primary);
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-pill);
         font-weight: var(--weight-bold);
       }
 
@@ -376,6 +396,7 @@
         margin: 0;
         font:
           var(--weight-bold) var(--text-l) / 1.15 var(--font-sans);
+        letter-spacing: var(--tracking-tight);
         color: var(--m-on-surface);
         white-space: nowrap;
         overflow: hidden;
@@ -390,8 +411,8 @@
         margin: var(--space-xs) var(--space-m) var(--space-s);
         padding: var(--space-s) var(--space-m);
         background: var(--m-surface-variant);
-        border: var(--border);
-        border-radius: var(--radius-input);
+        border: none;
+        border-radius: var(--radius-pill);
         color: var(--m-on-surface);
         text-align: left;
       }
@@ -401,7 +422,7 @@
       .runtime-mach {
         font:
           var(--weight-bold) var(--text-s) / 1 var(--font-mono);
-        color: var(--m-primary);
+        color: var(--m-accent);
         flex-shrink: 0;
       }
       .runtime-sep {
@@ -437,7 +458,7 @@
         background: var(--m-error);
       }
       .dot.working {
-        background: var(--m-primary);
+        background: var(--m-accent);
         animation: sos-pulse 1.4s ease-in-out infinite;
       }
       @keyframes sos-pulse {
@@ -459,8 +480,8 @@
       /* ---------- bubbles ---------- */
       .msg {
         max-width: 80%;
-        padding: var(--space-m);
-        border-radius: var(--radius-s);
+        padding: var(--space-m) var(--space-l);
+        border-radius: 18px;
         white-space: pre-wrap;
         word-wrap: break-word;
         font:
@@ -471,18 +492,20 @@
         align-self: flex-end;
         background: var(--m-primary);
         color: var(--m-on-primary);
+        border-top-right-radius: var(--radius-xs);
       }
       .msg.assistant {
         align-self: flex-start;
         background: var(--m-surface-variant);
         color: var(--m-on-surface);
-        border: var(--border);
+        border-top-left-radius: var(--radius-xs);
+        box-shadow: var(--ring-hairline);
       }
       .msg-image {
         display: block;
         max-width: 100%;
         max-height: 240px;
-        border-radius: var(--radius-s);
+        border-radius: var(--radius-input);
       }
       .msg.streaming::after {
         content: "▍";
@@ -506,10 +529,11 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-m);
-        padding: var(--space-m);
-        background: var(--m-surface-variant);
-        border: var(--border-width) solid var(--m-primary);
+        padding: var(--space-l);
+        background: var(--m-surface);
+        border: var(--border-width) solid var(--m-accent);
         border-radius: var(--radius-s);
+        box-shadow: var(--shadow-sm);
       }
       .confirm.allowed {
         border-color: var(--m-tertiary);
@@ -551,27 +575,29 @@
         background: var(--m-primary);
         color: var(--m-on-primary);
         border: none;
-        border-radius: var(--radius-input);
+        border-radius: var(--radius-pill);
         font:
           var(--weight-semibold) var(--text-s) / 1 var(--font-sans);
+        transition: filter var(--duration-fast) var(--ease-standard);
       }
       .confirm .allow:hover {
-        filter: brightness(1.08);
+        filter: brightness(1.12);
       }
       .confirm .deny {
         height: var(--control-size-sm);
         padding: 0 var(--space-l);
         background: var(--m-surface);
         color: var(--m-on-surface);
-        border: var(--border);
-        border-radius: var(--radius-input);
+        border: none;
+        box-shadow: inset 0 0 0 1px var(--border-default, var(--ink-300));
+        border-radius: var(--radius-pill);
         font:
           var(--weight-semibold) var(--text-s) / 1 var(--font-sans);
+        transition: background var(--duration-fast) var(--ease-standard);
       }
       .confirm .deny:hover {
         background: var(--m-hover);
         color: var(--m-on-hover);
-        border-color: transparent;
       }
 
       /* ---------- compose ---------- */
@@ -587,13 +613,18 @@
         align-items: center;
         gap: var(--space-xs);
         background: var(--m-surface-variant);
-        border: var(--border);
-        border-radius: var(--radius-input);
-        padding: 0 var(--space-xs) 0 var(--space-m);
-        transition: border-color var(--duration-fast) var(--ease-standard);
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0 var(--space-xs) 0 var(--space-l);
+        box-shadow: inset 0 0 0 1px transparent;
+        transition: box-shadow var(--duration-fast) var(--ease-standard),
+          background var(--duration-fast) var(--ease-standard);
       }
       .compose-input:focus-within {
-        border-color: var(--m-secondary);
+        background: var(--m-surface);
+        box-shadow:
+          0 0 0 2px color-mix(in srgb, var(--focus-ring) 35%, transparent),
+          inset 0 0 0 1px var(--focus-ring);
       }
       .compose-input input {
         flex: 1;
@@ -613,11 +644,12 @@
         align-items: center;
         gap: var(--space-s);
         margin: 0 var(--space-m) var(--space-l);
-        padding: var(--space-m);
-        background: var(--m-surface-variant);
+        padding: var(--space-m) var(--space-l);
+        background: var(--m-surface);
         border: var(--border-width) solid var(--m-error);
         border-radius: var(--radius-s);
         color: var(--m-on-surface);
+        box-shadow: var(--shadow-sm);
         font:
           var(--weight-medium) var(--text-s) / 1.4 var(--font-sans);
       }
@@ -638,18 +670,18 @@
         display: flex;
         align-items: flex-end;
         justify-content: center;
-        background: rgba(7, 7, 34, 0.6);
-        backdrop-filter: blur(2px);
+        background: rgba(13, 20, 22, 0.45);
+        backdrop-filter: blur(4px);
       }
       .picker-sheet {
         width: min(420px, 100%);
         max-height: 70%;
         overflow-y: auto;
         background: var(--m-surface);
-        border: var(--border);
-        border-bottom: none;
+        border: none;
         border-radius: var(--radius-s) var(--radius-s) 0 0;
         padding: var(--space-l);
+        box-shadow: var(--shadow-popup);
         display: flex;
         flex-direction: column;
         gap: var(--space-s);
@@ -672,8 +704,9 @@
         align-items: center;
         gap: var(--space-m);
         padding: var(--space-m) var(--space-s);
-        border-bottom: var(--border);
+        border-bottom: 1px solid var(--m-outline);
         cursor: pointer;
+        border-radius: var(--radius-input);
         transition: background var(--duration-fast) var(--ease-standard);
       }
       .picker-row:last-child {
@@ -688,13 +721,10 @@
         min-width: 0;
         font:
           var(--weight-bold) var(--text-s) / 1.2 var(--font-mono);
-        color: var(--m-primary);
+        color: var(--m-accent);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-      }
-      .picker-row:hover .picker-host {
-        color: var(--m-on-hover);
       }
       .picker-id {
         font:

@@ -1,0 +1,43 @@
+/* ============================================================
+   Kin / Spaces OS — Typography (native design-system tokens)
+   Inter Tight drives the OS UI (tight, confident, medium/semibold).
+   Inter handles longer body copy. DM Mono for metadata/labels.
+   Display + serif accent are substitutes (see README).
+   ============================================================ */
+
+:root {
+  /* ---- Families ---- */
+  --font-ui:      'Inter Tight', system-ui, -apple-system, sans-serif;
+  --font-body:    'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Inter Tight', system-ui, sans-serif;   /* SUBSTITUTE for Lubalin Recast / Rund Display */
+  --font-serif:   'Instrument Serif', Georgia, serif;     /* SUBSTITUTE for Canela — used italic, accent only */
+  --font-mono:    'DM Mono', ui-monospace, 'SF Mono', monospace;
+
+  /* ---- Weights (the file leans on Medium + SemiBold) ---- */
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* ---- Type scale (px) — OS UI is compact; 10–24 covers most chrome ---- */
+  --fs-2xs: 10px;   /* dock labels, timestamps */
+  --fs-xs:  12px;   /* metadata, captions, tags */
+  --fs-sm:  14px;   /* default body / list rows / buttons */
+  --fs-md:  16px;   /* emphasised body */
+  --fs-lg:  18px;   /* titles */
+  --fs-xl:  24px;   /* headlines / section heads */
+  --fs-2xl: 32px;
+  --fs-3xl: 48px;   /* display */
+  --fs-4xl: 80px;   /* hero display */
+
+  /* ---- Line heights ---- */
+  --lh-tight:   1.1;
+  --lh-snug:    1.25;
+  --lh-normal:  1.45;
+  --lh-relaxed: 1.6;
+
+  /* ---- Tracking ---- */
+  --ls-tight:  -0.02em;
+  --ls-normal: -0.01em;
+  --ls-wide:   0.04em;
+}

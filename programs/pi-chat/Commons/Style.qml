@@ -43,13 +43,24 @@ QtObject {
   readonly property int fontWeightMedium: 500
 
   // Container radii (noctalia: round(base * general.radiusRatio)).
-  // Bases tightened from 8/12 to 2/4 per the design system.
-  readonly property int radiusXS: Math.round(2 * general.radiusRatio)
-  readonly property int radiusS: Math.round(4 * general.radiusRatio)
+  // Soft is the rule in the Kin / Spaces OS design language: generous radii
+  // on cards and bubbles, small chips/badges lightly rounded. These bases
+  // (8 / 16) map to the design system's radius-sm / radius-lg. A noctalia
+  // scheme that drops radiusRatio below 1.0 sharpens them again.
+  readonly property int radiusXS: Math.round(8 * general.radiusRatio) // chips, quote, count badge
+  readonly property int radiusS: Math.round(16 * general.radiusRatio) // bubbles, cards, tabs, banners, panel
 
-  // Input radius (NIconButton/NButton — noctalia scales these by iRadiusRatio).
-  // Base tightened from 16 to 6 per the design system.
-  readonly property int iRadiusM: Math.round(6 * general.iRadiusRatio)
+  // Input radius (NTextInput / NComboBox / NSpinBox / NIconButton — noctalia
+  // scales these by iRadiusRatio). A soft 12 (radius-md) keeps text fields
+  // and icon buttons as rounded squares; genuinely pill-shaped controls use
+  // radiusPill below.
+  readonly property int iRadiusM: Math.round(12 * general.iRadiusRatio)
+
+  // Pill radius for fully-rounded actionable chrome (NButton, and anything
+  // else the design system draws as a full pill). A large sentinel: QML
+  // clamps a Rectangle's radius to half its shorter side, so this renders a
+  // true pill at any control height without needing the live height here.
+  readonly property int radiusPill: 9999
 
   // Border width (noctalia: max(1, round(1 * scaleRatio)))
   readonly property int borderS: Math.max(1, Math.round(1 * uiScaleRatio))
