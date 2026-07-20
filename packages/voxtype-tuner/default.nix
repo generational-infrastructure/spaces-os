@@ -100,13 +100,28 @@ let
     hash = "sha256-Wd+5pKyzb+Kir/wUusvuKSD/Q1yxPMMUoIwT9munhg4=";
   };
 
+  # slint publishes per-arch manylinux wheels (x86_64 and aarch64, with
+  # different glibc floors). Select by host platform; meta.platforms below
+  # mirrors this table, and the devshell keys its version-matched slint-dev
+  # wheel off the same systems.
+  slintWheels = {
+    x86_64-linux = {
+      platform = "manylinux_2_35_x86_64";
+      hash = "sha256-fbky0bNk4on0lDKmzQk20BS0Yfh6OGo14kkBHq4dcsI=";
+    };
+    aarch64-linux = {
+      platform = "manylinux_2_31_aarch64";
+      hash = "sha256-P4lucAWemqfDMSknV2hjiKYtStRCw7E1uO9VYAGl9kc=";
+    };
+  };
+
   # Base slint wheel, NOT slint[dev]: the dev wheel only carries the extra
   # MCP/testing binary used by the headless run.sh flow, which the packaged
   # app does not need. This is a fixed-output derivation, so the build stays
   # pure and offline. It is a cp311/abi3 wheel: abi3 is CPython's stable ABI,
   # forward-compatible from its cp311 floor, so it imports cleanly under the
   # repo-default python313. The nixpkgs wheel installer ignores compat tags and
-  # the host glibc is newer than the wheel's manylinux_2_35 floor.
+  # the host glibc is newer than the wheels' manylinux_2_3x floors.
   slint = python.pkgs.buildPythonPackage {
     pname = "slint";
     version = "1.17.0b2";
@@ -118,8 +133,7 @@ let
       dist = "cp311";
       python = "cp311";
       abi = "abi3";
-      platform = "manylinux_2_35_x86_64";
-      hash = "sha256-fbky0bNk4on0lDKmzQk20BS0Yfh6OGo14kkBHq4dcsI=";
+      inherit (slintWheels.${pkgs.stdenv.hostPlatform.system}) platform hash;
     };
     nativeBuildInputs = [ pkgs.autoPatchelfHook ];
     # Minimal: the wheel bundles ~24 libs under slint.libs/. These cover the
@@ -360,8 +374,9 @@ python.pkgs.buildPythonApplication {
   meta = {
     description = "Voice Tuner: Slint desktop tuner for voxtype STT";
     mainProgram = "voxtype-tuner";
-    # The only slint wheel published is manylinux x86_64. There is no aarch64
-    # build, so declare the constraint rather than fail late in autoPatchelf.
-    platforms = [ "x86_64-linux" ];
+    # Mirrors the slint wheel table above: slint publishes manylinux wheels
+    # for exactly these Linux systems, so declare the constraint rather than
+    # fail late in fetchPypi/autoPatchelf.
+    platforms = builtins.attrNames slintWheels;
   };
 }

@@ -30,7 +30,9 @@ let
 
   # Mirror the override-map computation done by modules/nixos/installer-iso.nix
   # so this VM's calamares main.py sees the same install-time config.
-  spacesLock = builtins.fromJSON (builtins.readFile "${spacesSrc}/flake.lock");
+  # Unfiltered flake source, not spacesSrc: identical file, but readFile on
+  # the filtered snapshot fails under read-only eval (see installer-iso.nix).
+  spacesLock = builtins.fromJSON (builtins.readFile "${flake.outPath}/flake.lock");
   spacesDirectInputNames = builtins.attrNames spacesLock.nodes.root.inputs;
   inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) spacesDirectInputNames) (
     n: builtins.toString inputs.${n}.outPath

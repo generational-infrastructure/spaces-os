@@ -42,8 +42,25 @@ let
       dist = "cp311";
       python = "cp311";
       abi = "abi3";
-      platform = "manylinux_2_35_x86_64";
-      hash = "sha256-Pa7Jzwzl5XHW7TBTe6RzRjDwJWEnVAfrVBmbxcMDkPE=";
+      # Version-matched companion to the package's base slint wheel; same
+      # per-arch manylinux publishing (see slintWheels in the package).
+      inherit
+        (
+          {
+            x86_64-linux = {
+              platform = "manylinux_2_35_x86_64";
+              hash = "sha256-Pa7Jzwzl5XHW7TBTe6RzRjDwJWEnVAfrVBmbxcMDkPE=";
+            };
+            aarch64-linux = {
+              platform = "manylinux_2_31_aarch64";
+              hash = "sha256-18axF2ziIT0WovxrDSgPoShl0dyPq7gUq2BfTjqrj6A=";
+            };
+          }
+          .${pkgs.stdenv.hostPlatform.system}
+        )
+        platform
+        hash
+        ;
     };
     nativeBuildInputs = [ pkgs.autoPatchelfHook ];
     buildInputs = [
@@ -73,15 +90,15 @@ let
     ps.mypy
   ]);
 in
-# The only published slint / slint-dev wheels are manylinux x86_64, so the
-# package declares `platforms = [ "x86_64-linux" ]`. Match that here: on any
-# other system the shell would try to pull an x86_64 wheel, so hand back a
-# trivial shell that fails fast instead of dragging that wheel into a
-# cross-system flake check.
-if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
+# slint / slint-dev wheels exist only for the systems the package declares in
+# meta.platforms (currently x86_64-linux and aarch64-linux). Match that here:
+# on any other system the shell would try to pull an unavailable wheel, so
+# hand back a trivial shell that fails fast instead of dragging that wheel
+# into a cross-system flake check.
+if !(builtins.elem pkgs.stdenv.hostPlatform.system package.meta.platforms) then
   pkgs.mkShellNoCC {
     shellHook = ''
-      echo "voxtype-tuner dev shell is x86_64-linux only (slint ships no other wheel)." >&2
+      echo "voxtype-tuner dev shell needs a published slint wheel (systems: ${lib.concatStringsSep ", " package.meta.platforms})." >&2
       exit 1
     '';
   }

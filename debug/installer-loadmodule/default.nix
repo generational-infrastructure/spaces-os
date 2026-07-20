@@ -37,7 +37,9 @@ let
   # flake.lock so the test mirrors what installer-iso.nix computes.
   # Hardcoding the list here would silently rot when spaces grows or
   # drops an input.
-  spacesLock = builtins.fromJSON (builtins.readFile "${flake.lib.spacesSrc}/flake.lock");
+  # Unfiltered flake source, not spacesSrc: identical file, but readFile on
+  # the filtered snapshot fails under read-only eval (see installer-iso.nix).
+  spacesLock = builtins.fromJSON (builtins.readFile "${flake.outPath}/flake.lock");
   spacesDirectInputs = builtins.attrNames spacesLock.nodes.root.inputs;
   inputOverrides = lib.genAttrs (builtins.filter (n: inputs ? ${n}) spacesDirectInputs) (
     n: builtins.toString inputs.${n}.outPath

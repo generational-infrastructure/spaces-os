@@ -34,7 +34,11 @@ let
   # Direct input names declared by spaces's flake.lock. Source of truth
   # for which inputs need an `--override-input spaces/<name>` at install
   # time. Read live so it stays in sync as spaces grows or drops inputs.
-  spacesLock = builtins.fromJSON (builtins.readFile "${spacesSrc}/flake.lock");
+  # Read the lock from the unfiltered flake source, not spacesSrc: the file is
+  # identical in both, but readFile on the builtins.path snapshot fails under
+  # read-only evaluation (`nix flake check`), where the filtered copy is
+  # computed without being registered in the store ("path … is not valid").
+  spacesLock = builtins.fromJSON (builtins.readFile "${flake.outPath}/flake.lock");
   spacesDirectInputNames = builtins.attrNames spacesLock.nodes.root.inputs;
 
   # `{ name → outPath }` for every direct spaces input the outer flake
