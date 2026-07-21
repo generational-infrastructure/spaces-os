@@ -138,6 +138,89 @@ in
       ++ modules;
     };
 
+  # Fast sibling of mkEvalSystem: nixpkgs.lib.nixos.evalModules instead of
+  # nixosSystem, keeping the ~2000-entry module-list out of the fixpoint
+  # (~0.3s vs ~1s per eval). The catch: any option a check *reads* must be
+  # declared, so baseModules carries the common surface these checks read
+  # back. Options a module only *sets* need nothing (_module.check = false).
+  # A check reading something rarer (networking.firewall, caddy) passes the
+  # declaring module in its own `modules` list.
+  mkMinimalEvalSystem =
+    {
+      modules ? [ ],
+      system ? "x86_64-linux",
+    }:
+    let
+      inherit (inputs) nixpkgs;
+      inherit (nixpkgs) lib;
+      # Mirror flake.nix so unfree packages (voxtype's CUDA path) eval as on a real host.
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
+      m = p: nixpkgs + ("/nixos/modules/" + p);
+      baseModules = [
+        (
+          {
+            config,
+            lib,
+            pkgs,
+            ...
+          }:
+          {
+            _module.args.utils = import (nixpkgs + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
+          }
+        )
+        (m "system/boot/systemd.nix")
+        (m "system/boot/systemd/user.nix")
+        (m "system/boot/systemd/tmpfiles.nix")
+        (m "misc/assertions.nix")
+        # environment.* cluster
+        (m "config/system-path.nix")
+        (m "system/etc/etc.nix")
+        (m "config/system-environment.nix")
+        (m "config/shells-environment.nix")
+        # users.* cluster: shadow provides users.defaultUserShell, ids the
+        # uid/gid maps — both read by users-groups.
+        (m "config/users-groups.nix")
+        (m "programs/shadow.nix")
+        (m "misc/ids.nix")
+        # Stubs for options the base modules read but whose owning modules we
+        # skip: systemd.nix -> services.openssh.* (sshd-vsock@), users-groups
+        # -> boot.initrd.systemd.enable (initrd passwd).
+        (
+          { lib, ... }:
+          {
+            options.services.openssh.enable = lib.mkOption {
+              default = false;
+              type = lib.types.bool;
+            };
+            options.services.openssh.package = lib.mkOption {
+              default = pkgs.openssh;
+              type = lib.types.package;
+            };
+            options.boot.initrd.systemd.enable = lib.mkOption {
+              default = false;
+              type = lib.types.bool;
+            };
+          }
+        )
+        {
+          _module.check = false;
+          nixpkgs.hostPlatform = system;
+          system.stateVersion = "26.05";
+        }
+      ];
+    in
+    nixpkgs.lib.nixos.evalModules {
+      specialArgs = {
+        inherit pkgs lib;
+        inherit inputs;
+        flake = inputs.self or flake;
+      };
+      modules = baseModules ++ modules;
+    };
+
   # Build a NixOS system pre-wired with the spaces module.
   #
   # Consumers (e.g. the Calamares-generated installed flake) only have to
