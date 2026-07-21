@@ -43,7 +43,7 @@ let
     lib.concatStringsSep "\n" (lib.unique (map docChord (lib.attrNames kb.binds)))
   );
 
-  system = inputs.self.lib.mkEvalSystem {
+  system = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.niri

@@ -19,7 +19,7 @@ let
     inherit (inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.pi-sessiond) seccompDenylist;
   };
 
-  system = inputs.self.lib.mkEvalSystem {
+  system = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces-integrations

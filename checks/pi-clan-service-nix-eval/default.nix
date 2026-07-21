@@ -158,9 +158,18 @@ let
 
   mkSystem =
     extra:
-    inputs.self.lib.mkEvalSystem {
+    inputs.self.lib.mkMinimalEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
-      modules = [ clanCoreStub ] ++ extra;
+      # Reads services.caddy + networking.firewall back — pull those in here,
+      # not the shared base.
+      modules = [
+        clanCoreStub
+        (inputs.nixpkgs + "/nixos/modules/services/web-servers/caddy/default.nix")
+        (inputs.nixpkgs + "/nixos/modules/services/networking/firewall.nix")
+        (inputs.nixpkgs + "/nixos/modules/services/networking/nftables.nix")
+        (inputs.nixpkgs + "/nixos/modules/config/networking.nix")
+      ]
+      ++ extra;
     };
 
   kiwiSystem = mkSystem [

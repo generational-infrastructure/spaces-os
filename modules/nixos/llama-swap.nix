@@ -10,6 +10,7 @@
   lib,
   config,
   pkgs,
+  modulesPath,
   ...
 }:
 
@@ -55,6 +56,11 @@ let
   };
 in
 {
+  # Import the upstream module we wrap — it declares the
+  # services.llama-swap.{settings,apiKeys,…} this module sets. Deduped by path
+  # when a full nixosSystem also imports it; needed for standalone evals.
+  imports = [ (modulesPath + "/services/networking/llama-swap.nix") ];
+
   options.services.llama-swap = {
     llama-server-package = lib.mkOption {
       type = lib.types.package;

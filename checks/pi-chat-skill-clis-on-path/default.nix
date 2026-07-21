@@ -23,7 +23,7 @@ let
 
   # Default spaces shape: the bundle auto-enables pi-chat; nothing extra
   # to set.
-  system = inputs.self.lib.mkEvalSystem {
+  system = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces
