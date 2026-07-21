@@ -123,21 +123,30 @@ configuration, import the module, and pick a **role**:
 ```nix
 inputs.spaces.url = "github:generational-infrastructure/spaces-os";
 
-# …then, in your system's modules:
+# The whole desktop — the agent, panel, compositor, the lot:
+modules = [ spaces.nixosModules.spaces ];
+
+# …or import the lean base + role switch and pick minimal/server yourself
+# (server keeps a machine headless — none of the GUI closure is imported):
 modules = [
   spaces.nixosModules.default
-  { spaces.profile = "desktop"; }   # "minimal" ⊂ "server" ⊂ "desktop"
+  { spaces.profile = "server"; }
 ];
-# — the whole desktop, unchanged (back-compat alias for profile = "desktop"):
-modules = [ spaces.nixosModules.spaces ];
-# — or just the agent + panel, on the desktop you already run:
+
+# …or just the agent + panel, on the desktop you already run:
 modules = [ spaces.nixosModules.pi-chat ];
 ```
 
-`spaces.profile` is **required** and picks the role: **`minimal`** (just the nix
-daemon settings), **`server`** (a hardened, headless baseline — no GUI), or
-**`desktop`** (server + the full GUI/agent stack). Details in
-[docs/nixos-profiles.md](docs/nixos-profiles.md).
+`spaces.profile` is **required** and picks the role: **`minimal`** (the shared
+base — nix daemon, sshd, serial console, deploy safety), **`server`** (minimal +
+a hardened, headless posture), or **`desktop`** (the full GUI/agent stack).
+
+`nixosModules.default` carries only the base + the `minimal`/`server` roles;
+because the GUI modules pull heavy closures that mustn't land on a server, the
+desktop stack lives in `nixosModules.spaces` (which imports it and selects
+`profile = "desktop"`). So for a **desktop**, import `nixosModules.spaces`; for
+a **server**, import `nixosModules.default` and set `profile = "server"`. Details
+in [docs/nixos-profiles.md](docs/nixos-profiles.md).
 
 Starting from scratch? Grab a bootable installer image from the
 [latest release](https://github.com/generational-infrastructure/spaces-os/releases/latest),

@@ -66,19 +66,26 @@ let
     );
 in
 {
+  # Only the base layer is imported here — NOT the desktop/agent module tree
+  # (pi-chat, llama-swap, niri, noctalia, vm-debug). Those pull heavy closures
+  # (e.g. pi-chat → voxtype ASR models, unconditionally) that must never land on
+  # a `server`, and NixOS imports can't be gated on the profile. So the GUI stack
+  # is imported by `nixosModules.spaces` (the desktop alias) instead; `default`
+  # stays lean enough for headless hosts.
   imports = [
-    # AI chat Quickshell panel + loopback pi-sessiond executor
-    inputs.self.nixosModules.pi-chat
-    # local LLM server with bundled GGUF models
-    inputs.self.nixosModules.llama-swap
-    # noctalia status bar
-    inputs.self.nixosModules.noctalia
-    # niri scrollable-tiling Wayland compositor
-    inputs.self.nixosModules.niri
-    # QEMU display/audio/clipboard/SSH for nix build .#test-vm
-    inputs.self.nixosModules.vm-debug
-    # nix daemon settings (flakes, experimental features)
+    # nix daemon settings (flakes, features, build resilience, scheduling)
     inputs.self.nixosModules.nix
+    # ── base layer (every profile): shared hygiene ──
+    # serial console for emergency/cloud access (spaces.boot.consoles)
+    inputs.self.nixosModules.serial
+    # print the package diff on every switch/boot
+    inputs.self.nixosModules.update-diff
+    # prompt if deploying to a host whose hostname changed
+    inputs.self.nixosModules.detect-hostname-change
+    # terminfo for terminals that ssh in but aren't installed here
+    inputs.self.nixosModules.terminfo
+    # pinned host keys for the common git forges
+    inputs.self.nixosModules.well-known-hosts
   ];
 
   options.spaces.profile = lib.mkOption {
@@ -91,12 +98,17 @@ in
       Machine role. Required (no default — eval fails if unset). `server` and
       `desktop` are mutually exclusive; both extend `minimal`.
 
-      - `minimal`: the shared hygienic baseline — nix settings + GC, sshd +
-        hardening, sysctl net hygiene, firewall, `wait-online` off. No GUI, no
-        headless-only opinions.
+      - `minimal`: the shared hygienic baseline — nix daemon (flakes, GC, build
+        scheduling), sshd + hardening, sudo, networkd, sysctl net hygiene,
+        firewall, serial console, deploy diff + hostname-change guard, terminfo,
+        well-known git-forge host keys. No GUI, no headless-only opinions.
       - `server`: minimal + a hardened headless posture (no docs/fonts/xdg, UTC,
         no suspend, watchdogs, immutable users, …).
-      - `desktop`: minimal + the GUI/agent stack (pi-chat, niri, noctalia, greetd).
+      - `desktop`: minimal + the GUI/agent stack (pi-chat, niri, noctalia,
+        greetd). The GUI modules live in `nixosModules.spaces` (the desktop
+        alias), which imports them and sets this to `desktop` — so a full desktop
+        is imported via that alias, not by setting `profile = "desktop"` on bare
+        `default`.
     '';
   };
 
@@ -126,22 +138,59 @@ in
         StreamLocalBindUnlink = lib.mkDefault true; # ssh:no
       };
 
-      # firewall on — often already upstream's default, but kept explicit as a
-      # security safety-net (hence inline, not in commonDefaults / the nag).
+      # sshd only reads keys NixOS manages (not user-writable ~/.ssh), unless a
+      # git-forge that needs the AuthorizedKeysCommand path is running here.
+      services.openssh.authorizedKeysFiles = lib.mkIf (
+        !config.services.gitea.enable
+        && !config.services.gitlab.enable
+        && !config.services.gitolite.enable
+        && !config.services.gerrit.enable
+        && !config.services.forgejo.enable
+      ) (lib.mkForce [ "/etc/ssh/authorized_keys.d/%u" ]);
+
+      # networking: firewall on (security safety-net, often already upstream's
+      # default), quiet refused-connection logs, networkd backend, and don't tear
+      # down the network on a config switch.
       networking.firewall.enable = lib.mkDefault true;
-
-      # NetworkManager's own wait-online unit (freeform sibling of the networkd one).
+      networking.firewall.allowPing = lib.mkDefault true;
+      networking.firewall.logRefusedConnections = lib.mkDefault false;
+      networking.useNetworkd = lib.mkDefault true;
       systemd.services."NetworkManager-wait-online".enable = lib.mkDefault false;
+      systemd.services.systemd-networkd.stopIfChanged = false;
+      systemd.services.systemd-resolved.stopIfChanged = false;
 
-      # nix daemon: auto-GC during builds (never wedge /nix/store), let the
-      # builder fetch from caches, fail fast, keep more failure context.
-      nix.settings = {
-        min-free = lib.mkDefault (512 * 1024 * 1024);
-        max-free = lib.mkDefault (3000 * 1024 * 1024);
-        connect-timeout = lib.mkDefault 5;
-        log-lines = lib.mkDefault 25;
-        builders-use-substitutes = lib.mkDefault true;
+      # sudo: no per-session lecture, and enforce that execWheelOnly's rules only
+      # ever grant root/wheel (a footgun otherwise).
+      security.sudo.extraConfig = ''
+        Defaults lecture = never
+      '';
+      assertions =
+        let
+          validUsers = users: users == [ ] || users == [ "root" ];
+          validGroups = groups: groups == [ ] || groups == [ "wheel" ];
+          validUserGroups = builtins.all (
+            r: validUsers (r.users or [ ]) && validGroups (r.groups or [ ])
+          ) config.security.sudo.extraRules;
+        in
+        [
+          {
+            assertion = config.security.sudo.execWheelOnly -> validUserGroups;
+            message = "security.sudo.extraRules grants users/groups other than root/wheel while execWheelOnly is set. Loosen the rules or unset execWheelOnly.";
+          }
+        ];
+
+      # zfs (inert unless a pool is configured): shared default hostId, plus
+      # auto-snapshot/scrub when zfs is actually in use.
+      networking.hostId = lib.mkDefault "8425e349";
+      services.zfs = lib.mkIf config.boot.zfs.enabled {
+        autoSnapshot.enable = lib.mkDefault true;
+        autoSnapshot.monthly = lib.mkDefault 1;
+        autoScrub.enable = lib.mkDefault true;
       };
+
+      # no 32-bit dynamic loader, and wipe /tmp on boot.
+      environment.ldso32 = null;
+      boot.tmp.cleanOnBoot = lib.mkDefault true;
 
       # sysctl network hygiene (anti-spoof / anti-redirect). (kptr_restrict is
       # already mkDefault 1 upstream.)
@@ -160,6 +209,16 @@ in
         (applyDefaults serverDefaults)
         {
           environment.variables.BROWSER = lib.mkDefault "echo";
+
+          # Baseline headless toolkit (lowPrio so any explicit version wins).
+          environment.systemPackages = map lib.lowPrio [
+            pkgs.gitMinimal
+            pkgs.curl
+            pkgs.dnsutils
+            pkgs.htop
+            pkgs.jq
+            pkgs.tmux
+          ];
 
           programs.vim = {
             defaultEditor = lib.mkDefault true;
@@ -188,19 +247,8 @@ in
       ]
     ))
 
-    # ── desktop: the GUI/agent stack (mutually exclusive with server) ──
-    (lib.mkIf (cfg.profile == "desktop") {
-      services.pi-chat.enable = lib.mkDefault true;
-      services.spaces.niri.enable = lib.mkDefault true;
-      services.noctalia.enable = lib.mkDefault true;
-
-      services.greetd = {
-        enable = lib.mkDefault true;
-        settings.default_session = {
-          command = lib.mkDefault "${config.programs.niri.package}/bin/niri-session";
-          user = lib.mkDefault "alice";
-        };
-      };
-    })
+    # NOTE: the `desktop` profile's enables (pi-chat, niri, noctalia, greetd)
+    # live in `nixosModules.spaces` (the desktop alias), alongside the imports of
+    # the modules they enable — see the note on `imports` above.
   ];
 }
