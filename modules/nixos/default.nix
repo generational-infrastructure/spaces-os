@@ -154,7 +154,6 @@ in
       # default), quiet refused-connection logs, networkd backend, and don't tear
       # down the network on a config switch.
       networking.firewall.enable = lib.mkDefault true;
-      networking.firewall.allowPing = lib.mkDefault true;
       networking.firewall.logRefusedConnections = lib.mkDefault false;
       networking.useNetworkd = lib.mkDefault true;
       systemd.services."NetworkManager-wait-online".enable = lib.mkDefault false;
@@ -190,8 +189,7 @@ in
         autoScrub.enable = lib.mkDefault true;
       };
 
-      # no 32-bit dynamic loader, and wipe /tmp on boot.
-      environment.ldso32 = null;
+      # wipe /tmp on boot.
       boot.tmp.cleanOnBoot = lib.mkDefault true;
 
       # sysctl network hygiene (anti-spoof / anti-redirect). (kptr_restrict is
