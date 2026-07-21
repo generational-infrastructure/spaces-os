@@ -1,18 +1,11 @@
 # Perl-free system: drop perl from activation, the initrd, and the default
-# package set. Mirrors nixpkgs' profiles/perlless.nix. Everything is mkDefault,
-# so a host that genuinely needs perl — e.g. a BIOS GRUB machine, whose
-# install-grub.sh is perl — can opt back in (set boot.loader.grub.enable = true).
-{ lib, ... }:
+# package set. Import nixpkgs' own perlless profile rather than copying it (a
+# copy silently drifts as upstream slims the list), but don't *enforce*
+# perl-free: the base can't guarantee it — a BIOS GRUB host's install-grub.sh is
+# perl — so keep the forbidden-dependency check off and just drop perl where it
+# can be dropped.
+{ lib, modulesPath, ... }:
 {
-  boot.initrd.systemd.enable = lib.mkDefault true;
-  system.etc.overlay.enable = lib.mkDefault true;
-
-  # Odds and ends that still drag perl in.
-  boot.enableContainers = lib.mkDefault false;
-  boot.loader.grub.enable = lib.mkDefault false;
-  documentation.info.enable = lib.mkDefault false;
-  environment.defaultPackages = lib.mkDefault [ ];
-  programs.command-not-found.enable = lib.mkDefault false;
-  programs.less.lessopen = lib.mkDefault null;
-  system.disableInstallerTools = lib.mkDefault true;
+  imports = [ "${modulesPath}/profiles/perlless.nix" ];
+  system.forbiddenDependenciesRegexes = lib.mkForce [ ];
 }
