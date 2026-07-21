@@ -3,9 +3,11 @@
     "blueprint": {
       "inputs": {
         "nixpkgs": [
+          "llm-agents",
           "nixpkgs"
         ],
         "systems": [
+          "llm-agents",
           "systems"
         ]
       },
@@ -119,9 +121,7 @@
     },
     "llm-agents": {
       "inputs": {
-        "blueprint": [
-          "blueprint"
-        ],
+        "blueprint": "blueprint",
         "bun2nix": "bun2nix",
         "flake-parts": "flake-parts",
         "nixpkgs": [
@@ -167,7 +167,6 @@
     },
     "root": {
       "inputs": {
-        "blueprint": "blueprint",
         "home-manager": "home-manager",
         "llm-agents": "llm-agents",
         "nixpkgs": "nixpkgs",
