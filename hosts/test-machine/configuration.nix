@@ -24,6 +24,9 @@ in
 
   networking.hostName = "test-machine";
 
+  # Full GUI/agent role: this host boots into niri via greetd.
+  spaces.profile = "desktop";
+
   boot.loader.systemd-boot.enable = true;
   fileSystems."/" = {
     device = "/dev/vda1";

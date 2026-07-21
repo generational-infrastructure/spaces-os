@@ -12,7 +12,11 @@ let
     extra:
     inputs.self.lib.mkEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
-      modules = [ inputs.self.nixosModules.noctalia ] ++ extra;
+      modules = [
+        inputs.self.nixosModules.noctalia
+        { services.noctalia.enable = true; }
+      ]
+      ++ extra;
     };
 
   defaultSystem = mkSystem [ ];

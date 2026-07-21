@@ -14,6 +14,9 @@ _:
 {
   networking.hostName = "installer-target";
 
+  # Full GUI/agent role: the installed system boots into niri.
+  spaces.profile = "desktop";
+
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
   fileSystems."/" = {

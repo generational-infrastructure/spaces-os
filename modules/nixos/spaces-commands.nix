@@ -1,21 +1,12 @@
-# Wrappers for every command bound to a spaces keyboard shortcut.
+# Notifying wrappers for every command bound to a spaces keyboard shortcut,
+# published as `config.services.spaces.commands` so the compositor references
+# exact names and can't drift from what's installed. A failure posts a
+# "failed to <label>" desktop notification instead of silently doing nothing.
 #
-# The compositor spawns these instead of the raw commands so that:
-#   - each shortcut goes through a binary we own (greppable on PATH,
-#     runnable from a terminal, a single place to evolve behaviour), and
-#   - a failure posts a "failed to <label>" desktop notification instead
-#     of the shortcut silently doing nothing.
-#
-# The notifying wrapper builder lives in lib/spaces-command.nix (the
-# central library). This module instantiates one wrapper per spaces
-# shortcut and publishes the set as `config.services.spaces.commands`
-# so the compositor module references the exact names and can't drift
-# from what is actually installed.
-#
-# Underlying commands and notify-send are resolved from the session
-# PATH — same as the compositor's bare-name spawns — so the wrappers
-# carry no package closure and stay cheap to evaluate.
+# Underlying commands and notify-send resolve from the session PATH, so the
+# wrappers carry no package closure and stay cheap to evaluate.
 {
+  config,
   pkgs,
   lib,
   ...
@@ -37,12 +28,10 @@ let
     voice-record-toggle = mkCommand {
       name = "spaces-voice-record-toggle";
       label = "toggle voice recording";
-      # voxtype's own toggle stops recording only when the state is
-      # "recording"; read the state first so we can name the transition.
+      # Read the state first so the transition toast can name the direction.
       text = ''
         state=$(voxtype status) || state=idle
         voxtype record toggle
-        # Short-lived (2s) transition toast.
         if [ "$state" = recording ]; then
           spaces_notify "voice recording stopped" 2000
         else
@@ -58,8 +47,7 @@ let
     chat-reload = mkCommand {
       name = "spaces-chat-reload";
       label = "reload the chat panel";
-      # daemon-reload picks up a rebuild's new unit defs, then restart
-      # re-runs the panel's materialize ExecStartPre against fresh QML.
+      # daemon-reload picks up a rebuild's new unit defs before the restart.
       text = ''
         systemctl --user daemon-reload
         systemctl --user restart pi-chat.service
@@ -86,9 +74,21 @@ in
     '';
   };
 
-  config.environment.systemPackages = lib.attrValues commands ++ [
-    # The wrappers call notify-send by bare name to post their failure
-    # toast; guarantee it is on the system PATH.
-    pkgs.libnotify
-  ];
+  # Gated: only put the wrappers on PATH when a compositor/bar that binds them is
+  # enabled (the option above stays published unconditionally). Read the enables
+  # via `? …` so a standalone import (option only, no niri/noctalia tree) evaluates
+  # to "no compositor → no packages" instead of throwing on the missing option.
+  config.environment.systemPackages =
+    let
+      s = config.services;
+      niriOn = s.spaces.niri.enable or false;
+      noctaliaOn = s.noctalia.enable or false;
+    in
+    lib.mkIf (niriOn || noctaliaOn) (
+      lib.attrValues commands
+      ++ [
+        # The wrappers call notify-send by bare name for their failure toast.
+        pkgs.libnotify
+      ]
+    );
 }

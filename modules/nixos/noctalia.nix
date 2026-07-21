@@ -1,18 +1,9 @@
-# Noctalia-shell bar as a graphical-session systemd user service, plus
-# a bundled `spaces-sessions` plugin pinned in the center bar that
-# shows one icon per pi-chat agent session.
+# Noctalia-shell bar as a graphical-session user service, with bundled
+# spaces-sessions and voice-indicator plugins pinned in the center bar.
 #
-# An ExecStartPre seeds the user's ~/.config/noctalia: it deep-merges
-# our managed JSON (top-level settings.json, plugins.json, and the
-# plugin's own settings.json) and symlinks the plugin's QML into
-# plugins/spaces-sessions/. Files stay writable so runtime edits and
-# the in-app settings UI survive; keys we pin re-apply on every
-# (re)start. Without an existing settings.json noctalia takes its
-# fresh-install path and the bar fails to draw until a manual reload —
-# seeding sidesteps that.
-#
-# Also keeps a purge that cleans up leftover state from the prior
-# patched-build / spaces-plugin era.
+# An ExecStartPre seeds ~/.config/noctalia by deep-merging our managed JSON and
+# symlinking plugin QML; without an existing settings.json noctalia takes its
+# fresh-install path and the bar fails to draw until a manual reload.
 {
   config,
   lib,
@@ -20,10 +11,10 @@
   ...
 }:
 let
-  # Managed top-level settings.json. Pins bar position and the center
-  # bar's widget list (Workspace pills + the bundled session indicator).
-  # Merged, not symlinked, so the user can still change everything else
-  # from the UI.
+  cfg = config.services.noctalia;
+
+  # Managed top-level settings.json: pins bar position and the center widget list.
+  # Merged (not symlinked) so the user can still change everything else from the UI.
   managedSettings = (pkgs.formats.json { }).generate "noctalia-settings.json" {
     bar.position = config.services.noctalia.bar.position;
     bar.widgets.center = [
@@ -33,29 +24,25 @@ let
     ];
   };
 
-  # Managed plugins.json — only forces our bundled plugin enabled. User
-  # plugins and other `states.*` entries survive the deep merge.
+  # Managed plugins.json — only forces our bundled plugins enabled; user plugins
+  # and other `states.*` entries survive the deep merge.
   managedPlugins = (pkgs.formats.json { }).generate "noctalia-plugins.json" {
     states."spaces-sessions".enabled = true;
     states."voice-indicator".enabled = true;
   };
 
-  # Managed plugin settings — pins the absolute quickshell binary and
-  # the pi-chat IPC target the indicator shells out to on click.
+  # Pins the absolute quickshell binary and pi-chat IPC target the indicator
+  # shells out to on click.
   managedSpacesSessionsSettings =
     (pkgs.formats.json { }).generate "noctalia-spaces-sessions-settings.json"
       {
         focusCommand = "${pkgs.quickshell}/bin/quickshell ipc -c pi-chat call pi-chat";
       };
 
-  # Managed plugin settings — pins toggleCommand to the ABSOLUTE wrapper,
-  # taken from the typed command set so it can't drift from what's
-  # installed. The voice indicator shells out to it on click; voxtype /
-  # notify-send resolve from the noctalia service PATH when it runs.
-  #
-  # barPulse pins the whole-bar ambient "recording" glow ON by default;
-  # it is a managed enable so the cue ships everywhere, while the glow's
-  # intensity stays an unmanaged per-user taste knob (barPulseIntensity).
+  # Pins toggleCommand to the absolute wrapper from the typed command set so it
+  # can't drift from what's installed. barPulse (the whole-bar "recording" glow)
+  # is a managed enable so the cue ships everywhere; barPulseIntensity stays an
+  # unmanaged per-user knob.
   managedVoiceIndicatorSettings =
     (pkgs.formats.json { }).generate "noctalia-voice-indicator-settings.json"
       {
@@ -64,20 +51,14 @@ let
         barPulse = true;
       };
 
-  # The bundled plugin's source tree (manifest + QML). Copied into the
-  # Nix store by path interpolation; we materialise it per-file under
-  # ~/.config/noctalia/plugins/spaces-sessions/ at service start.
+  # Plugin source trees (manifest + QML), materialised per-file under
+  # ~/.config/noctalia/plugins/<id>/ at service start.
   spacesSessionsPluginSrc = ../../programs/noctalia-spaces-sessions;
-
-  # The voice indicator's source tree (manifest + QML + i18n). Materialised
-  # per-file under ~/.config/noctalia/plugins/voice-indicator/.
   voiceIndicatorPluginSrc = ../../programs/noctalia-voice-indicator;
 
-  # Deep-merges each managed JSON file into ~/.config/noctalia/<rel>
-  # (jq `a * b`, managed side wins): objects merge recursively, arrays /
-  # scalars are replaced, unmanaged keys (and the user's runtime edits to
-  # them) survive. Runs as the noctalia-shell ExecStartPre, so it executes
-  # per-user with $HOME set, before the bar starts.
+  # Deep-merges each managed JSON into ~/.config/noctalia/<rel> (jq `a * b`,
+  # managed side wins): objects merge recursively, arrays/scalars are replaced,
+  # unmanaged keys survive. Runs as the ExecStartPre, per-user with $HOME set.
   mergeConfig = pkgs.writeShellApplication {
     name = "noctalia-config-merge";
     runtimeInputs = [
@@ -105,12 +86,10 @@ let
         mv "$tmp" "$target"
       }
 
-      # Materialise the bundled plugin: per-file symlinks under a real
-      # plugins/<id>/ directory (NOT a single dir symlink — the
-      # stale-plugin purge below sweeps top-level symlinks in plugins/,
-      # and noctalia needs to write its own settings.json into that dir
-      # at runtime). Per-file symlinks let manifest/QML track the store
-      # while leaving settings.json a real, writable file.
+      # Per-file symlinks under a real plugins/<id>/ dir (NOT a dir symlink: the
+      # purge below sweeps top-level symlinks, and noctalia writes its own
+      # settings.json here at runtime). Manifest/QML track the store; settings.json
+      # stays a real writable file.
       materializePluginFiles() {
         local src="$1" rel="$2" dst f name
         dst="$cfgDir/$rel"
@@ -131,12 +110,10 @@ let
     '';
   };
 
-  # Removes leftover spaces-owned plugin state on every nixos-rebuild
-  # / boot activation: the patched-build `plugins-autoload/` dir, any
-  # symlink under `plugins/` (spaces materialised plugins as symlinks,
-  # marketplace installs are real dirs), and matching `plugins.json`
-  # entries (by unlinked id, by autoload:true flag, or by historical
-  # spaces id for hosts where the symlink was already gone).
+  # Removes leftover spaces-owned plugin state: the patched-build
+  # `plugins-autoload/` dir, any symlink under `plugins/` (spaces plugins are
+  # symlinks, marketplace installs are real dirs), and matching `plugins.json`
+  # entries (by unlinked id, autoload:true flag, or historical spaces id).
   purgeStalePlugins = pkgs.writeShellApplication {
     name = "noctalia-purge-stale-plugins";
     runtimeInputs = [
@@ -185,16 +162,15 @@ let
   };
 in
 {
-  # The shortcut commands noctalia spawns are wrappers built here. Importing
-  # the module declares the dependency and supplies
-  # `config.services.spaces.commands` used above.
+  # Supplies the shortcut wrappers noctalia spawns (config.services.spaces.commands).
   imports = [ ./spaces-commands.nix ];
 
   options.services.noctalia = {
+    enable = lib.mkEnableOption "noctalia-shell Wayland bar user service";
+
     bar.position = lib.mkOption {
-      # Deliberately only the horizontal edges: noctalia itself also knows
-      # left/right, but vertical bars are untested with the pinned center
-      # widget list (Workspace pills + spaces-sessions plugin).
+      # Horizontal edges only: vertical bars are untested with our pinned center
+      # widget list.
       type = lib.types.enum [
         "top"
         "bottom"
@@ -209,12 +185,11 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.enable {
     environment.systemPackages = [
       pkgs.noctalia-shell
       pkgs.libnotify
-      # Noctalia widgets shell out to wl-{copy,paste} and xdg-open by
-      # bare name; ship the binaries on the system PATH.
+      # Noctalia widgets shell out to wl-{copy,paste} and xdg-open by bare name.
       pkgs.wl-clipboard
       pkgs.xdg-utils
     ];
@@ -222,8 +197,7 @@ in
     # noctalia's Battery widget reads UPower over D-Bus.
     services.upower.enable = true;
 
-    # Activation runs the purge on every rebuild and boot — no need
-    # to wait for the noctalia-shell service to restart.
+    # Purge on every rebuild and boot, not just on service restart.
     system.userActivationScripts.noctaliaPurgeStalePlugins = ''
       ${purgeStalePlugins}/bin/noctalia-purge-stale-plugins
     '';
@@ -238,14 +212,12 @@ in
         mergeConfig
       ];
       serviceConfig = {
-        # Seed/merge managed JSON into ~/.config/noctalia before the bar
-        # starts (per-user, $HOME set).
         ExecStartPre = "${mergeConfig}/bin/noctalia-config-merge";
         ExecStart = "${pkgs.noctalia-shell}/bin/noctalia-shell";
         Restart = "on-failure";
         Slice = "session.slice";
-        # Noctalia spawns helpers (`sh`, `wl-paste`, `voxtype`, …) by
-        # bare name; the default user PATH only has /run/wrappers/bin.
+        # Noctalia spawns helpers (`sh`, `wl-paste`, `voxtype`, …) by bare name;
+        # the default user PATH only has /run/wrappers/bin.
         Environment = "PATH=/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
       };
     };
