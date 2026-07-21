@@ -8,8 +8,6 @@
     inputs.self.nixosModules.pi-chat
     # local LLM server with bundled GGUF models
     inputs.self.nixosModules.llama-swap
-    # one-shot 'distro' → 'spaces' user-state migration
-    inputs.self.nixosModules.spaces-state-migrate
     # noctalia status bar (vanilla, no plugin)
     inputs.self.nixosModules.noctalia
     # niri scrollable-tiling Wayland compositor
