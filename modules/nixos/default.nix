@@ -86,6 +86,8 @@ in
     inputs.self.nixosModules.terminfo
     # pinned host keys for the common git forges
     inputs.self.nixosModules.well-known-hosts
+    # perl-free system (drop perl from activation, initrd, default packages)
+    inputs.self.nixosModules.perlless
   ];
 
   options.spaces.profile = lib.mkOption {
