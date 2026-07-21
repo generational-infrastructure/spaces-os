@@ -12,7 +12,7 @@
 # wording can't drift from what voxtype actually does. ~3-5s.
 { pkgs, inputs, ... }:
 let
-  system = inputs.self.lib.mkEvalSystem {
+  system = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [ inputs.self.nixosModules.spaces-commands ];
   };

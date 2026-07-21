@@ -19,7 +19,7 @@
 # voxtype package build), then parses it with tomllib. ~1s, no VM.
 { pkgs, inputs, ... }:
 let
-  spacesSystem = inputs.self.lib.mkEvalSystem {
+  spacesSystem = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces

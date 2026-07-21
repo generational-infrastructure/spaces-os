@@ -3,9 +3,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
-    blueprint.url = "github:numtide/blueprint";
-    blueprint.inputs.nixpkgs.follows = "nixpkgs";
-    blueprint.inputs.systems.follows = "systems";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     # Pinned to the 0.78.x (@earendil-works) line the deployed executors run.
@@ -14,7 +11,6 @@
     llm-agents.url = "github:numtide/llm-agents.nix/2296793afdc076c2fd495ac21b914c26a9f2bf0e";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
-    llm-agents.inputs.blueprint.follows = "blueprint";
     llm-agents.inputs.systems.follows = "systems";
     # Fork branch adds the nemotron multilingual streaming ASR engine (reuses
     # the parakeet ONNX feature). Not yet upstream in peteonrails/voxtype.
@@ -31,7 +27,9 @@
     let
       inherit (inputs.nixpkgs) lib;
 
-      base = inputs.blueprint {
+      # Vendored + pruned fork of numtide/blueprint — see lib/flake/default.nix
+      # (dropped the input; fixes the eager checks keyset).
+      base = (import ./lib/flake { inherit inputs; }) {
         inherit inputs;
         systems = [
           "x86_64-linux"

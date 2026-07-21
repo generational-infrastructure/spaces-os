@@ -13,7 +13,7 @@
 # distro module auto-enables pi-chat). Pure nix eval. ~3-5s.
 { pkgs, inputs, ... }:
 let
-  system = inputs.self.lib.mkEvalSystem {
+  system = inputs.self.lib.mkMinimalEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     modules = [
       inputs.self.nixosModules.spaces

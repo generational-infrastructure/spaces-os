@@ -13,7 +13,7 @@
 #     the broker's targeted-restart signal), and nothing else.
 #
 # This check pins all three: it evaluates the systems (like the nix-eval
-# checks, via lib/mkEvalSystem) — v1 stages alice with two demomail profiles
+# checks, via lib/mkMinimalEvalSystem) — v1 stages alice with two demomail profiles
 # plus a second user bob; v1rot is v1 with alice's work secret content
 # rotated; v2 drops alice's `home` profile and bob entirely — then runs the
 # stagers in sequence against one tmp root (SPACES_MANAGED_ROOT, the script's
@@ -27,7 +27,7 @@
 let
   mkSystem =
     extra:
-    inputs.self.lib.mkEvalSystem {
+    inputs.self.lib.mkMinimalEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
       modules = [ inputs.self.nixosModules.spaces-integrations ] ++ extra;
     };

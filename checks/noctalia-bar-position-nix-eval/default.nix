@@ -10,7 +10,7 @@
 let
   mkSystem =
     extra:
-    inputs.self.lib.mkEvalSystem {
+    inputs.self.lib.mkMinimalEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
         inputs.self.nixosModules.noctalia

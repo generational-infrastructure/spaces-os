@@ -19,10 +19,15 @@
 let
   mkSystem =
     hostName: extraConfig:
-    inputs.self.lib.mkEvalSystem {
+    inputs.self.lib.mkMinimalEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
         inputs.self.nixosModules.pi-sessiond
+        # Reads networking.firewall.allowedTCPPorts — pull firewall (+ the
+        # nftables/networking options it reaches into) in here, not the base.
+        (inputs.nixpkgs + "/nixos/modules/services/networking/firewall.nix")
+        (inputs.nixpkgs + "/nixos/modules/services/networking/nftables.nix")
+        (inputs.nixpkgs + "/nixos/modules/config/networking.nix")
         {
           networking.hostName = hostName;
           # Keep the eval cheap: the sediment memory extension drags a model
