@@ -41,7 +41,12 @@ let
         inherit inputs;
         flake = inputs.self;
       };
-      modules = baseModules ++ [ inputs.self.nixosModules.spaces ] ++ extraModules;
+      modules =
+        baseModules
+        ++ [
+          inputs.self.nixosModules.spaces
+        ]
+        ++ extraModules;
     };
 
   # Defaults: engine = nemotron on a parakeet variant, model overridden to a

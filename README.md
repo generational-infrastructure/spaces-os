@@ -118,16 +118,26 @@ SpacesOS is assembled with [Nix](https://nixos.org) on top of
 ## Try it yourself
 
 SpacesOS is a [Nix](https://nixos.org) flake. Add it to your NixOS
-configuration and pick a module:
+configuration, import the module, and pick a **role**:
 
 ```nix
 inputs.spaces.url = "github:generational-infrastructure/spaces-os";
 
 # …then, in your system's modules:
-modules = [ spaces.nixosModules.spaces ];    # the whole desktop
+modules = [
+  spaces.nixosModules.default
+  { spaces.profile = "desktop"; }   # "minimal" ⊂ "server" ⊂ "desktop"
+];
+# — the whole desktop, unchanged (back-compat alias for profile = "desktop"):
+modules = [ spaces.nixosModules.spaces ];
 # — or just the agent + panel, on the desktop you already run:
 modules = [ spaces.nixosModules.pi-chat ];
 ```
+
+`spaces.profile` is **required** and picks the role: **`minimal`** (just the nix
+daemon settings), **`server`** (a hardened, headless baseline — no GUI), or
+**`desktop`** (server + the full GUI/agent stack). Details in
+[docs/nixos-profiles.md](docs/nixos-profiles.md).
 
 Starting from scratch? Grab a bootable installer image from the
 [latest release](https://github.com/generational-infrastructure/spaces-os/releases/latest),

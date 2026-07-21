@@ -45,7 +45,10 @@ let
 
   system = inputs.self.lib.mkEvalSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
-    modules = [ inputs.self.nixosModules.niri ];
+    modules = [
+      inputs.self.nixosModules.niri
+      { services.spaces.niri.enable = true; }
+    ];
   };
   niriConfig = system.config.environment.etc."niri/config.kdl".source;
   cmds = system.config.services.spaces.commands;

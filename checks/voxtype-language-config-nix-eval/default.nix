@@ -23,7 +23,10 @@ let
     extraModules:
     inputs.self.lib.mkEvalSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
-      modules = [ inputs.self.nixosModules.spaces ] ++ extraModules;
+      modules = [
+        inputs.self.nixosModules.spaces
+      ]
+      ++ extraModules;
     };
 
   # Default: whisperLanguage keeps its historic bare-string default "auto".
