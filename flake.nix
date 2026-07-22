@@ -20,6 +20,17 @@
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
     systems.url = "github:nix-systems/default";
+    # Hermes agent microvms (modules/nixos/hermes). Follows our nixpkgs —
+    # viable because the one nixpkgs-coupled upstream package (the desktop
+    # renderer, whose electron node-headers FOD hash must match nixpkgs'
+    # electron) is vendored with a corrected hash in
+    # modules/nixos/hermes/desktop.nix; diff it against upstream's
+    # nix/desktop.nix when bumping this input. Tracks the latest stable
+    # release tag.
+    hermes-agent.url = "github:NousResearch/hermes-agent/v2026.7.20";
+    hermes-agent.inputs.nixpkgs.follows = "nixpkgs";
+    microvm.url = "github:microvm-nix/microvm.nix";
+    microvm.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =

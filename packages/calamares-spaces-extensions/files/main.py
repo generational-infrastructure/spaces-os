@@ -144,6 +144,7 @@ cfgconsole = """  # Configure console keymap
 cfgusers = """  # Define a user account. Don't forget to set a password with 'passwd'.
   users.users.@@username@@ = {
     isNormalUser = true;
+    uid = 1000;
     description = "@@fullname@@";
     extraGroups = [ "networkmanager" "wheel" ];
   };

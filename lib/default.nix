@@ -187,7 +187,8 @@ in
         (m "misc/ids.nix")
         # Stubs for options the base modules read but whose owning modules we
         # skip: systemd.nix -> services.openssh.* (sshd-vsock@), users-groups
-        # -> boot.initrd.systemd.enable (initrd passwd).
+        # -> boot.initrd.systemd.enable (initrd passwd), tmpfiles ->
+        # boot.initrd.systemd.storePaths (initrd tmpfiles.d filtering).
         (
           { lib, ... }:
           {
@@ -202,6 +203,10 @@ in
             options.boot.initrd.systemd.enable = lib.mkOption {
               default = false;
               type = lib.types.bool;
+            };
+            options.boot.initrd.systemd.storePaths = lib.mkOption {
+              default = [ ];
+              type = lib.types.listOf lib.types.raw;
             };
           }
         )

@@ -192,6 +192,7 @@ class RenderConfigurationTests(unittest.TestCase):
     def test_user_account_emitted(self):
         cfg = self.render()
         self.assertIn("users.users.alice = {", cfg)
+        self.assertIn("uid = 1000;", cfg)
         self.assertIn('description = "Alice Example";', cfg)
         self.assertIn('extraGroups = [ "networkmanager" "wheel" ];', cfg)
 

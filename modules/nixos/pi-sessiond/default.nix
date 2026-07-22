@@ -346,7 +346,7 @@ in
       description = ''
         Load the OpenRouter API key staged at
         /run/spaces-secrets/openrouter-api-key (see
-        services.pi-chat.openrouter) into the daemon via LoadCredential.
+        spaces.openrouter) into the daemon via LoadCredential.
       '';
     };
 
