@@ -192,7 +192,11 @@ class RenderConfigurationTests(unittest.TestCase):
     def test_user_account_emitted(self):
         cfg = self.render()
         self.assertIn("users.users.alice = {", cfg)
-        self.assertIn("uid = 1000;", cfg)
+        # No static uid: userborn does not reserve declared uids before
+        # dynamic allocation (nikstur/userborn#59) — a pinned 1000 can
+        # eat another user's slot. Hermes derives VM identity from the
+        # username, so nothing needs the declaration anymore.
+        self.assertNotIn("uid =", cfg)
         self.assertIn('description = "Alice Example";', cfg)
         self.assertIn('extraGroups = [ "networkmanager" "wheel" ];', cfg)
 

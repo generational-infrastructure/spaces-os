@@ -13,13 +13,14 @@
 let
   cfg = config.services.hermes-microvm;
   hlib = import ./lib.nix { inherit lib; };
-  inherit (hlib) guestStateDir;
+  inherit (hlib) guestStateDir cidFor;
 
-  # Case arms mapping the invoking user to their VM's endpoints.
+  # Case arms mapping the invoking user to their VM's endpoints (CID =
+  # username hash, port = hash-derived option value — no uids).
   userCaseArms = lib.concatStrings (
     lib.mapAttrsToList (user: ucfg: ''
       ${user})
-        cid=${toString ucfg.uid}
+        cid=${toString (cidFor user)}
         dashboard_port=${toString ucfg.dashboardPort}
         ;;
     '') cfg.enabledUsers
@@ -95,8 +96,8 @@ let
     };
 
   # Host launcher: the upstream app in remote-backend mode against the
-  # owner's forwarded dashboard. Token file 0400 + uid-gated port keep
-  # the exported token owner-confined.
+  # owner's forwarded dashboard. Token file 0400 + owner-gated port
+  # (firewall username match) keep the exported token owner-confined.
   hermesDesktop = pkgs.writeShellScriptBin "hermes-desktop" ''
     u="$(${pkgs.coreutils}/bin/id -un)"
     case "$u" in

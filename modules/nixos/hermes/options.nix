@@ -1,6 +1,7 @@
 # Option interface of services.hermes-microvm, the auto-provisioning /
-# model-seed derivation, and the assertions that validate it (uids must be
-# unique and declared — they derive ports, MAC and firewall identity;
+# model-seed derivation, and the assertions that validate it (per-VM
+# identity is a hash of the USERNAME — lib.nix identityHash; derived
+# CID/port and dashboardPort collisions are asserted;
 # secretEnv names ride qemu fw_cfg and are length-limited; settings may
 # never pin a model — that would clobber the user's runtime choice on
 # every boot).
@@ -12,6 +13,7 @@
 }:
 let
   cfg = config.services.hermes-microvm;
+  hlib = import ./lib.nix { inherit lib; };
   hostConfig = config;
   orCfg = config.spaces.openrouter;
   llamaOn = config.services.llama-swap.enable or false;
@@ -33,9 +35,7 @@ in
       type = types.bool;
       default = true;
       description = ''
-        Auto-provision a VM for every isNormalUser. Each such user needs
-        a declared users.users.<n>.uid (the installer declares 1000 for
-        the primary user). Opt out per user via
+        Auto-provision a VM for every isNormalUser. Opt out per user via
         services.hermes-microvm.users.<n>.enable = false. When this is
         false, only explicitly declared users get VMs.
       '';
@@ -179,7 +179,7 @@ in
       description = "Users that get their own Hermes microvm.";
       type = types.attrsOf (
         types.submodule (
-          { name, config, ... }:
+          { name, ... }:
           {
             options = {
               enable = mkOption {
@@ -187,21 +187,15 @@ in
                 default = true;
                 description = "Whether this user gets a VM.";
               };
-              uid = mkOption {
-                type = types.nullOr types.int;
-                default = hostConfig.users.users.${name}.uid or null;
-                defaultText = literalExpression "config.users.users.<name>.uid";
-                description = "The user's uid on the host (mirrored in the guest); derives ports, vsock CID and MAC.";
-              };
               dashboardPort = mkOption {
                 type = types.port;
-                default = 22100 + config.uid - 1000;
-                description = "Host 127.0.0.1 port forwarded to the guest dashboard.";
-              };
-              spacesPort = mkOption {
-                type = types.port;
-                default = 22200 + config.uid - 1000;
-                description = "Host 127.0.0.1 port of the spaces gateway TCP bridge.";
+                default = 22100 + lib.mod (hlib.identityHash name) 1000;
+                defaultText = literalExpression ''22100 + lib.mod (identityHash name) 1000'';
+                description = ''
+                  Host 127.0.0.1 port forwarded to the guest dashboard
+                  (hash-derived; override on the rare window collision —
+                  the eval assertion names the colliding users).
+                '';
               };
               environment = mkOption {
                 type = types.attrsOf types.str;
@@ -223,18 +217,15 @@ in
                   re-add OPENROUTER_API_KEY if you add other secrets.
                 '';
               };
-              spacesGateway = {
-                enable = mkOption {
-                  type = types.bool;
-                  default = hostConfig.services.spaces-integrations.enable or false;
-                  defaultText = literalExpression "config.services.spaces-integrations.enable";
-                  description = "Bridge the user's spaces integration gateway into the VM.";
-                };
-                socket = mkOption {
-                  type = types.str;
-                  default = "/run/user/${toString config.uid}/spaces-integration-gateway.sock";
-                  description = "The per-user spaces gateway socket on the host.";
-                };
+              spacesGateway.enable = mkOption {
+                type = types.bool;
+                default = hostConfig.services.spaces-integrations.enable or false;
+                defaultText = literalExpression "config.services.spaces-integrations.enable";
+                description = ''
+                  Bridge the user's spaces integration gateway (the fixed
+                  per-user socket /run/user/<uid>/spaces-integration-gateway.sock,
+                  uid resolved at runtime) into the VM.
+                '';
               };
             };
           }
@@ -246,19 +237,19 @@ in
       internal = true;
       readOnly = true;
       type = types.attrsOf types.raw;
-      description = "users filtered to entries that actually get a VM: enabled with a declared uid. All host/guest wiring iterates this.";
+      description = "users filtered to enabled entries. All host/guest wiring iterates this.";
     };
   };
 
   config = lib.mkIf cfg.enable {
     # Auto-provision: an EMPTY definition per normal user — every value
-    # (uid, gateway, openrouter secret) flows from submodule defaults, so
+    # (ports, gateway, openrouter secret) flows from submodule defaults, so
     # explicitly declared users behave identically.
     services.hermes-microvm.users = lib.mkIf cfg.provisionNormalUsers (
       lib.mapAttrs (_: _: { }) normalUsers
     );
 
-    services.hermes-microvm.enabledUsers = lib.filterAttrs (_: u: u.enable && u.uid != null) cfg.users;
+    services.hermes-microvm.enabledUsers = lib.filterAttrs (_: u: u.enable) cfg.users;
 
     services.hermes-microvm.initialModel = lib.mkDefault (
       if llamaOn then
@@ -279,23 +270,35 @@ in
         message = "services.hermes-microvm.settings.model is re-merged into the guest config on EVERY boot and would clobber the user's runtime model choice. Use services.hermes-microvm.initialModel (seed-once) instead.";
       }
     ]
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        user: ucfg:
+        # sha256(username) collisions are ~1 in 4e9, but CID, MAC and
+        # the bridge port all derive from the hash — never let one
+        # through. Asserted on the derived values: the mod-reductions
+        # in cidFor/spacesVsockPort wrap, so distinct hashes can alias
+        # (a full-hash/MAC collision implies both, so it is covered).
+        map
+          (fn: {
+            assertion =
+              !ucfg.enable
+              || lib.count (u: hlib.${fn} u == hlib.${fn} user) (
+                lib.attrNames (lib.filterAttrs (_: u: u.enable) cfg.users)
+              ) == 1;
+            message = "services.hermes-microvm: ${fn} collision on ${user} — rename one of the colliding users or disable one VM (services.hermes-microvm.users.<name>.enable = false).";
+          })
+          [
+            "cidFor"
+            "spacesVsockPort"
+          ]
+      ) cfg.users
+    )
     ++ lib.mapAttrsToList (user: ucfg: {
-      assertion = !(ucfg.enable && ucfg.uid == null);
-      message = "services.hermes-microvm.users.${user}: no uid. Declare users.users.${user}.uid (the installer declares 1000 for the primary user) or set services.hermes-microvm.users.${user}.enable = false.";
-    }) cfg.users
-    ++ lib.mapAttrsToList (user: ucfg: {
-      # host.nix never pins users.users.<u>.uid = ucfg.uid: with the
-      # uid defaulting FROM users.users, a pin would be the value cycle
-      # x = merge(x, …). Agreement is asserted instead.
       assertion =
-        !(ucfg.enable && ucfg.uid != null) || (hostConfig.users.users.${user}.uid or null) == ucfg.uid;
-      message = "services.hermes-microvm.users.${user}: uid ${toString ucfg.uid} does not match users.users.${user}.uid — the guest mirrors the host account; declare the same uid on both.";
-    }) cfg.users
-    ++ lib.mapAttrsToList (user: ucfg: {
-      assertion =
-        ucfg.uid == null
-        || lib.count (u: u.uid != null && u.uid == ucfg.uid) (lib.attrValues cfg.users) == 1;
-      message = "services.hermes-microvm: duplicate uid ${toString ucfg.uid} (${user}) — uids derive ports, MAC and firewall identity and must be unique";
+        !ucfg.enable
+        || lib.count (u: u.enable && u.dashboardPort == ucfg.dashboardPort) (lib.attrValues cfg.users)
+          == 1;
+      message = "services.hermes-microvm: duplicate dashboardPort ${toString ucfg.dashboardPort} (${user}) — the hash-derived default collided in its 1000-port window; set services.hermes-microvm.users.<name>.dashboardPort explicitly on one of them.";
     }) cfg.users
     ++ lib.concatLists (
       lib.mapAttrsToList (

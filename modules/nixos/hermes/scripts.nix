@@ -65,10 +65,12 @@ rec {
       ${tzSyncScript}
 
       ${lib.optionalString ucfg.spacesGateway.enable ''
-        # Bounded wait for the owner's spaces gateway socket (linger brings
-        # the user manager up at boot). Non-fatal: MCP reconnects later.
+        # Bounded wait for the owner's spaces gateway socket (linger
+        # brings the user manager up at boot; uid resolved at runtime).
+        # Non-fatal: MCP reconnects later.
+        gw_sock=/run/user/"$(id -u ${user})"/spaces-integration-gateway.sock
         for _i in $(seq 1 60); do
-          [ -S ${ucfg.spacesGateway.socket} ] && break
+          [ -S "$gw_sock" ] && break
           sleep 1
         done
       ''}

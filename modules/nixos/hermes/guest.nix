@@ -14,6 +14,9 @@ let
   inherit (hlib)
     vmName
     macFor
+    cidFor
+    spacesVsockPort
+    guestUid
     credNames
     exchangeDir
     guestWorkspace
@@ -65,6 +68,21 @@ let
   # work on network filesystems" hazard is separate page caches, i.e.
   # host<->guest — excluded by the header invariant.
   hermesPackage = inputs.hermes-agent.packages.${pkgs.stdenv.hostPlatform.system}.default;
+
+  # Runtime uid translation for the user-owned shares: the guest user
+  # is fixed at uid 1000, the host uid is runtime-allocated. virtiofsd
+  # maps guest 1000 <-> the share source's owner, resolved when it
+  # starts: microvm.nix interpolates extraArgs into the per-share exec
+  # script unescaped, so $(stat) runs at service start (an escaping
+  # microvm.nix would fail loudly with a map parse error, never silent
+  # misownership). gids need no map (group "users" on both sides);
+  # --xattr compensates for posixAcl = false, which --translate-uid
+  # requires.
+  translateArgs = source: [
+    "--xattr"
+    "--translate-uid"
+    "map:${toString guestUid}:$(${pkgs.coreutils}/bin/stat -c %u ${source}):1"
+  ];
 
   # Seed-once model: written to config.yaml ONLY when no model is
   # configured, then sentinel'd — the user's runtime /model choice is
@@ -130,12 +148,13 @@ user: ucfg:
       {
         type = "user";
         id = "hermes";
-        mac = macFor ucfg.uid;
+        mac = macFor user;
       }
     ];
-    # Host->guest channels ride vsock (CID = uid): nothing listens on
-    # the host's loopback on a dead VM's behalf.
-    vsock.cid = ucfg.uid;
+    # Host->guest channels ride vsock (CID = username hash, lib.nix
+    # cidFor): nothing listens on the host's loopback on a dead VM's
+    # behalf.
+    vsock.cid = cidFor user;
     # Secrets as fw_cfg credentials — never on a share, never on a
     # command line. STRING paths (a Nix path literal would copy the
     # secret into the store): the deterministic credentials dir of the
@@ -158,6 +177,8 @@ user: ucfg:
         tag = "hermes-exchange";
         source = exchangeDir user;
         mountPoint = exchangeDir user;
+        posixAcl = false;
+        extraArgs = translateArgs (exchangeDir user);
       }
       {
         proto = "virtiofs";
@@ -174,6 +195,8 @@ user: ucfg:
         tag = "hermes-state";
         source = "${hlib.baseDir user}/state-vault/state";
         mountPoint = guestStateDir;
+        posixAcl = false;
+        extraArgs = translateArgs "${hlib.baseDir user}/state-vault/state";
       }
     ];
     # Writable store overlay so `nix` works inside the guest.
@@ -266,12 +289,14 @@ user: ucfg:
     "L+ /etc/localtime - - - - ${guestHostDir}/tz/localtime"
   ];
 
-  # Same name/uid as the host so share ownership maps 1:1. HOME is the
+  # Same NAME as the host; uid pinned to 1000 (the guest is fully
+  # declarative with exactly one normal user); virtiofsd translates it
+  # to the runtime host uid on the user-owned shares. HOME is the
   # exchange dir; hermes state stays on the vault — HERMES_HOME is set
   # explicitly at every entry point, nothing falls back to ~/.hermes.
   users.users.${user} = {
     isNormalUser = true;
-    inherit (ucfg) uid;
+    uid = guestUid;
     group = "users";
     home = exchangeDir user;
     createHome = false;
@@ -306,7 +331,10 @@ user: ucfg:
         command = "${pkgs.socat}/bin/socat";
         args = [
           "STDIO"
-          "TCP:${slirpHostAlias}:${toString ucfg.spacesPort}"
+          # CID 2 = the host; the port is the user's hash-derived bridge
+          # port (host.nix binds it as an AF_VSOCK socket unit and the
+          # helper enforces peer CID at accept).
+          "VSOCK-CONNECT:2:${toString (spacesVsockPort user)}"
         ];
       };
     };

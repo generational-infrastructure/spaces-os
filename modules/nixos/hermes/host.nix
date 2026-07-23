@@ -18,6 +18,8 @@ let
     exchangeDir
     guestWorkspace
     dashboardGuestPort
+    cidFor
+    spacesVsockPort
     ;
   scripts = import ./scripts.nix {
     inherit
@@ -28,6 +30,12 @@ let
       ;
   };
   inherit (scripts) provisionScript tzSyncScript desktopTokenScript;
+
+  # Accept-time peer-CID check + splice for the spaces bridge — see
+  # ./vsock-spaces-bridge.rs for why the CID check IS the access control.
+  spacesBridgeBin = pkgs.writers.writeRustBin "hermes-vsock-spaces-bridge" {
+    rustcArgs = [ "-O" "--edition" "2021" ];
+  } ./vsock-spaces-bridge.rs;
 
   # Assembled under static top-level option keys — a config-dependent
   # mkMerge list at the config root makes option-key resolution depend on
@@ -96,11 +104,6 @@ in
             serviceConfig.LoadCredential =
               lib.mapAttrsToList (name: path: "${name}:${path}") ucfg.secretEnv
               ++ [ "dashboard_token:${baseDir user}/desktop-token" ];
-          }
-          // lib.optionalAttrs ucfg.spacesGateway.enable {
-            # the spaces gateway socket lives in the owner's user session
-            after = [ "user@${toString ucfg.uid}.service" ];
-            wants = [ "user@${toString ucfg.uid}.service" ];
           };
 
           # Runs as the shared microvm user upstream but writes the `booted`
@@ -133,20 +136,26 @@ in
             description = "dashboard vsock forward for ${vmName user}";
             serviceConfig = {
               DynamicUser = true;
-              ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:${toString ucfg.uid}:${toString dashboardGuestPort}";
+              ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:${toString (cidFor user)}:${toString dashboardGuestPort}";
               StandardInput = "socket";
             };
           };
 
-          # spaces gateway bridge: guest socat -> 10.0.2.2:<port> -> socket
-          # unit -> this instance (as the owner, who alone may open the 0700
-          # user socket).
+          # spaces gateway bridge: guest -> AF_VSOCK (host CID 2,
+          # hash-derived port) -> socket unit -> this instance (as the
+          # owner, who alone may open the 0700 user socket). "auto":
+          # the helper resolves /run/user/<euid>/… at connect time; if
+          # the user manager is not up yet, the one connection fails
+          # and the guest MCP client retries.
           "hermes-spaces-bridge-${user}@" = lib.mkIf ucfg.spacesGateway.enable {
             description = "spaces gateway bridge for ${vmName user}";
             serviceConfig = {
               User = user;
-              ExecStart = "${pkgs.socat}/bin/socat STDIO UNIX-CONNECT:${ucfg.spacesGateway.socket}";
+              ExecStart = "${spacesBridgeBin}/bin/hermes-vsock-spaces-bridge ${toString (cidFor user)}";
               StandardInput = "socket";
+              # StandardInput=socket would make stderr "inherit" the
+              # socket, leaking the rejection message to the dialer.
+              StandardError = "journal";
             };
           };
 
@@ -154,8 +163,11 @@ in
       ))
     ];
 
-    # Loopback listeners are bound by root at boot and never released —
-    # no squat window while a VM is down. Owner-match still gates connects.
+    # Listeners are bound by root at boot and never released — no squat
+    # window while a VM is down. The dashboard forward is loopback TCP
+    # (upstream's Electron client is TCP-only; iptables owner-match
+    # gates connects); the spaces bridge listens on AF_VSOCK and the
+    # per-connection helper enforces the peer CID at accept.
     systemd.sockets = forEachUser (
       user: ucfg: {
         "hermes-dashboard-fwd-${user}" = {
@@ -167,8 +179,15 @@ in
         "hermes-spaces-bridge-${user}" = lib.mkIf ucfg.spacesGateway.enable {
           description = "spaces bridge socket for ${vmName user}";
           wantedBy = [ "sockets.target" ];
-          listenStreams = [ "127.0.0.1:${toString ucfg.spacesPort}" ];
+          # "vsock::<port>" = bind VMADDR_CID_ANY on the host.
+          listenStreams = [ "vsock::${toString (spacesVsockPort user)}" ];
           socketConfig.Accept = true;
+          # Any guest can complete a vsock connect (rejection happens
+          # post-accept in the helper), so a hostile sibling VM could
+          # trip the Accept=yes trigger limit (200/2s) and fail the
+          # socket: cross-VM DoS. Rejected instances exit within
+          # milliseconds; buildup stays bounded by MaxConnections.
+          socketConfig.TriggerLimitIntervalSec = 0;
         };
       }
     );
