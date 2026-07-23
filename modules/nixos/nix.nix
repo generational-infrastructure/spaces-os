@@ -37,12 +37,11 @@
   ];
   nix.settings.trusted-users = [ "@wheel" ];
 
-  # Build resilience: auto-GC to never wedge /nix/store, fetch from caches, fail
-  # fast, keep more failure context, fall back to building on substituter misses.
+  # Build resilience: auto-GC to never wedge /nix/store, fetch from caches, fall
+  # back to building on substituter misses. (connect-timeout and log-lines no
+  # longer need flipping — modern Nix defaults to 15s / 25 lines.)
   nix.settings.min-free = lib.mkDefault (512 * 1024 * 1024);
   nix.settings.max-free = lib.mkDefault (3000 * 1024 * 1024);
-  nix.settings.connect-timeout = lib.mkDefault 5;
-  nix.settings.log-lines = lib.mkDefault 25;
   nix.settings.builders-use-substitutes = lib.mkDefault true;
   nix.settings.fallback = lib.mkDefault true;
 
