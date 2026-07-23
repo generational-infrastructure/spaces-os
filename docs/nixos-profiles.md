@@ -22,7 +22,7 @@ fails loudly (better than silently getting the wrong one).
 | role | what you get |
 |---|---|
 | `minimal` | the shared base: nix daemon (flakes, GC, build scheduling), sshd + hardening, sudo, `userborn`, networkd, sysctl network hygiene, firewall, serial console, deploy diff + hostname-change guard, terminfo, well-known git-forge host keys. No GUI, no headless-only opinions. |
-| `server` | minimal **+** a hardened, headless posture: no docs/fonts/xdg, UTC, no suspend, watchdogs, immutable users, boot-generation limits, a baseline CLI toolkit (git/curl/htop/jq/tmux/dnsutils). No GUI. |
+| `server` | minimal **+** a hardened, headless posture: no docs/fonts/xdg, UTC, no suspend, watchdogs, immutable users, boot-generation limits, a baseline CLI toolkit (git/curl/htop/jq/tmux/dnsutils, plus nix tools: nixfmt-rs, fast-nix-gc, flake-fmt). No GUI. |
 | `desktop` | minimal **+** the full GUI/agent stack: `pi-chat`, niri, noctalia, greetd autologin. |
 
 ## `default` vs `spaces` vs the leaf modules

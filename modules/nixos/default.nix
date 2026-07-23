@@ -233,6 +233,10 @@ in
             pkgs.htop
             pkgs.jq
             pkgs.tmux
+            # nix workflow tools
+            pkgs.nixfmt-rs
+            inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.fast-nix-gc
+            inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.flake-fmt
           ];
 
           programs.vim = {
