@@ -21,7 +21,7 @@ fails loudly (better than silently getting the wrong one).
 
 | role | what you get |
 |---|---|
-| `minimal` | the shared base: nix daemon (flakes, GC, build scheduling), sshd + hardening, sudo, `userborn`, networkd, sysctl network hygiene, firewall, serial console, deploy diff + hostname-change guard, terminfo, well-known git-forge host keys. No GUI, no headless-only opinions. |
+| `minimal` | the shared base: nix daemon (flakes, GC, build scheduling), sshd + hardening, sudo, `userborn`, networkd, firewall, serial console, deploy diff + hostname-change guard, terminfo, well-known git-forge host keys. No GUI, no headless-only opinions. |
 | `server` | minimal **+** a hardened, headless posture: no docs/fonts/xdg, UTC, no suspend, watchdogs, immutable users, boot-generation limits, a baseline CLI toolkit (git/curl/htop/jq/tmux/dnsutils). No GUI. |
 | `desktop` | minimal **+** the full GUI/agent stack: `pi-chat`, niri, noctalia, greetd autologin. |
 
@@ -50,32 +50,13 @@ imports only the base and pulls in **zero** wayland/niri/greetd/voxtype closure.
 The base modules that *are* in `default` (nix, serial, terminfo, …) are all
 safe on any role.
 
-## The server baseline & upstream-default tracking
+## Tracking srvos / upstream
 
-The `server` role flips a number of NixOS defaults toward a hardened headless
-posture. Plain, introspectable options live in a `serverDefaults` attrset
-(`modules/nixos/default.nix`), applied as `lib.mkDefault` so a host can still
-override any of them.
-
-Each flip is checked **mechanically** against upstream: the module reads
-`options.<path>.default` (upstream's own declared default, unaffected by our
-`mkDefault`) and **emits a `warning` when upstream's default already equals
-ours** — i.e. the flip has become redundant and should be deleted. So a nixpkgs
-bump tells you which entries to drop instead of anyone hand-diffing.
-
-Freeform settings (`nix.settings.*`, `boot.kernel.sysctl.*`, sshd
-`services.openssh.settings.*`) have no `options.<path>.default` to compare, so
-they stay inline with a terse note rather than in `serverDefaults`. Likewise a
-couple of deliberate safety-nets (e.g. `firewall.enable`) are kept explicit even
-though upstream matches them.
-
-### Adding a server default
-
-- **Introspectable option** (has `options.<path>.default`): add
-  `"the.option.path" = value;` to `serverDefaults`. Redundancy is then
-  auto-detected on every bump.
-- **Freeform setting** (`nix.settings`, sysctl, sshd settings): set it inline in
-  the server block with a one-line note; these can't be auto-checked.
+The flips in `modules/nixos/default.nix` are the [srvos](https://github.com/nix-community/srvos)
+set, written as plain `lib.mkDefault` options so a host can override any of
+them. The set is deliberately kept small enough to diff against current srvos
+by eye when bumping nixpkgs; when upstream (nixpkgs or Nix itself) adopts a
+flip as its default, delete it here.
 
 ## Not included
 

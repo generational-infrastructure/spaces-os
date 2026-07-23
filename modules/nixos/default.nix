@@ -4,6 +4,10 @@
 # it. (`nixosModules.spaces` is a back-compat alias pinning profile = desktop.)
 # NixOS imports can't depend on an option, so every sub-module is imported and
 # gated by its own (default-off) enable from the profile below.
+#
+# Every flip here is a plain lib.mkDefault away from stock NixOS, srvos-style.
+# The set is deliberately small enough to diff against srvos by eye on a bump;
+# when upstream adopts a flip, delete it.
 { inputs, ... }:
 {
   config,
@@ -14,56 +18,6 @@
 }:
 let
   cfg = config.spaces;
-
-  # Introspectable defaults we flip from upstream (option path -> value, applied
-  # as mkDefault). Redundancy is detected mechanically: the module warns when
-  # upstream's own default (`options.<path>.default`) already equals ours, so a
-  # nixpkgs bump names the entries to delete. Freeform settings and the kept
-  # firewall safety-net stay inline (they have no `.default` to check).
-  #
-  # commonDefaults apply to EVERY profile (the `minimal` hygiene); serverDefaults
-  # apply only to `server`.
-  commonDefaults = {
-    "services.openssh.enable" = true;
-    "security.sudo.execWheelOnly" = true;
-    # de-prioritise nix-daemon builds so they don't starve the machine's services.
-    "nix.daemonCPUSchedPolicy" = "batch";
-    "nix.daemonIOSchedClass" = "idle";
-    "nix.daemonIOSchedPriority" = 7;
-    # `wait-online` is a boot-hang/boot-fail footgun.
-    "systemd.network.wait-online.enable" = false;
-  };
-  serverDefaults = {
-    "documentation.enable" = false;
-    "documentation.nixos.enable" = false;
-    "documentation.doc.enable" = false;
-    "documentation.info.enable" = false;
-    "documentation.man.enable" = false;
-    "fonts.fontconfig.enable" = false;
-    "xdg.autostart.enable" = false;
-    "xdg.icons.enable" = false;
-    "xdg.menus.enable" = false;
-    "xdg.mime.enable" = false;
-    "xdg.sounds.enable" = false;
-    "environment.stub-ld.enable" = false;
-    "boot.loader.grub.configurationLimit" = 5;
-    "boot.loader.systemd-boot.configurationLimit" = 5;
-    "time.timeZone" = "UTC";
-    "systemd.enableEmergencyMode" = false;
-    "users.mutableUsers" = false;
-  };
-  splitPath = lib.splitString ".";
-  upstreamDefault =
-    path:
-    (builtins.tryEval (lib.attrByPath (splitPath path ++ [ "default" ]) null options)).value or null;
-  redundant = lib.attrNames (
-    lib.filterAttrs (path: v: upstreamDefault path == v) (commonDefaults // serverDefaults)
-  );
-  applyDefaults =
-    defs:
-    lib.mkMerge (
-      lib.mapAttrsToList (path: v: lib.setAttrByPath (splitPath path) (lib.mkDefault v)) defs
-    );
 in
 {
   # Only the base layer is imported here — NOT the desktop/agent module tree
@@ -101,9 +55,9 @@ in
       `desktop` are mutually exclusive; both extend `minimal`.
 
       - `minimal`: the shared hygienic baseline — nix daemon (flakes, GC, build
-        scheduling), sshd + hardening, sudo, networkd, sysctl net hygiene,
-        firewall, serial console, deploy diff + hostname-change guard, terminfo,
-        well-known git-forge host keys. No GUI, no headless-only opinions.
+        scheduling), sshd + hardening, sudo, networkd, firewall, serial console,
+        deploy diff + hostname-change guard, terminfo, well-known git-forge host
+        keys. No GUI, no headless-only opinions.
       - `server`: minimal + a hardened headless posture (no docs/fonts/xdg, UTC,
         no suspend, watchdogs, immutable users, …).
       - `desktop`: minimal + the GUI/agent stack (pi-chat, niri, noctalia,
@@ -116,12 +70,8 @@ in
 
   config = lib.mkMerge [
     # ── minimal: the shared hygienic baseline (applies to every profile) ──
-    (applyDefaults commonDefaults)
     {
-      # nag once upstream adopts a flip, so it can be deleted from *Defaults.
-      warnings =
-        lib.optional (redundant != [ ])
-          "spaces profile: these flips now match the upstream default — delete them: ${lib.concatStringsSep ", " redundant}";
+      services.openssh.enable = lib.mkDefault true;
 
       # userborn instead of the perl activation script, where it's known-safe.
       # The perlless profile imported above already flips it on via mkDefault, so
@@ -171,12 +121,15 @@ in
       networking.firewall.enable = lib.mkDefault true;
       networking.firewall.logRefusedConnections = lib.mkDefault false;
       networking.useNetworkd = lib.mkDefault true;
+      # `wait-online` is a boot-hang/boot-fail footgun.
+      systemd.network.wait-online.enable = lib.mkDefault false;
       systemd.services."NetworkManager-wait-online".enable = lib.mkDefault false;
       systemd.services.systemd-networkd.stopIfChanged = false;
       systemd.services.systemd-resolved.stopIfChanged = false;
 
-      # sudo: no per-session lecture, and enforce that execWheelOnly's rules only
-      # ever grant root/wheel (a footgun otherwise).
+      # sudo: wheel-only exec, no per-session lecture, and enforce that
+      # execWheelOnly's rules only ever grant root/wheel (a footgun otherwise).
+      security.sudo.execWheelOnly = lib.mkDefault true;
       security.sudo.extraConfig = ''
         Defaults lecture = never
       '';
@@ -206,61 +159,71 @@ in
 
       # wipe /tmp on boot.
       boot.tmp.cleanOnBoot = lib.mkDefault true;
-
-      # sysctl network hygiene (anti-spoof / anti-redirect). (kptr_restrict is
-      # already mkDefault 1 upstream.)
-      boot.kernel.sysctl = {
-        "net.ipv4.conf.all.rp_filter" = lib.mkDefault "1";
-        "net.ipv4.icmp_echo_ignore_broadcasts" = lib.mkDefault true;
-        "net.ipv4.conf.all.accept_redirects" = lib.mkDefault false;
-        "net.ipv6.conf.all.accept_redirects" = lib.mkDefault false;
-        "net.ipv4.conf.all.send_redirects" = lib.mkDefault false;
-      };
     }
 
     # ── server: headless-only opinions (mutually exclusive with desktop) ──
-    (lib.mkIf (cfg.profile == "server") (
-      lib.mkMerge [
-        (applyDefaults serverDefaults)
-        {
-          environment.variables.BROWSER = lib.mkDefault "echo";
+    (lib.mkIf (cfg.profile == "server") {
+      # no docs, fonts, or freedesktop plumbing on a headless box.
+      documentation.enable = lib.mkDefault false;
+      documentation.nixos.enable = lib.mkDefault false;
+      documentation.doc.enable = lib.mkDefault false;
+      documentation.info.enable = lib.mkDefault false;
+      documentation.man.enable = lib.mkDefault false;
+      fonts.fontconfig.enable = lib.mkDefault false;
+      xdg.autostart.enable = lib.mkDefault false;
+      xdg.icons.enable = lib.mkDefault false;
+      xdg.menus.enable = lib.mkDefault false;
+      xdg.mime.enable = lib.mkDefault false;
+      xdg.sounds.enable = lib.mkDefault false;
+      environment.stub-ld.enable = lib.mkDefault false;
 
-          # Baseline headless toolkit (lowPrio so any explicit version wins).
-          environment.systemPackages = map lib.lowPrio [
-            pkgs.gitMinimal
-            pkgs.curl
-            pkgs.dnsutils
-            pkgs.htop
-            pkgs.jq
-            pkgs.tmux
-          ];
+      # cap boot entries so /boot can't fill up.
+      boot.loader.grub.configurationLimit = lib.mkDefault 5;
+      boot.loader.systemd-boot.configurationLimit = lib.mkDefault 5;
 
-          programs.vim = {
-            defaultEditor = lib.mkDefault true;
-          }
-          // lib.optionalAttrs (options.programs.vim ? enable) {
-            enable = lib.mkDefault true;
-          };
+      time.timeZone = lib.mkDefault "UTC";
+      users.mutableUsers = lib.mkDefault false;
 
-          # LLMNR off (poisoning); freeform.
-          services.resolved.settings.Resolve.LLMNR = lib.mkDefault "false";
+      environment.variables.BROWSER = lib.mkDefault "echo";
 
-          systemd = {
-            sleep.settings.Sleep = {
-              AllowSuspend = lib.mkDefault "no";
-              AllowHibernation = lib.mkDefault "no";
-            };
-            settings.Manager = {
-              RuntimeWatchdogSec = lib.mkDefault "15s";
-              RebootWatchdogSec = lib.mkDefault "30s";
-              KExecWatchdogSec = lib.mkDefault "1m";
-            };
-          };
+      # Baseline headless toolkit (lowPrio so any explicit version wins).
+      environment.systemPackages = map lib.lowPrio [
+        pkgs.gitMinimal
+        pkgs.curl
+        pkgs.dnsutils
+        pkgs.htop
+        pkgs.jq
+        pkgs.tmux
+      ];
 
-          virtualisation.vmVariant.virtualisation.graphics = lib.mkDefault false;
-        }
-      ]
-    ))
+      programs.vim = {
+        defaultEditor = lib.mkDefault true;
+      }
+      // lib.optionalAttrs (options.programs.vim ? enable) {
+        enable = lib.mkDefault true;
+      };
+
+      # LLMNR off (poisoning); freeform.
+      services.resolved.settings.Resolve.LLMNR = lib.mkDefault "false";
+
+      systemd = {
+        # emergency mode is useless without a console to reach it on; keep
+        # booting so the box stays remotely reachable.
+        enableEmergencyMode = lib.mkDefault false;
+
+        sleep.settings.Sleep = {
+          AllowSuspend = lib.mkDefault "no";
+          AllowHibernation = lib.mkDefault "no";
+        };
+        settings.Manager = {
+          RuntimeWatchdogSec = lib.mkDefault "15s";
+          RebootWatchdogSec = lib.mkDefault "30s";
+          KExecWatchdogSec = lib.mkDefault "1m";
+        };
+      };
+
+      virtualisation.vmVariant.virtualisation.graphics = lib.mkDefault false;
+    })
 
     # NOTE: the `desktop` profile's enables (pi-chat, niri, noctalia, greetd)
     # live in `nixosModules.spaces` (the desktop alias), alongside the imports of

@@ -1,7 +1,6 @@
 # Nix daemon defaults: flake-ready, resilient during builds, and de-prioritised
 # so builds never starve the machine's real work. This is the single place the
-# base layer configures the daemon (daemon scheduling policy lives in the
-# profile's commonDefaults so it can be redundancy-checked).
+# base layer configures the daemon.
 {
   lib,
   config,
@@ -48,6 +47,9 @@
   nix.optimise.automatic = lib.mkDefault (!config.boot.isContainer);
 
   # Keep GC and the daemon out of the way of interactive work.
+  nix.daemonCPUSchedPolicy = lib.mkDefault "batch";
+  nix.daemonIOSchedClass = lib.mkDefault "idle";
+  nix.daemonIOSchedPriority = lib.mkDefault 7;
   systemd.services.nix-gc.serviceConfig = {
     CPUSchedulingPolicy = "batch";
     IOSchedulingClass = "idle";
