@@ -20,12 +20,6 @@
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
     systems.url = "github:nix-systems/default";
-    # Source-only pins (flake = false) so their inputs (nix-darwin, treefmt)
-    # stay out of our lock; packaged via packages/{fast-nix-gc,flake-fmt}.
-    fast-nix-gc.url = "github:Mic92/fast-nix-gc";
-    fast-nix-gc.flake = false;
-    flake-fmt.url = "github:Mic92/flake-fmt";
-    flake-fmt.flake = false;
   };
 
   outputs =

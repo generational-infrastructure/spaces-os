@@ -75,6 +75,8 @@ in
   imports = [
     # nix daemon settings (flakes, features, build resilience, scheduling)
     inputs.self.nixosModules.nix
+    # timer-driven GC + store dedup (fast-nix-gc, replaces nix.gc/nix.optimise)
+    inputs.self.nixosModules.fast-nix-gc
     # ── base layer (every profile): shared hygiene ──
     # serial console for emergency/cloud access (spaces.boot.consoles)
     inputs.self.nixosModules.serial
@@ -122,6 +124,12 @@ in
       warnings =
         lib.optional (redundant != [ ])
           "spaces profile: these flips now match the upstream default — delete them: ${lib.concatStringsSep ", " redundant}";
+
+      # GC + store-dedup timers; containers' stores are host-managed.
+      services.fast-nix-gc.enable = lib.mkDefault true;
+      services.fast-nix-gc.automatic = lib.mkDefault (!config.boot.isContainer);
+      services.fast-nix-optimise.enable = lib.mkDefault true;
+      services.fast-nix-optimise.automatic = lib.mkDefault (!config.boot.isContainer);
 
       # userborn instead of the perl activation script, where it's known-safe.
       # The perlless profile imported above already flips it on via mkDefault, so

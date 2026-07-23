@@ -58,38 +58,6 @@
         "type": "github"
       }
     },
-    "fast-nix-gc": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1784810868,
-        "narHash": "sha256-O5AwBmirtLacHe/BW1IBxJxnXz5wOQGT8G5yufyR57E=",
-        "owner": "Mic92",
-        "repo": "fast-nix-gc",
-        "rev": "a5cd404ecb18f02ee4e2e596e12c7246ba815746",
-        "type": "github"
-      },
-      "original": {
-        "owner": "Mic92",
-        "repo": "fast-nix-gc",
-        "type": "github"
-      }
-    },
-    "flake-fmt": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1783557899,
-        "narHash": "sha256-zpyrja8s+hmANNpoKb6ffm3HZWjgNCa8OVXtJFCYm5o=",
-        "owner": "Mic92",
-        "repo": "flake-fmt",
-        "rev": "f46dd93676214f5756c8dcf9ece2584fd7f23f50",
-        "type": "github"
-      },
-      "original": {
-        "owner": "Mic92",
-        "repo": "flake-fmt",
-        "type": "github"
-      }
-    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -199,8 +167,6 @@
     },
     "root": {
       "inputs": {
-        "fast-nix-gc": "fast-nix-gc",
-        "flake-fmt": "flake-fmt",
         "home-manager": "home-manager",
         "llm-agents": "llm-agents",
         "nixpkgs": "nixpkgs",
