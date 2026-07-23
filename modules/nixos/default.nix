@@ -123,13 +123,28 @@ in
         lib.optional (redundant != [ ])
           "spaces profile: these flips now match the upstream default — delete them: ${lib.concatStringsSep ", " redundant}";
 
-      # userborn, guarded (impermanence / subuid ranges break its defaults).
-      services.userborn.enable = lib.mkIf (
-        !(
-          (options.environment ? persistence)
-          || (lib.any (u: u.subUidRanges != [ ] || u.autoSubUidGidRange) (lib.attrValues config.users.users))
-        )
-      ) (lib.mkDefault true);
+      # userborn instead of the perl activation script, where it's known-safe.
+      # The perlless profile imported above already flips it on via mkDefault, so
+      # abstaining (mkIf-guarded mkDefault, as srvos does) is dead code here: the
+      # unsafe cases must actively override that default. Unsafe means:
+      #  - impermanence is loaded: still incompatible
+      #    (nix-community/impermanence#223, open)
+      #  - subuids/subgids are declared: userborn 1.0.0 manages them, but the
+      #    NixOS module doesn't pass them through yet
+      #  - a normal user pins a uid while another gets a dynamic one: userborn
+      #    hands out dynamic uids without reserving pinned ones first, so the
+      #    pinned user can silently end up missing (nikstur/userborn#59)
+      services.userborn.enable =
+        let
+          users = lib.attrValues config.users.users;
+          normal = lib.filter (u: u.isNormalUser) users;
+          unsafe =
+            (options.environment ? persistence)
+            || lib.any (u: u.subUidRanges != [ ] || u.autoSubUidGidRange) users
+            || (lib.any (u: u.uid != null) normal && lib.any (u: u.uid == null) normal);
+        in
+        # 900: above mkDefault so it beats perlless, below explicit user config.
+        if unsafe then lib.mkOverride 900 false else lib.mkDefault true;
 
       # sshd freeform settings — compared against ssh's own defaults, so noted (ssh:X).
       services.openssh.settings = {
