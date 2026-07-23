@@ -1,6 +1,8 @@
 # Serial console on the first serial port, in addition to the graphical one.
 # This is the emergency-access path on headless/cloud hosts (Hetzner SOL, IPMI,
 # BMC serial redirection). Harmless on machines without a serial port.
+# Derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   config,
   lib,

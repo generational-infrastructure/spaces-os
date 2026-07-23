@@ -1,5 +1,7 @@
 # terminfo entries for terminals that aren't installed on the host but connect
 # to it over ssh (ghostty, wezterm, foot, kitty), so keys/colours work remotely.
+# Derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   pkgs,
   lib,

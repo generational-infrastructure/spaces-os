@@ -1,6 +1,8 @@
 # Guard against deploying a config to the wrong host: if the running hostname
 # doesn't match the one being switched to, prompt before continuing. Set
 # EXPECTED_HOSTNAME to skip the prompt in automation.
+# Derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   config,
   lib,
