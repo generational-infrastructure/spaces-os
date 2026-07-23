@@ -189,3 +189,8 @@ The full list lives in [docs/keybindings.md](docs/keybindings.md).
 ## License
 
 See [LICENSE](LICENSE).
+
+Parts of the NixOS base modules are derived from
+[srvos](https://github.com/nix-community/srvos) (MIT © Numtide, see
+[LICENSES/srvos.MIT](LICENSES/srvos.MIT)); the affected files carry a header
+saying so.

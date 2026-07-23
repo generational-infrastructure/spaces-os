@@ -1,5 +1,7 @@
 # Print the package/closure diff against the running system on every
 # `nixos-rebuild switch/boot`, so a deploy shows exactly what it changes.
+# Derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   config,
   lib,

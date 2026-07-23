@@ -1,6 +1,8 @@
 # Nix daemon defaults: flake-ready, resilient during builds, and de-prioritised
 # so builds never starve the machine's real work. This is the single place the
 # base layer configures the daemon.
+# Derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   lib,
   config,

@@ -1,5 +1,7 @@
 # Pin host keys for the common git forges so first-contact ssh (deploys, `nix`
 # fetches over ssh) doesn't prompt or fall to trust-on-first-use.
+# Copied from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 {
   programs.ssh.knownHosts = {
     "github.com".publicKey =

@@ -8,6 +8,8 @@
 # Every flip here is a plain lib.mkDefault away from stock NixOS, srvos-style.
 # The set is deliberately small enough to diff against srvos by eye on a bump;
 # when upstream adopts a flip, delete it.
+# Large parts derived from srvos (https://github.com/nix-community/srvos),
+# MIT © Numtide — see LICENSES/srvos.MIT.
 { inputs, ... }:
 {
   config,
