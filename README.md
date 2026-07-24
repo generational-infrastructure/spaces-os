@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository has moved to <https://git.geninf.io/spaces/spaces-os>.**
+> This GitHub repo is archived and no longer maintained. Please update your
+> remotes and follow development at the new location.
+
 <p align="center">
   <img src="https://gist.kenji.rsvp/kenji/735596d953134ee0a55136b95d5aaba7/raw/e7cd790a84979ea626e241071c49c4c0834e2f59/spaces-hero.png" alt="SpacesOS" width="820" />
 </p>
