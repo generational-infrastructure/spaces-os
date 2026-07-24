@@ -18,7 +18,7 @@
 #   ~/.config/quickshell/pi-chat/              (materialized shell config, fresh mtimes for Qt qmlcache)
 #   ~/.local/state/spaces/pi/                  (panel index: sessions.json, activity.json; skills-defs,
 #                                               skill-config store, notifications dir for the bash sandboxes)
-#   /run/spaces-secrets/openrouter-api-key     (when openrouter.enable = true; root:users 0640)
+#   /run/spaces-secrets/openrouter-api-key     (when spaces.openrouter.enable = true; root:users 0640)
 #
 # User systemd units:
 #   pi-chat.service                            (materializes shell config, then runs `quickshell -c pi-chat`)
@@ -35,6 +35,7 @@
 
 let
   cfg = config.services.pi-chat;
+  orCfg = config.spaces.openrouter;
 
   jsonFormat = pkgs.formats.json { };
 
@@ -290,6 +291,10 @@ in
     # any harness (pi via a generic MCP-client extension, others via MCP). Gated
     # on services.spaces-integrations.enable — enabled together, below.
     inputs.self.nixosModules.spaces-integration-gateway
+    # The shared OpenRouter key option (spaces.openrouter, renamed from
+    # services.pi-chat.openrouter). Imported here so standalone evals of
+    # this module see the option; path-deduped in full systems.
+    inputs.self.nixosModules.openrouter
   ];
 
   options.services.pi-chat = {
@@ -542,21 +547,6 @@ in
       '';
     };
 
-    openrouter = {
-      enable = lib.mkEnableOption "OpenRouter provider for pi";
-      apiKeyFile = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
-        default = null;
-        description = ''
-          Host path to a file containing the OpenRouter API key (single
-          line). Loaded into /run/spaces-secrets/openrouter-api-key by
-          a root-only system service, then bound into each pi-chat
-          scope via systemd-run's LoadCredential= so the key never
-          touches user-readable storage.
-        '';
-      };
-    };
-
     notificationForwarding = {
       enable = lib.mkEnableOption "forward D-Bus notifications into the chat panel";
       ignoredApps = lib.mkOption {
@@ -605,10 +595,6 @@ in
 
     assertions = [
       {
-        assertion = !cfg.openrouter.enable || cfg.openrouter.apiKeyFile != null;
-        message = "services.pi-chat.openrouter.apiKeyFile must be set when openrouter.enable = true.";
-      }
-      {
         assertion = !(cfg.wsToken != "" && cfg.wsTokenFile != null);
         message = "services.pi-chat: set at most one of `wsToken` or `wsTokenFile`.";
       }
@@ -655,7 +641,7 @@ in
       skills = allSkills;
       inherit (cfg) piSettings;
       bashConfirm.allowPatterns = cfg.bashConfirm.allowPatterns;
-      openrouter.enable = cfg.openrouter.enable;
+      openrouter.enable = orCfg.enable;
       # The memory extension is keyed by the daemon's own memory.enable
       # (which also binds the sediment DB into the daemon namespace), and
       # llama-swap-discover stays out — the daemon runs its own /v1/models
@@ -890,32 +876,30 @@ in
     # then copies it into $CREDENTIALS_DIRECTORY for the pi process,
     # which `!cat $CREDENTIALS_DIRECTORY/openrouter-api-key` resolves
     # at request time. Pi reads the credential at request time.
-    systemd.services.spaces-secrets-load =
-      lib.mkIf (cfg.openrouter.enable || fileTokenExecutors != [ ])
-        {
-          description = "Stage pi-chat secrets for the user manager";
-          wantedBy = [ "multi-user.target" ];
-          after = [ "local-fs.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            UMask = "0027";
-          };
-          script = ''
-            set -eu
-            install -d -m 0750 -o root -g users /run/spaces-secrets
-          ''
-          + lib.optionalString cfg.openrouter.enable ''
-            install -m 0640 -o root -g users \
-              ${cfg.openrouter.apiKeyFile} \
-              /run/spaces-secrets/openrouter-api-key
-          ''
-          + lib.concatMapStrings (e: ''
-            install -m 0640 -o root -g users \
-              ${e.tokenFile} \
-              ${tokenSecretPath e.id}
-          '') fileTokenExecutors;
-        };
+    systemd.services.spaces-secrets-load = lib.mkIf (orCfg.enable || fileTokenExecutors != [ ]) {
+      description = "Stage pi-chat secrets for the user manager";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        UMask = "0027";
+      };
+      script = ''
+        set -eu
+        install -d -m 0750 -o root -g users /run/spaces-secrets
+      ''
+      + lib.optionalString orCfg.enable ''
+        install -m 0640 -o root -g users \
+          ${orCfg.apiKeyFile} \
+          /run/spaces-secrets/openrouter-api-key
+      ''
+      + lib.concatMapStrings (e: ''
+        install -m 0640 -o root -g users \
+          ${e.tokenFile} \
+          ${tokenSecretPath e.id}
+      '') fileTokenExecutors;
+    };
 
     # Shell config file. The QML side reads this on startup so we
     # don't have to thread a dozen env vars through the user manager.

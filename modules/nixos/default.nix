@@ -88,6 +88,8 @@ in
     inputs.self.nixosModules.well-known-hosts
     # perl-free system (drop perl from activation, initrd, default packages)
     inputs.self.nixosModules.perlless
+    # shared OpenRouter key option for agent surfaces (options-only)
+    inputs.self.nixosModules.openrouter
   ];
 
   options.spaces.profile = lib.mkOption {

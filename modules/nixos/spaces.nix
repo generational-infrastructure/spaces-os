@@ -22,6 +22,8 @@
     inputs.self.nixosModules.niri
     # QEMU display/audio/clipboard/SSH for nix build .#test-vm
     inputs.self.nixosModules.vm-debug
+    # hermes agent microvms (one untrusted-agent VM per user)
+    inputs.self.nixosModules.hermes
   ];
 
   config = lib.mkMerge [
@@ -33,6 +35,7 @@
       services.pi-chat.enable = lib.mkDefault true;
       services.spaces.niri.enable = lib.mkDefault true;
       services.noctalia.enable = lib.mkDefault true;
+      services.hermes-microvm.enable = lib.mkDefault true;
 
       services.greetd = {
         enable = lib.mkDefault true;

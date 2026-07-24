@@ -56,11 +56,11 @@ in
             defaultProvider = "openrouter";
             # Win over the host's local-model default (qwen2.5:0.5b).
             defaultModel = lib.mkForce openrouterModel;
-            openrouter.enable = true;
-            # Throwaway test VM: staging the key through the store is fine
-            # here. The module restages it under /run (root:users 0640).
-            openrouter.apiKeyFile = pkgs.writeText "openrouter-api-key" openrouterKey;
           };
+          spaces.openrouter.enable = true;
+          # Throwaway test VM: staging the key through the store is fine
+          # here. The module restages it under /run (root:users 0640).
+          spaces.openrouter.apiKeyFile = pkgs.writeText "openrouter-api-key" openrouterKey;
         }
         internet
       ]
@@ -75,10 +75,8 @@ in
           # works. mkDefault lets mode (A) win under --impure. Provider
           # stays "local" by default; OpenRouter's catalog still shows up
           # in the panel picker whenever a key is present at runtime.
-          services.pi-chat.openrouter.enable = lib.mkDefault true;
-          services.pi-chat.openrouter.apiKeyFile = lib.mkDefault (
-            pkgs.writeText "openrouter-api-key-placeholder" ""
-          );
+          spaces.openrouter.enable = lib.mkDefault true;
+          spaces.openrouter.apiKeyFile = lib.mkDefault (pkgs.writeText "openrouter-api-key-placeholder" "");
 
           # fw_cfg sysfs (/sys/firmware/qemu_fw_cfg) needs this driver.
           boot.kernelModules = [ "qemu_fw_cfg" ];
