@@ -45,8 +45,6 @@
   nix.settings.builders-use-substitutes = lib.mkDefault true;
   nix.settings.fallback = lib.mkDefault true;
 
-  nix.optimise.automatic = lib.mkDefault (!config.boot.isContainer);
-
   # Keep GC and the daemon out of the way of interactive work.
   systemd.services.nix-gc.serviceConfig = {
     CPUSchedulingPolicy = "batch";
